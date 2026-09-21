@@ -6,6 +6,7 @@ import { useHashRoute } from './router/hash'
 import { useLanguage } from './hooks/useStore'
 import { P } from './i18n'
 import { HomePage } from './pages/HomePage'
+import { LoginPage } from './pages/LoginPage'
 import { GuidePage } from './pages/GuidePage'
 import { AvailabilityPage } from './pages/AvailabilityPage'
 import { CommunityPage } from './pages/CommunityPage'
@@ -55,6 +56,9 @@ export default function App() {
       break
     case '/about':
       page = <AboutPage />
+      break
+    case '/login':
+      page = <LoginPage />
       break
     case '/console':
       page = <OverviewPage path={path} />

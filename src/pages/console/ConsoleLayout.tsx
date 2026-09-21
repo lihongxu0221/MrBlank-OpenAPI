@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import {
   Activity,
   Gift,
@@ -10,8 +10,7 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { P } from '../../i18n'
-import { navigate } from '../../router/hash'
-import { GuestPanel } from '../../components/GuestPanel'
+import { navigate, navigateWithQuery } from '../../router/hash'
 import { useSession } from '../../hooks/useStore'
 
 const ITEMS = [
@@ -33,6 +32,18 @@ export function ConsoleLayout({
   bare?: boolean
 }) {
   const session = useSession()
+
+  useEffect(() => {
+    if (!session) navigateWithQuery('/login', { next: path })
+  }, [session, path])
+
+  if (!session) {
+    return (
+      <div className="page">
+        <p className="inline-loading">{P('正在前往登录…')}</p>
+      </div>
+    )
+  }
 
   return (
     <div className="console-shell">
@@ -72,7 +83,7 @@ export function ConsoleLayout({
           </a>
         </div>
       </aside>
-      <div className="console-main">{session ? children : <GuestPanel />}</div>
+      <div className="console-main">{children}</div>
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import {
   Activity,
   Cable,
@@ -11,8 +11,7 @@ import {
   Users,
 } from 'lucide-react'
 import { P } from '../../i18n'
-import { navigate } from '../../router/hash'
-import { GuestPanel } from '../../components/GuestPanel'
+import { navigate, navigateWithQuery } from '../../router/hash'
 import { useSession } from '../../hooks/useStore'
 
 const ITEMS = [
@@ -39,8 +38,12 @@ export function AdminLayout({
 }) {
   const session = useSession()
 
+  useEffect(() => {
+    if (!session) navigateWithQuery('/login', { next: path })
+  }, [session, path])
+
   let body: ReactNode
-  if (!session) body = <GuestPanel />
+  if (!session) body = <p className="inline-loading">{P('正在前往登录…')}</p>
   else if (!checked) body = <p className="inline-loading">{P('正在校验管理员权限…')}</p>
   else if (!allowed)
     body = (

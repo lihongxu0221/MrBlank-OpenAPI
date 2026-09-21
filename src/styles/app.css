@@ -1674,3 +1674,15 @@ table.data tr:last-child td {
   padding: 0;
   max-width: none;
 }
+
+.login-page {
+  display: flex;
+  justify-content: center;
+  padding: 48px 20px 72px;
+}
+.login-page-wrap {
+  width: min(440px, 100%);
+}
+.login-page .guest-state {
+  width: 100%;
+}

@@ -3,7 +3,7 @@ import { KeyRound } from 'lucide-react'
 import { P } from '../i18n'
 import { api } from '../lib/api'
 import { setSession, type Session } from '../lib/session'
-import { navigate } from '../router/hash'
+import { getHashQuery, navigate } from '../router/hash'
 
 export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
   const [busy, setBusy] = useState(false)
@@ -68,7 +68,12 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
       setPassword('')
       setSession(data)
       onLoggedIn?.()
-      navigate(data.is_admin ? '/admin' : '/console')
+      const next = getHashQuery().get('next')
+      if (next && next.startsWith('/') && !next.startsWith('//')) {
+        navigate(next)
+      } else {
+        navigate(data.is_admin ? '/admin' : '/console')
+      }
     } catch (err) {
       setMsg((err as Error).message)
     } finally {

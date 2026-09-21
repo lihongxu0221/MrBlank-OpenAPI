@@ -6,6 +6,20 @@ export function getHashPath(): string {
   return path.startsWith('/') ? path : `/${path}`
 }
 
+export function getHashQuery(): URLSearchParams {
+  const raw = location.hash.slice(1) || '/'
+  const q = raw.includes('?') ? raw.split('?')[1] : ''
+  return new URLSearchParams(q)
+}
+
+export function navigateWithQuery(path: string, query?: Record<string, string>) {
+  const base = path.startsWith('/') ? path : `/${path}`
+  const qs = query && Object.keys(query).length
+    ? '?' + new URLSearchParams(query).toString()
+    : ''
+  navigate(`${base}${qs}`)
+}
+
 export function navigate(path: string) {
   const next = path.startsWith('#') ? path : `#${path.startsWith('/') ? path : `/${path}`}`
   if (location.hash === next) {
@@ -44,6 +58,7 @@ export const ADMIN_ROUTES = [
   '/admin/connection',
   '/admin/constellation',
   '/admin/groups',
+  '/admin/users',
 ] as const
 
 export function isGated(path: string) {

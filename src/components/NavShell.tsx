@@ -143,8 +143,7 @@ export function NavShell({ path }: { path: string }) {
               {P('退出登录')}
             </button>
           ) : (
-            <button type="button" className="button" onClick={() => navigate('/console')}>
-              {P('开始使用')} <ArrowRight size={16} />
+            <button type="button" className="button" onClick={() => navigate(session ? ((session as any).is_admin ? '/admin' : '/console') : '/login')}>{P('开始使用')} <ArrowRight size={16} />
             </button>
           )}
           <button

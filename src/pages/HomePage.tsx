@@ -67,7 +67,7 @@ export function HomePage() {
               )}
             </p>
             <div className="hero-actions">
-              <button type="button" className="button" onClick={() => navigate('/console')}>
+              <button type="button" className="button" onClick={() => navigate('/login')}>
                 {P('开始探索')} <ArrowRight size={16} />
               </button>
               <button type="button" className="button secondary" onClick={() => navigate('/guide')}>
@@ -191,7 +191,7 @@ export function HomePage() {
           <h2>{P('好想法，不必等待。')}</h2>
           <p>{P('把好奇交给模型，把创造留给自己。')}</p>
           <div className="closing-actions">
-            <button type="button" className="button" onClick={() => navigate('/console')}>
+            <button type="button" className="button" onClick={() => navigate('/login')}>
               {P('开始登录')}
             </button>
             <button type="button" className="button secondary" onClick={() => navigate('/guide')}>
