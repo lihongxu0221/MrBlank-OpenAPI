@@ -50,7 +50,7 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
     }
   }
 
-  async function tryPasswordLogin(e: FormEvent) {
+  async function tryLocalLogin(e: FormEvent) {
     e.preventDefault()
     const u = username.trim()
     if (!u || !password) {
@@ -60,13 +60,11 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
     setLoginBusy(true)
     setMsg(null)
     try {
-      // Prefer native local login; fall back to legacy path name during cutover.
-      let data: Session & { is_admin?: boolean }
-      try {
-        data = await api.post('/api/auth/login', { username: u, password }, { auth: false })
-      } catch {
-        data = await api.post('/api/auth/aily', { username: u, password }, { auth: false })
-      }
+      const data = await api.post<Session & { is_admin?: boolean }>(
+        '/api/auth/login',
+        { username: u, password },
+        { auth: false },
+      )
       setPassword('')
       setSession(data)
       onLoggedIn?.()
@@ -91,7 +89,7 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
         {P('管理密钥并查看真实用量。')}
       </p>
 
-      <form className="guest-login-form" onSubmit={tryPasswordLogin}>
+      <form className="guest-aily-form" onSubmit={tryLocalLogin}>
         <div className="field">
           <label htmlFor="login-username">{P('用户名', 'Username')}</label>
           <input
@@ -117,24 +115,23 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
             placeholder={P('密码', 'Password')}
           />
         </div>
-        <button type="submit" className="button soft block guest-login-btn" disabled={anyBusy}>
+        <button type="submit" className="button block" disabled={anyBusy}>
           {loginBusy ? P('正在登录…', 'Signing in…') : P('账号登录', 'Sign in')} →
         </button>
+        <div className="field-note">{P('使用本站账号登录（由管理员发放）')}</div>
       </form>
 
       <div className="guest-divider" role="separator">
         <span>{P('或', 'or')}</span>
       </div>
 
-      <div className="guest-oauth">
-        <button type="button" className="button soft block guest-login-btn" disabled={anyBusy} onClick={tryLinuxDo}>
-          <span className="linuxdo-mark" />
-          {busy ? P('正在跳转…', 'Redirecting…') : P('使用 Linux.do 登录')} →
-        </button>
-        <div className="field-note">{P('只申请必要的社区身份信息')}</div>
-      </div>
+      <button type="button" className="button secondary block" disabled={anyBusy} onClick={tryLinuxDo}>
+        <span className="linuxdo-mark" />
+        {busy ? P('正在跳转…', 'Redirecting…') : P('使用 Linux.do 登录')} →
+      </button>
+      <div className="field-note">{P('只申请必要的社区身份信息')}</div>
 
-      {msg ? <p className="guest-error">{msg}</p> : null}
+      {msg ? <p style={{ color: 'var(--error)', marginTop: 14 }}>{msg}</p> : null}
     </div>
   )
 }

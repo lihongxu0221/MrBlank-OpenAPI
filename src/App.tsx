@@ -24,6 +24,7 @@ import { AdminUsagePage } from './pages/admin/AdminUsagePage'
 import { AdminConnectionPage } from './pages/admin/AdminConnectionPage'
 import { AdminConstellationPage } from './pages/admin/AdminConstellationPage'
 import { AdminGroupsPage } from './pages/admin/AdminGroupsPage'
+import { AdminUsersPage } from './pages/admin/AdminUsersPage'
 import { useEffect, useSyncExternalStore } from 'react'
 import { getSiteConfig, subscribeSiteConfig } from './config/site'
 import { getLanguage } from './i18n'
@@ -96,6 +97,9 @@ export default function App() {
       break
     case '/admin/groups':
       page = <AdminGroupsPage path={path} />
+      break
+    case '/admin/users':
+      page = <AdminUsersPage path={path} />
       break
     default:
       page = (

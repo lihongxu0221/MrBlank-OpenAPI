@@ -16,38 +16,51 @@ export function loadAdminAllowlist(env = process.env) {
     splitList(env.ADMIN_LINUXDO_USERNAMES).map((s) => s.toLowerCase()),
   )
   const emails = new Set(splitList(env.ADMIN_LINUXDO_EMAILS).map((s) => s.toLowerCase()))
-  const ailyUsernames = new Set(
-    splitList(env.ADMIN_AILY_USERNAMES).map((s) => s.toLowerCase()),
+  // Legacy alias: ADMIN_AILY_USERNAMES still accepted as local-username allowlist
+  const localUsernames = new Set(
+    [
+      ...splitList(env.ADMIN_LOCAL_USERNAMES),
+      ...splitList(env.ADMIN_AILY_USERNAMES),
+    ].map((s) => s.toLowerCase()),
   )
-  return { ids, usernames, emails, ailyUsernames }
+  return { ids, usernames, emails, localUsernames, ailyUsernames: localUsernames }
 }
 
 /**
- * Match session user against allowlist / aily admin role.
- * - Linux.do: id, username, display_name/name, email
- * - Aily: auth_provider aily + (aily_admin / role>=10) OR username in ADMIN_AILY_USERNAMES
+ * Match session user against allowlist / local role.
+ * - Local password users: role === 'admin' OR username in ADMIN_LOCAL_USERNAMES
+ * - Linux.do: id, username, display_name/name, email allowlists
  */
 export function isAdminUser(user, allowlist) {
   if (!user || !allowlist) return false
 
   const provider = String(user.auth_provider || 'linuxdo').toLowerCase()
 
+  if (provider === 'local') {
+    if (String(user.role || '').toLowerCase() === 'admin') return true
+    const username = String(user.username || '').toLowerCase()
+    if (username && allowlist.localUsernames && allowlist.localUsernames.has(username)) {
+      return true
+    }
+    return false
+  }
+
+  // Legacy sessions from old aily-adapter login path
   if (provider === 'aily') {
     if (user.aily_admin === true) return true
     const role = Number(user.aily_role || 0)
     if (role >= 10) return true
     const username = String(user.username || '').toLowerCase()
-    if (username && allowlist.ailyUsernames && allowlist.ailyUsernames.has(username)) {
+    if (username && allowlist.localUsernames && allowlist.localUsernames.has(username)) {
       return true
     }
-    // fall through — also allow linuxdo-style email list matches if present
   }
 
   const hasAny =
     (allowlist.ids && allowlist.ids.size > 0) ||
     (allowlist.usernames && allowlist.usernames.size > 0) ||
     (allowlist.emails && allowlist.emails.size > 0) ||
-    (allowlist.ailyUsernames && allowlist.ailyUsernames.size > 0)
+    (allowlist.localUsernames && allowlist.localUsernames.size > 0)
   if (!hasAny && provider !== 'aily') return false
 
   const id = String(user.id ?? '')
@@ -55,14 +68,6 @@ export function isAdminUser(user, allowlist) {
 
   const username = String(user.username || '').toLowerCase()
   if (username && allowlist.usernames.has(username)) return true
-  if (
-    provider === 'aily' &&
-    username &&
-    allowlist.ailyUsernames &&
-    allowlist.ailyUsernames.has(username)
-  ) {
-    return true
-  }
 
   const name = String(user.display_name || user.name || '').toLowerCase()
   if (name && allowlist.usernames.has(name)) return true

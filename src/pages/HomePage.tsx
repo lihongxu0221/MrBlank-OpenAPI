@@ -62,8 +62,8 @@ export function HomePage() {
             </h1>
             <p className="hero-lede">
               {P(
-                '社区共享的模型入口。支持 Linux.do 与 Aily 账号登录。无需充值，每日签到领取额度。',
-                'A community-shared model gateway. Sign in with Linux.do or Aily. No top-ups — claim daily credits.',
+                '社区共享的模型入口。支持本站账号与 Linux.do 登录。无需充值，每日签到领取额度。',
+                'A community-shared model gateway. Sign in with a site account or Linux.do. No top-ups — claim daily credits.',
               )}
             </p>
             <div className="hero-actions">
@@ -76,7 +76,7 @@ export function HomePage() {
             </div>
             <div className="hero-trust">
               <span>Linux.do</span>
-              <span>Aily</span>
+              <span>{P('本站账号')}</span>
               <span>{P('无需充值')}</span>
               <span>{P('社区共享')}</span>
               {session ? <span>{P('已登录')}</span> : null}
@@ -118,7 +118,7 @@ export function HomePage() {
         </div>
         <div className="steps-grid">
           {[
-            { n: '01', t: P('社区登录'), d: P('使用 Linux.do 或 Aily 账号完成身份验证') },
+            { n: '01', t: P('社区登录'), d: P('使用本站账号或 Linux.do 完成身份验证') },
             { n: '02', t: P('每日签到'), d: P('轻量验证后领取当日额度') },
             { n: '03', t: P('创建密钥'), d: P('在熟悉的客户端填入 Base URL') },
           ].map((s) => (
@@ -171,8 +171,8 @@ export function HomePage() {
             [
               P('这里的 OpenAI 接口是真的吗？'),
               P(
-                '本站提供控制台与 Linux.do / Aily 登录；模型请求使用本站 Base URL（https://openapi.juc114.cn/v1 → CPA）。',
-                'This site provides the console and Linux.do / Aily login; model requests use this host Base URL (https://openapi.juc114.cn/v1 → CPA).',
+                '本站提供控制台与本站账号 / Linux.do 登录；模型请求使用本站 Base URL（https://openapi.juc114.cn/v1 → CPA）。',
+                'This site provides the console and site-account / Linux.do login; model requests use this host Base URL (https://openapi.juc114.cn/v1 → CPA).',
               ),
             ],
           ].map(([q, a]) => (

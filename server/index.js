@@ -35,6 +35,7 @@ import {
 } from './admin.js'
 import { createSiteContentStore } from './siteContent.js'
 import { createGroupStore } from './groups.js'
+import { createLocalUserStore } from './localUsers.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -79,7 +80,8 @@ const PORT = Number(process.env.PORT || 8787)
 const HOST = process.env.HOST || '127.0.0.1'
 const SESSION_SECRET = process.env.SESSION_SECRET || ''
 const SITE_ORIGIN = process.env.SITE_ORIGIN || 'https://openapi.juc114.cn'
-const AILY_ADAPTER_URL = (process.env.AILY_ADAPTER_URL || 'http://127.0.0.1:8088').replace(/\/$/, '')
+const AILY_ADAPTER_URL = (process.env.AILY_ADAPTER_URL || 'http://127.0.0.1:8088').replace(/\/$/, '') // Phase D only; not used for login
+void AILY_ADAPTER_URL
 const COOKIE_NAME = 'mrblank_sid'
 const STATE_TTL_MS = 10 * 60 * 1000
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000
@@ -88,6 +90,20 @@ const groupStore = createGroupStore(
   process.env.USER_GROUPS_PATH || path.join(__dirname, 'data', 'user-groups.json'),
   { quotaUnit: Q },
 )
+const localUserStore = createLocalUserStore(
+  process.env.LOCAL_USERS_PATH || path.join(__dirname, 'data', 'local-users.json'),
+  process.env,
+)
+try {
+  const boot = localUserStore.bootstrapFromEnv()
+  if (boot.created) console.log(`[server] bootstrap admin created user=${boot.username}`)
+  else if (boot.upgraded) console.log(`[server] bootstrap admin role upgraded user=${boot.username}`)
+  else if (boot.reason === 'exists') console.log(`[server] bootstrap admin already present user=${boot.username}`)
+  else console.log('[server] bootstrap admin skipped (BOOTSTRAP_ADMIN_USER/PASSWORD unset)')
+} catch (e) {
+  console.error('[server] bootstrap admin failed', e?.message || e)
+}
+
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
   console.error('[server] LINUXDO_CLIENT_ID and LINUXDO_CLIENT_SECRET are required')
@@ -242,6 +258,7 @@ function sessionPayload(rec) {
       username: rec.user.username,
       email: rec.user.email || '',
       auth_provider: rec.user.auth_provider || 'linuxdo',
+      role: rec.user.role || null,
     },
     is_admin: isAdminUser(rec.user, adminAllowlist),
   }
@@ -301,44 +318,6 @@ function resolveAuthGroup(req) {
   return groupStore.resolveUserGroup(req.auth.user.id, metrics)
 }
 
-
-function extractAilySessionCookie(setCookieHeader) {
-  if (!setCookieHeader) return null
-  const parts = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader]
-  for (const raw of parts) {
-    const m = String(raw).match(/(?:^|,\s*)aily_admin_session=([^;]+)/i)
-    if (m) return decodeURIComponent(m[1].trim())
-  }
-  // Also try first cookie pair if header is a single Set-Cookie
-  for (const raw of parts) {
-    const first = String(raw).split(';')[0]
-    const eq = first.indexOf('=')
-    if (eq > 0 && first.slice(0, eq).trim() === 'aily_admin_session') {
-      return decodeURIComponent(first.slice(eq + 1).trim())
-    }
-  }
-  return null
-}
-
-function mapAilyAuthError(status, message) {
-  const msg = String(message || '').trim()
-  if (status === 429 || /尝试过多|稍后再试|locked|too many/i.test(msg)) {
-    return { status: 429, message: '尝试过多，请稍后再试' }
-  }
-  if (/禁用|disabled/i.test(msg)) {
-    return { status: 401, message: '该 Aily 账号已被禁用' }
-  }
-  if (/用户名或密码错误|密码错误|unauthorized|Invalid/i.test(msg) || status === 401) {
-    return { status: 401, message: '用户名或密码错误' }
-  }
-  if (/请输入用户名/i.test(msg)) {
-    return { status: 400, message: '请输入用户名' }
-  }
-  if (status >= 500) {
-    return { status: 502, message: 'Aily 登录服务暂时不可用，请稍后重试' }
-  }
-  return { status: status >= 400 ? status : 401, message: msg || 'Aily 登录失败' }
-}
 
 
 const probeHistory = [] // { checked_at, overall, latency_ms, model_count }
@@ -874,7 +853,7 @@ app.post('/api/user/topup', requireAuth, (req, res) => {
 })
 
 
-app.post('/api/auth/aily', async (req, res) => {
+function handleLocalPasswordLogin(req, res) {
   const username = String(req.body?.username || '').trim()
   const password = String(req.body?.password || '')
   if (!username || !password) {
@@ -882,74 +861,27 @@ app.post('/api/auth/aily', async (req, res) => {
     return
   }
   try {
-    const authRes = await fetch(`${AILY_ADAPTER_URL}/admin/auth`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({ username, password }),
-    })
-    let authJson = null
-    try {
-      authJson = await authRes.json()
-    } catch {
-      authJson = null
-    }
-    if (!authRes.ok || !authJson?.ok) {
-      const mapped = mapAilyAuthError(authRes.status, authJson?.message)
-      res.status(mapped.status).json(fail(mapped.message))
-      return
-    }
-
-    // Prefer profile from /admin/me using aily session cookie (server-side only; never forward to browser)
-    let me = null
-    const setCookies =
-      typeof authRes.headers.getSetCookie === 'function' ? authRes.headers.getSetCookie() : null
-    const ailyCookie = extractAilySessionCookie(
-      setCookies && setCookies.length ? setCookies : authRes.headers.get('set-cookie'),
-    )
-    if (ailyCookie) {
+    const pub = localUserStore.authenticate(username, password)
+    const user = localUserStore.toSessionUser(pub)
+    if (pub.group_id) {
       try {
-        const meRes = await fetch(`${AILY_ADAPTER_URL}/admin/me`, {
-          headers: {
-            Accept: 'application/json',
-            Cookie: `aily_admin_session=${ailyCookie}`,
-          },
-        })
-        if (meRes.ok) {
-          const meJson = await meRes.json()
-          me = meJson?.data || meJson
-        }
+        groupStore.assignMember(user.id, { group_id: pub.group_id, override: true })
       } catch (e) {
-        console.error('[aily-auth] /admin/me failed', e?.message || e)
+        console.error('[local-auth] group assign', e?.message || e)
       }
-    }
-
-    const ailyUsername = String(me?.username || authJson.username || username).trim()
-    const ailyUserId = me?.userId ?? me?.id
-    const display_name = String(me?.display_name || ailyUsername)
-    const aily_role = Number(me?.role ?? authJson.role ?? 0) || 0
-    const aily_admin = !!(me?.admin ?? authJson.admin ?? aily_role >= 10)
-    const id = ailyUserId != null && ailyUserId !== '' ? `aily:${ailyUserId}` : `aily:${ailyUsername}`
-
-    const user = {
-      id,
-      username: ailyUsername,
-      display_name,
-      email: '',
-      auth_provider: 'aily',
-      aily_role,
-      aily_admin,
     }
     const rec = createUserSession(user)
     setSessionCookie(res, rec.sid)
     res.json(ok(sessionPayload(rec)))
   } catch (err) {
-    console.error('[aily-auth] adapter unreachable', err?.message || err)
-    res.status(502).json(fail('Aily 登录服务暂时不可用，请稍后重试'))
+    const status = Number(err?.status) || 401
+    res.status(status).json(fail(err?.message || '登录失败'))
   }
-})
+}
+
+app.post('/api/auth/login', handleLocalPasswordLogin)
+// Legacy path alias (no longer proxies to Aily adapter)
+app.post('/api/auth/aily', handleLocalPasswordLogin)
 
 app.post('/api/user/auth/logout', (req, res) => {
   const sid = readSid(req)
@@ -1197,7 +1129,7 @@ app.get('/api/admin/me', requireAuth, (req, res) => {
         adminAllowlist.ids.size > 0 ||
         adminAllowlist.usernames.size > 0 ||
         adminAllowlist.emails.size > 0 ||
-        (adminAllowlist.ailyUsernames && adminAllowlist.ailyUsernames.size > 0),
+        (adminAllowlist.localUsernames && adminAllowlist.localUsernames.size > 0),
     }),
   )
 })
@@ -1425,6 +1357,78 @@ app.put('/api/admin/groups/members/:userId', requireAdmin, (req, res) => {
   }
 })
 
+app.get('/api/admin/users', requireAdmin, (_req, res) => {
+  res.json(ok({ users: localUserStore.listUsers() }))
+})
+
+app.post('/api/admin/users', requireAdmin, (req, res) => {
+  try {
+    const created = localUserStore.createUser({
+      username: req.body?.username,
+      password: req.body?.password,
+      role: req.body?.role,
+      display_name: req.body?.display_name,
+      group_id: req.body?.group_id,
+    })
+    if (created.group_id) {
+      try {
+        groupStore.assignMember(created.id, { group_id: created.group_id, override: true })
+      } catch (e) {
+        console.error('[admin-users] group assign', e?.message || e)
+      }
+    }
+    res.json(ok({ user: created }))
+  } catch (err) {
+    res.status(Number(err?.status) || 400).json(fail(err?.message || '创建用户失败'))
+  }
+})
+
+app.put('/api/admin/users/:id', requireAdmin, (req, res) => {
+  try {
+    const updated = localUserStore.updateUser(req.params.id, {
+      display_name: req.body?.display_name,
+      role: req.body?.role,
+      group_id: req.body?.group_id,
+      disabled: req.body?.disabled,
+    })
+    if (req.body?.group_id !== undefined) {
+      try {
+        if (updated.group_id) {
+          groupStore.assignMember(updated.id, { group_id: updated.group_id, override: true })
+        }
+      } catch (e) {
+        console.error('[admin-users] group assign', e?.message || e)
+      }
+    }
+    res.json(ok({ user: updated }))
+  } catch (err) {
+    res.status(Number(err?.status) || 400).json(fail(err?.message || '更新用户失败'))
+  }
+})
+
+app.post('/api/admin/users/:id/password', requireAdmin, (req, res) => {
+  try {
+    const updated = localUserStore.resetPassword(req.params.id, req.body?.password)
+    res.json(ok({ user: updated }))
+  } catch (err) {
+    res.status(Number(err?.status) || 400).json(fail(err?.message || '重置密码失败'))
+  }
+})
+
+app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
+  try {
+    // Prevent deleting self
+    if (req.auth.user.id === req.params.id) {
+      res.status(400).json(fail('不能删除当前登录账号'))
+      return
+    }
+    localUserStore.deleteUser(req.params.id)
+    res.json(ok(true))
+  } catch (err) {
+    res.status(Number(err?.status) || 400).json(fail(err?.message || '删除用户失败'))
+  }
+})
+
 app.get('/api/admin/constellation', requireAdmin, (_req, res) => {
   res.json(ok(siteContent.getAdminConstellation()))
 })
@@ -1506,7 +1510,7 @@ app.listen(PORT, HOST, () => {
     `[server] secrets demo=${cpaCfg.demoKey ? 'yes' : 'no'} mgmt=${cpaCfg.managementKey ? 'yes' : 'no'} admin=${cpaCfg.adminKey ? 'yes' : 'no'}`,
   )
   console.log(
-    `[server] admin allowlist ids=${adminAllowlist.ids.size} usernames=${adminAllowlist.usernames.size} emails=${adminAllowlist.emails.size} aily=${adminAllowlist.ailyUsernames?.size || 0}`,
+    `[server] admin allowlist ids=${adminAllowlist.ids.size} usernames=${adminAllowlist.usernames.size} emails=${adminAllowlist.emails.size} local=${adminAllowlist.localUsernames?.size || 0}`,
   )
-  console.log(`[server] aily_adapter=${AILY_ADAPTER_URL}`)
+  console.log(`[server] local_users=${localUserStore.listUsers().length} (AILY_ADAPTER_URL reserved for Phase D)`)
 })

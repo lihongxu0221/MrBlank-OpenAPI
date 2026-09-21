@@ -7,6 +7,7 @@ import {
   Shield,
   Sparkles,
   UserCog,
+  UserRound,
   Users,
 } from 'lucide-react'
 import { P } from '../../i18n'
@@ -22,6 +23,7 @@ const ITEMS = [
   { path: '/admin/connection', label: '连接状态', icon: Cable },
   { path: '/admin/constellation', label: '模型星座', icon: Sparkles },
   { path: '/admin/groups', label: '用户组', icon: UserCog },
+  { path: '/admin/users', label: '本站账号', icon: UserRound },
 ]
 
 export function AdminLayout({
@@ -45,7 +47,7 @@ export function AdminLayout({
       <div className="panel" style={{ marginTop: 12 }}>
         <h2>{P('需要管理员权限')}</h2>
         <p className="page-lead">
-          {P('当前账号不在管理员白名单中。请配置 ADMIN_LINUXDO_* / ADMIN_AILY_USERNAMES，或使用具备 Aily 管理角色的账号登录。')}
+          {P('当前账号不是管理员。请使用本站管理员账号，或配置 ADMIN_LINUXDO_* 白名单的 Linux.do 账号。')}
         </p>
       </div>
     )

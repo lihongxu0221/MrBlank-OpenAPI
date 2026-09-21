@@ -1,6 +1,6 @@
 # MrBlank OpenAPI
 
-Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn)。支持 **Linux.do OAuth** 与 **Aily 用户名/密码** 双登录、会话 Cookie，以及对接 **CPA 内核**（与 www CPAMP 同源）的模型 / 密钥 / 用量。
+Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn)。支持 **Linux.do OAuth** 与 **本站用户名/密码** 双登录、会话 Cookie，以及对接 **CPA 内核**（与 www CPAMP 同源）的模型 / 密钥 / 用量。
 
 > **Base URL**：`https://openapi.juc114.cn/v1`  
 > 本域名 nginx 将 `/v1/` 反代到本机 CPA billing shim（`127.0.0.1:8320`）→ cli-proxy-api。控制台 BFF（`:8787`）用服务端持有的 Management / Admin Key 调用 CPA / CPAMP，**不会把这些密钥下发到浏览器**。
@@ -26,7 +26,7 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
 
 | 组件 | 地址 | 用途 |
 |---|---|---|
-| 本站静态 + BFF | openapi.juc114.cn → `:8787` | Linux.do / Aily 登录、控制台 `/api` |
+| 本站静态 + BFF | openapi.juc114.cn → `:8787` | Linux.do / 本站账号登录、控制台 `/api` |
 | `/v1` | openapi.juc114.cn/v1 → `:8320` | 对外 OpenAI 兼容调用（CPA） |
 | CPA | `127.0.0.1:8317` | cli-proxy-api；Management Key 管 api-keys |
 | CPAMP | `127.0.0.1:18317`（www） | 用量汇总；Admin Key **仅服务端**；勿改 www UI |
@@ -55,8 +55,10 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
 | `CPA_MANAGEMENT_KEY_FILE` | CPA management key 文件路径 |
 | `CPAMP_ADMIN_KEY_FILE` | CPAMP admin key 文件路径 |
 | `USER_KEYS_PATH` | 用户密钥映射 JSON（默认 `server/data/user-keys.json`） |
-| `AILY_ADAPTER_URL` | 本机 Aily adapter（默认 `http://127.0.0.1:8088`）；BFF 校验账号后签发本站会话 |
-| `ADMIN_AILY_USERNAMES` | Aily 管理员用户名白名单（另：Aily `role>=10` / `admin` 亦视为管理员） |
+| `BOOTSTRAP_ADMIN_USER` / `BOOTSTRAP_ADMIN_PASSWORD` | 首次启动创建本站管理员（若用户名不存在）；勿提交真实密码 |
+| `LOCAL_USERS_PATH` | 本地用户 JSON（默认 `server/data/local-users.json`） |
+| `ADMIN_LOCAL_USERNAMES` | 可选：额外将指定本站用户名视为管理员（本地 `role=admin` 已足够） |
+| `AILY_ADAPTER_URL` | 预留阶段 D 上游转发/诊断（**不用于站登录**） |
 
 也可用 `CPA_DEMO_API_KEY` / `CPA_MANAGEMENT_KEY` / `CPAMP_ADMIN_KEY` 直接注入（勿写入仓库）。示例见 `server/.env.example`。
 
@@ -117,11 +119,13 @@ OpenAPI 站内运营控制台是 **CPAMP 能力的兼容风格子集**（概览 
 ADMIN_LINUXDO_IDS=123456
 ADMIN_LINUXDO_USERNAMES=your_linuxdo_name
 ADMIN_LINUXDO_EMAILS=you@example.com
-ADMIN_AILY_USERNAMES=admin
+BOOTSTRAP_ADMIN_USER=admin
+# BOOTSTRAP_ADMIN_PASSWORD=set_on_server_only
+ADMIN_LOCAL_USERNAMES=
 ```
 
 匹配 Linux.do OAuth 返回的 `id` / `username` / `name`（display_name）/ `email`；
-Aily 登录用户另可按 `ADMIN_AILY_USERNAMES` 或 adapter 返回的 `admin`/`role>=10` 判定。
+本站密码登录用户按本地 `role=admin`（或 `ADMIN_LOCAL_USERNAMES`）判定；Linux.do 仍走白名单。
 管理员登录后进入 `#/admin`，普通用户进入 `#/console`。
 
 - 未配置任一项时：**无人**可进入管理接口（403）
