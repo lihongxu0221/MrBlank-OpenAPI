@@ -41,8 +41,8 @@
 | 请求响应诊断（aily 完整移植） | ✅ C | 管理员 `#/admin/usage`；BFF `/v1` 落盘；见 PHASE_C_CHECKLIST |
 | Aily 上游转发 + 请求响应基于 CPA | ✅ D | 凭证管理 + CPA-first `/v1`；见 PHASE_D_CHECKLIST |
 | 用户分组晋升规则可配 | ✅ E | 可配晋级 + BFF `/v1` 强制 5h/周/月与模型白名单；见 PHASE_E_CHECKLIST |
-| 签到/兑换发额度 | P2 | CPA 无此能力时需自建额度层 |
-| 排行榜用户名映射 | P2 | 现有 hash 脱敏，映射登录用户展示名 |
+| 签到/兑换发额度 | ✅ F | 本站积分钱包 + 管理可配；见 PHASE_F_CHECKLIST |
+| 排行榜用户名映射 | ✅ F | 已知用户显示昵称，未映射脱敏 |
 
 ---
 
@@ -98,10 +98,12 @@
 **完成标准**：换组后额度与模型立即生效；越权模型 403；额度用尽 429。  
 **验收清单**：[`docs/PHASE_E_CHECKLIST.md`](./PHASE_E_CHECKLIST.md)
 
-### 阶段 F — 可选增强
-1. 签到/兑换真额度  
-2. 排行榜显示名美化  
-3. Cloudflare 小橙云 / 多管理员白名单 UI  
+### 阶段 F — 可选增强 ✅
+1. 签到/兑换真额度（持久化 `site-credits.json`；组额度用尽可用站点积分；管理员 `#/admin/credits`）  
+2. 排行榜显示名美化（Linux.do / 本站昵称；未映射脱敏）  
+3. Cloudflare 小橙云说明（README）+ 多管理员白名单 UI 提示（`#/admin/users`）  
+
+**验收清单**：[`docs/PHASE_F_CHECKLIST.md`](./PHASE_F_CHECKLIST.md)
 
 ---
 

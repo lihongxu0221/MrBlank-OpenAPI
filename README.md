@@ -54,7 +54,7 @@ Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/a
 - **用户组治理（Phase E）**：`#/admin/groups` 配置额度/白名单/晋级；BFF `/v1` 对映射密钥强制 429/403；控制台展示剩余与晋级进度；见 `docs/PHASE_E_CHECKLIST.md`
 - **用量**：BFF `GET /api/log/self` ← CPAMP `GET /v0/management/usage`，按密钥 sha256 过滤
 - **社区排行 / 号池 / 调用实况 / 服务状态**：BFF 聚合 CPAMP usage + auth-files + CPA `/v1/models` 与 health（短缓存）；无数据时返回空列表
-- **签到 / 兑换**：仍为进程内逻辑（未接 CPA 配额）
+- **签到 / 兑换（Phase F）**：持久化本站积分钱包；管理员 `#/admin/credits` 配置每日发放与兑换码；组额度用尽时可用站点积分继续调用；见 `docs/PHASE_F_CHECKLIST.md`
 
 ## 环境变量（服务端，勿提交 git）
 
@@ -76,6 +76,8 @@ Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/a
 | `LOCAL_USERS_PATH` | 本地用户 JSON（默认 `server/data/local-users.json`） |
 | `ADMIN_LOCAL_USERNAMES` | 可选：额外将指定本站用户名视为管理员（本地 `role=admin` 已足够） |
 | `AILY_ADAPTER_URL` | 预留阶段 D 上游转发/诊断（**不用于站登录**） |
+| `SITE_CREDITS_PATH` | 签到/兑换/站点积分 JSON（默认 `server/data/site-credits.json`） |
+| `USER_GROUPS_PATH` | 用户组 JSON（默认 `server/data/user-groups.json`） |
 
 也可用 `CPA_DEMO_API_KEY` / `CPA_MANAGEMENT_KEY` / `CPAMP_ADMIN_KEY` 直接注入（勿写入仓库）。示例见 `server/.env.example`。
 
@@ -119,6 +121,8 @@ Nginx：
 | `#/about` | 关于 |
 | `#/console` 等 | 控制台（需登录；普通用户落地） |
 | `#/admin` 等 | 运营控制台（白名单管理员；CPAMP/CPA 子集） |
+| `#/admin/credits` | 签到发放与兑换码（Phase F） |
+| `#/checkin` / `#/redeem` | 每日签到 / 兑换码 |
 
 ## 声明
 
@@ -132,7 +136,7 @@ Nginx：
 | 面板 | 用途 |
 |------|------|
 | **www CPAMP**（`https://www.juc114.cn/management.html`） | **完整运维**：高级配置、供应商/账号深度操作 |
-| **openapi `#/admin`**（本站） | **日常运营子集**（MrBlank Geist / CSS 变量风格）：连接状态、号池健康、CPA 密钥、用量汇总，以及星座 / 用户组 / 本站账号 |
+| **openapi `#/admin`**（本站） | **日常运营子集**（MrBlank Geist / CSS 变量风格）：连接状态、号池健康、CPA 密钥、用量汇总，以及星座 / 用户组 / 签到兑换 / 本站账号 |
 
 **不会** iframe 嵌入或修改 www 的 management UI。清单见 [`docs/PHASE_B_CHECKLIST.md`](docs/PHASE_B_CHECKLIST.md)。
 
@@ -158,3 +162,12 @@ ADMIN_LOCAL_USERNAMES=
 - 仅白名单用户能看见导航「管理」并访问 `#/admin`
 - 浏览器只拿到脱敏数据；`CPAMP_ADMIN_KEY` / `CPA_MANAGEMENT_KEY` 仅服务端读取
 - 完整高级配置仍使用 www CPAMP 面板
+
+## Cloudflare（可选）
+
+若域名经 Cloudflare 代理（小橙云），请注意：
+
+- 源站仍监听本机 BFF `:8787`；nginx 终止或回源 HTTPS 均可
+- WebSocket / 长连接若遇超时，可在 CF 网络层调大或对 `/v1` 绕过部分优化
+- Turnstile 等人机验证仅在启用时需要；本站签到当前不强制 Turnstile
+- 管理接口与密钥仍只在源站 `.env` / 文件中，切勿写入 Pages 或仓库

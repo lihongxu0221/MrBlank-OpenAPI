@@ -54,6 +54,7 @@ export function OverviewPage({ path }: { path: string }) {
       showToast(qt(P('兑换成功，获得 {quota}。'), { quota: formatCredits(awarded) + ' ' + P('点') }))
       setRedeem('')
       setSelf(await api.get('/api/user/self'))
+      setGroupInfo(await api.get('/api/user/group').catch(() => groupInfo))
     } catch (e) {
       showToast((e as Error).message)
     } finally {
@@ -180,7 +181,7 @@ export function OverviewPage({ path }: { path: string }) {
           <div className="value">
             {self ? formatCredits(self.quota) : '—'} <span className="unit">{P('点')}</span>
           </div>
-          <div className="hint">{P('签到与兑换所得')}</div>
+          <div className="hint">{P('签到与兑换所得（本站积分钱包）')}</div>
         </div>
         <div className="stat-card">
           <div className="label">{P('累计使用')}</div>
@@ -272,7 +273,10 @@ export function OverviewPage({ path }: { path: string }) {
             {P('验证并签到')} →
           </button>
           <div className="alert-box">
-            {checkin?.unavailable_reason || P('今日社区签到额度已发放完毕，请在北京时间零点后再来')}
+            {checkin?.unavailable_reason ||
+              (checkin?.claimable
+                ? P('前往签到页领取今日额度（北京时间日界）。')
+                : P('今日社区签到额度已发放完毕，请在北京时间零点后再来'))}
           </div>
           <div className="action-foot">
             {qt(P('本月签到 {month} 天 · 累计 {total} 天'), {

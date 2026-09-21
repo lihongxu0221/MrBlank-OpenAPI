@@ -37,6 +37,7 @@ import {
 } from './admin.js'
 import { createSiteContentStore } from './siteContent.js'
 import { createGroupStore, CREDIT_UNIT_INFO } from './groups.js'
+import { createCreditStore, shanghaiDay } from './credits.js'
 import { createLocalUserStore } from './localUsers.js'
 import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy } from './v1Proxy.js'
@@ -97,6 +98,10 @@ const groupStore = createGroupStore(
   process.env.USER_GROUPS_PATH || path.join(__dirname, 'data', 'user-groups.json'),
   { quotaUnit: Q },
 )
+const creditStore = createCreditStore(
+  process.env.SITE_CREDITS_PATH || path.join(__dirname, 'data', 'site-credits.json'),
+  { quotaUnit: Q },
+)
 const localUserStore = createLocalUserStore(
   process.env.LOCAL_USERS_PATH || path.join(__dirname, 'data', 'local-users.json'),
   process.env,
@@ -131,8 +136,7 @@ function randomToken(bytes = 24) {
 }
 
 function day(offset = 0) {
-  const d = new Date(Date.now() + offset * 86400000)
-  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
+  return shanghaiDay(offset)
 }
 
 function monthKey() {
@@ -145,6 +149,18 @@ function ok(data) {
 
 function fail(message, code) {
   return { success: false, data: null, message, code }
+}
+
+function syncStoreFromCredits(store, userId) {
+  try {
+    const snap = creditStore.getUserSnapshot(userId)
+    store.user.quota = snap.balance
+    store.user.settled_quota = snap.consumed_total
+    store.checkins = creditStore.listAllCheckins(userId)
+  } catch {
+    /* ignore */
+  }
+  return store
 }
 
 function getOrCreateUserStore(user) {
@@ -176,6 +192,7 @@ function getOrCreateUserStore(user) {
     store.user.username = user.username
     if (user.email) store.user.email = user.email
   }
+  syncStoreFromCredits(store, user.id)
   return store
 }
 
@@ -341,7 +358,13 @@ function userGroupMetrics(userId, store) {
     account_days,
     request_count: Math.max(Number(store?.user?.request_count || 0) || 0, lifetime.request_count || 0),
     used_quota: Math.max(Number(store?.user?.used_quota || 0) || 0, lifetime.used_quota || 0),
-    checkins: Array.isArray(store?.checkins) ? store.checkins.length : 0,
+    checkins: (() => {
+      try {
+        return creditStore.checkinCount(userId)
+      } catch {
+        return Array.isArray(store?.checkins) ? store.checkins.length : 0
+      }
+    })(),
   }
 }
 
@@ -516,8 +539,26 @@ async function buildLeaderboard(period = 'today', sort = 'credits', p = 1) {
   }
   try {
     const usage = await fetchCpampUsageCached(cpaCfg)
-    // Merge disk profiles with live session display names.
+    // Merge disk profiles + live sessions + local users for display names.
     const hashMap = userKeyStore.hashToUserMap()
+    const localById = new Map()
+    try {
+      for (const u of localUserStore.listUsers()) {
+        localById.set(String(u.id), u)
+      }
+    } catch {
+      /* ignore */
+    }
+    for (const [h, meta] of hashMap) {
+      const loc = localById.get(String(meta.userId))
+      if (loc) {
+        hashMap.set(h, {
+          ...meta,
+          display_name: meta.display_name || loc.display_name || '',
+          username: meta.username || loc.username || '',
+        })
+      }
+    }
     for (const rec of sessions.values()) {
       const uid = String(rec.user?.id || '')
       if (!uid) continue
@@ -532,13 +573,17 @@ async function buildLeaderboard(period = 'today', sort = 'credits', p = 1) {
       }
     }
     const ranked = aggregateLeaderboardFromUsage(usage, hashMap, { period, sort })
+    const mapped = ranked.filter((r) => r.mapped).length
     return ok({
       items: ranked,
       total: ranked.length,
+      mapped,
+      unmapped: ranked.length - mapped,
       period,
       sort,
       page: p,
       source: 'cpamp',
+      privacy_note: '已登录并创建密钥的用户显示 Linux.do / 本站昵称；其余以脱敏键名展示。',
     })
   } catch (err) {
     console.error('[welfare] leaderboard failed', err?.message || err)
@@ -660,28 +705,39 @@ app.use(
         if (isConsuming) {
           const quotaCheck = groupStore.assertQuotaAvailable(userId, metrics)
           if (!quotaCheck.ok) {
-            return {
-              allow: false,
-              status: 429,
-              code: quotaCheck.code || 'quota_exhausted',
-              group_id: groupInfo.group?.id,
-              headers: {
-                'x-mrblank-governance': quotaCheck.code || 'quota_exhausted',
-                'x-mrblank-group': groupInfo.group?.id || '',
-                'retry-after': quotaCheck.window === 'window_5h' ? '300' : '3600',
-              },
-              body: {
-                error: {
-                  message: quotaCheck.message,
-                  type: 'insufficient_quota',
-                  code: quotaCheck.code || 'quota_exhausted',
-                  param: quotaCheck.window || null,
-                },
-                group_id: groupInfo.group?.id,
-                remaining: quotaCheck.info?.remaining || groupInfo.remaining,
-                credit_unit: CREDIT_UNIT_INFO,
-              },
+            // Phase F: site credits (check-in / redeem) act as overflow capacity
+            let siteBal = 0
+            try {
+              siteBal = creditStore.getBalance(userId)
+            } catch {
+              siteBal = 0
             }
+            if (siteBal <= 0) {
+              return {
+                allow: false,
+                status: 429,
+                code: quotaCheck.code || 'quota_exhausted',
+                group_id: groupInfo.group?.id,
+                headers: {
+                  'x-mrblank-governance': quotaCheck.code || 'quota_exhausted',
+                  'x-mrblank-group': groupInfo.group?.id || '',
+                  'retry-after': quotaCheck.window === 'window_5h' ? '300' : '3600',
+                },
+                body: {
+                  error: {
+                    message: quotaCheck.message,
+                    type: 'insufficient_quota',
+                    code: quotaCheck.code || 'quota_exhausted',
+                    param: quotaCheck.window || null,
+                  },
+                  group_id: groupInfo.group?.id,
+                  remaining: quotaCheck.info?.remaining || groupInfo.remaining,
+                  site_credits: siteBal,
+                  credit_unit: CREDIT_UNIT_INFO,
+                },
+              }
+            }
+            // allow via site credits; still enforce model allowlist below
           }
           if (model) {
             const modelCheck = groupStore.assertModelAllowed(groupInfo.group, model)
@@ -724,10 +780,17 @@ app.use(
         } catch (e) {
           console.error('[groups] recordUsage failed', e?.message || e)
         }
+        // Phase F: deduct site credit wallet (check-in / redeem grants)
+        try {
+          creditStore.consume(userId, quota)
+        } catch (e) {
+          console.error('[credits] consume failed', e?.message || e)
+        }
         const store = userStores.get(String(userId))
         if (store?.user) {
           store.user.request_count = (Number(store.user.request_count) || 0) + 1
           store.user.used_quota = (Number(store.user.used_quota) || 0) + quota
+          syncStoreFromCredits(store, userId)
         }
         // Re-evaluate promotion after usage
         try {
@@ -905,10 +968,16 @@ app.get('/oauth/linuxdo', async (req, res) => {
 })
 
 app.get('/api/user/self', requireAuth, (req, res) => {
+  syncStoreFromCredits(req.store, req.auth.user.id)
   const groupInfo = resolveAuthGroup(req)
+  const snap = creditStore.getUserSnapshot(req.auth.user.id)
   res.json(
     ok({
       ...req.store.user,
+      quota: snap.balance,
+      granted_quota: snap.granted_total,
+      consumed_site_quota: snap.consumed_total,
+      checkin_count: snap.checkin_count,
       group_id: groupInfo.group?.id,
       group_name: groupInfo.group?.name,
       group_level: groupInfo.group?.level,
@@ -934,65 +1003,45 @@ app.get('/api/user/dashboard', requireAuth, (_req, res) => {
 
 app.get('/api/user/checkin', requireAuth, (req, res) => {
   const mm = String(req.query.month || monthKey())
-  const records = req.store.checkins.filter((r) => r.checkin_date.startsWith(mm))
-  const today = day()
-  const checked = req.store.checkins.some((r) => r.checkin_date === today)
+  const status = creditStore.getCheckinStatus(req.auth.user.id, mm)
+  syncStoreFromCredits(req.store, req.auth.user.id)
+  res.json(ok(status))
+})
+
+app.post('/api/user/checkin', requireAuth, (req, res) => {
+  const result = creditStore.claimCheckin(req.auth.user.id)
+  if (!result.ok) {
+    res.json(fail(result.message || '签到失败'))
+    return
+  }
+  syncStoreFromCredits(req.store, req.auth.user.id)
+  // Re-evaluate promotion (checkin count may unlock next group)
+  let group = null
+  try {
+    group = resolveAuthGroup(req)
+  } catch {
+    /* ignore */
+  }
   res.json(
     ok({
-      enabled: true,
-      claimable: !checked,
-      unavailable_reason: checked ? '今日已签到' : undefined,
-      min_quota: 0,
-      max_quota: 5 * Q,
-      month: mm,
-      stats: {
-        checked_in_today: checked,
-        checkin_count: records.length,
-        total_checkins: req.store.checkins.length,
-        records,
-      },
+      quota_awarded: result.quota_awarded,
+      balance: result.balance,
+      checkin_date: result.checkin_date,
+      group,
     }),
   )
 })
 
-app.post('/api/user/checkin', requireAuth, (req, res) => {
-  const today = day()
-  if (req.store.checkins.some((r) => r.checkin_date === today)) {
-    res.json(fail('今日已签到'))
-    return
-  }
-  const quota_awarded = 2 * Q
-  req.store.checkins.push({ checkin_date: today, quota_awarded })
-  req.store.user.quota += quota_awarded
-  try {
-    groupStore.recordUsage(req.auth.user.id, { quota: 0, requests: 0 })
-  } catch {}
-  res.json(ok({ quota_awarded, group: resolveAuthGroup(req) }))
-})
-
 app.post('/api/user/topup', requireAuth, (req, res) => {
-  const code = String(req.body?.key || '')
-    .trim()
-    .toUpperCase()
-  if (!code) {
-    res.json(fail('请输入兑换码'))
+  const code = String(req.body?.key || '').trim()
+  const result = creditStore.redeem(req.auth.user.id, code)
+  if (!result.ok) {
+    res.json(fail(result.message || '兑换失败'))
     return
   }
-  if (req.store.redeemed.has(code)) {
-    res.json(fail('兑换码已使用'))
-    return
-  }
-  if (
-    !['WELCOME', 'GROK2026', 'COMMUNITY', 'DARKFORGER'].includes(code) &&
-    !code.startsWith('DF-')
-  ) {
-    res.json(fail('兑换码无效'))
-    return
-  }
-  req.store.redeemed.add(code)
-  const awarded = 5 * Q
-  req.store.user.quota += awarded
-  res.json(ok(awarded))
+  syncStoreFromCredits(req.store, req.auth.user.id)
+  // API historically returned awarded number directly
+  res.json(ok(result.awarded))
 })
 
 
@@ -1276,6 +1325,21 @@ app.get('/api/admin/me', requireAuth, (req, res) => {
         adminAllowlist.usernames.size > 0 ||
         adminAllowlist.emails.size > 0 ||
         (adminAllowlist.localUsernames && adminAllowlist.localUsernames.size > 0),
+      allowlist_hint: {
+        env_keys: [
+          'ADMIN_LINUXDO_IDS',
+          'ADMIN_LINUXDO_USERNAMES',
+          'ADMIN_LINUXDO_EMAILS',
+          'ADMIN_LOCAL_USERNAMES',
+        ],
+        note: '多管理员：在服务端 .env 配置上述变量（逗号分隔），或将本站用户 role 设为 admin。完整运维仍用 www CPAMP。',
+        counts: {
+          linuxdo_ids: adminAllowlist.ids.size,
+          linuxdo_usernames: adminAllowlist.usernames.size,
+          linuxdo_emails: adminAllowlist.emails.size,
+          local_usernames: adminAllowlist.localUsernames?.size || 0,
+        },
+      },
     }),
   )
 })
@@ -1573,6 +1637,72 @@ app.put('/api/admin/groups/members/:userId', requireAdmin, (req, res) => {
   }
 })
 
+app.get('/api/admin/credits', requireAdmin, (_req, res) => {
+  res.json(ok(creditStore.adminSummary()))
+})
+
+app.put('/api/admin/credits/config', requireAdmin, (req, res) => {
+  try {
+    const body = req.body || {}
+    const cfg = creditStore.saveConfig({
+      checkin_enabled: body.checkin_enabled,
+      daily_grant_min: body.daily_grant_min,
+      daily_grant_max: body.daily_grant_max,
+      note: body.note,
+    })
+    res.json(ok(cfg))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '保存失败'))
+  }
+})
+
+app.put('/api/admin/credits/codes', requireAdmin, (req, res) => {
+  try {
+    const codes = creditStore.saveCodes(req.body?.codes || req.body || [])
+    res.json(ok({ codes }))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '保存失败'))
+  }
+})
+
+app.post('/api/admin/credits/codes', requireAdmin, (req, res) => {
+  try {
+    const code = creditStore.upsertCode(req.body || {})
+    res.json(ok(code))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '保存失败'))
+  }
+})
+
+app.delete('/api/admin/credits/codes/:code', requireAdmin, (req, res) => {
+  try {
+    creditStore.deleteCode(req.params.code)
+    res.json(ok(true))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '删除失败'))
+  }
+})
+
+app.post('/api/admin/credits/grant', requireAdmin, (req, res) => {
+  try {
+    const userId = String(req.body?.user_id || '').trim()
+    const amount = Number(req.body?.amount)
+    if (!userId) {
+      res.status(400).json(fail('需要 user_id'))
+      return
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      res.status(400).json(fail('amount 须为正数（内部单位）'))
+      return
+    }
+    const result = creditStore.adminGrant(userId, amount, String(req.body?.note || ''))
+    res.json(ok(result))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '发放失败'))
+  }
+})
+
+
 app.get('/api/admin/users', requireAdmin, (_req, res) => {
   res.json(ok({ users: localUserStore.listUsers() }))
 })
@@ -1826,6 +1956,9 @@ app.listen(PORT, HOST, () => {
   )
   console.log(
     `[server] admin allowlist ids=${adminAllowlist.ids.size} usernames=${adminAllowlist.usernames.size} emails=${adminAllowlist.emails.size} local=${adminAllowlist.localUsernames?.size || 0}`,
+  )
+  console.log(
+    `[server] site-credits checkin=${creditStore.getConfig().checkin_enabled} grant=${creditStore.getConfig().daily_grant_min}-${creditStore.getConfig().daily_grant_max} codes=${creditStore.listCodes().length}`,
   )
   console.log(`[server] local_users=${localUserStore.listUsers().length} aily_adapter=${ailyManager.cfg.adapterUrl} aily_routes=${ailyManager.cfg.modelRoutes.length}`)
 })

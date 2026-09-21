@@ -5,7 +5,9 @@ import { P } from '../i18n'
 export function CommunityPage() {
   const [period, setPeriod] = useState('today')
   const [sort, setSort] = useState('credits')
-  const [board, setBoard] = useState<{ rank: number; name: string; calls: number; credits: number }[]>([])
+  const [board, setBoard] = useState<
+    { rank: number; name: string; calls: number; credits: number; mapped?: boolean }[]
+  >([])
   const [pool, setPool] = useState<any[]>([])
   const [activity, setActivity] = useState<any[]>([])
   const [notes, setNotes] = useState<{ board?: string; pool?: string; activity?: string }>({})
@@ -17,11 +19,14 @@ export function CommunityPage() {
     const activityPeriod = period === 'all' ? 'all' : period
     Promise.all([
       api
-        .get<{ items: any[]; note?: string }>(
+        .get<{ items: any[]; note?: string; privacy_note?: string }>(
           `/api/welfare/leaderboard?period=${period}&sort=${sort}&p=1`,
           { auth: false },
         )
-        .then((d) => ({ board: d.items || [], boardNote: d.note }))
+        .then((d) => ({
+          board: d.items || [],
+          boardNote: d.note || d.privacy_note,
+        }))
         .catch(() => ({ board: [] as any[], boardNote: P('排行榜暂时无法加载') })),
       api
         .get<{ items: any[]; note?: string }>('/api/welfare/pool', { auth: false })
@@ -103,6 +108,12 @@ export function CommunityPage() {
             </tbody>
           </table>
         </div>
+        {!loading && board.length ? (
+          <p className="field-note" style={{ marginTop: 10 }}>
+            {notes.board ||
+              P('已映射用户显示 Linux.do / 本站昵称；未映射以脱敏键名展示，保护隐私。')}
+          </p>
+        ) : null}
         {!loading && !board.length ? (
           <p className="empty-state">{notes.board || P('暂无用量数据，排行榜为空。')}</p>
         ) : null}

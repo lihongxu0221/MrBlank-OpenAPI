@@ -29,7 +29,7 @@ export function CheckinPage({ path }: { path: string }) {
   async function claim() {
     setBusy(true)
     try {
-      const res = await api.post<{ quota_awarded: number }>('/api/user/checkin', {}, { proof: 'mock-grant' })
+      const res = await api.post<{ quota_awarded: number }>('/api/user/checkin', {})
       showToast(qt(P('签到成功！已获得 {quota}。'), { quota: formatCredits(res.quota_awarded) + ' ' + P('点') }))
       await load(viewMonth)
     } catch (e) {
@@ -106,8 +106,10 @@ export function CheckinPage({ path }: { path: string }) {
           </button>
           {data?.unavailable_reason ? (
             <div className="alert-box">{data.unavailable_reason}</div>
-          ) : !data?.stats?.checked_in_today ? (
-            <div className="alert-box">{P('今日社区签到额度已发放完毕，请在北京时间零点后再来')}</div>
+          ) : data?.claimable ? (
+            <div className="alert-box" style={{ opacity: 0.85 }}>
+              {P('签到日界为北京时间零点；额度将记入本站积分钱包。')}
+            </div>
           ) : null}
           <div className="action-foot">
             {qt(P('本月签到 {month} 天 · 累计 {total} 天'), {

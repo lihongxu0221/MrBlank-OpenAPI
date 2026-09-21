@@ -32,14 +32,19 @@ export function AdminUsersPage({ path }: { path: string }) {
   })
   const [resetId, setResetId] = useState<string | null>(null)
   const [resetPassword, setResetPassword] = useState('')
+  const [allowHint, setAllowHint] = useState<any>(null)
 
   async function load() {
     if (!gate.allowed) return
     setLoading(true)
     setErr(null)
     try {
-      const data = await api.get<{ users: LocalUser[] }>('/api/admin/users')
+      const [data, me] = await Promise.all([
+        api.get<{ users: LocalUser[] }>('/api/admin/users'),
+        api.get<any>('/api/admin/me').catch(() => null),
+      ])
       setUsers(data.users || [])
+      setAllowHint(me?.allowlist_hint || null)
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -128,6 +133,23 @@ export function AdminUsersPage({ path }: { path: string }) {
         title={P('本站账号')}
         subtitle={P('创建本地用户名密码账号、设置角色与重置密码。Linux.do 用户不在此列表。')}
       />
+
+      <div className="panel" style={{ marginTop: 12 }}>
+        <strong>{P('多管理员白名单')}</strong>
+        <p className="page-lead" style={{ marginBottom: 6 }}>
+          {allowHint?.note ||
+            P('本站用户可将角色设为 admin；Linux.do 管理员请在服务端 .env 配置 ADMIN_LINUXDO_IDS / USERNAMES / EMAILS（逗号分隔）。')}
+        </p>
+        {allowHint?.counts ? (
+          <div className="tag-row">
+            <span className="pill">IDs {allowHint.counts.linuxdo_ids}</span>
+            <span className="pill">Usernames {allowHint.counts.linuxdo_usernames}</span>
+            <span className="pill">Emails {allowHint.counts.linuxdo_emails}</span>
+            <span className="pill">Local {allowHint.counts.local_usernames}</span>
+          </div>
+        ) : null}
+        <p className="field-note">{P('白名单仅服务端可读；此处只显示数量提示，不展示具体名单。')}</p>
+      </div>
 
       <div className="panel" style={{ marginTop: 16 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12 }}>

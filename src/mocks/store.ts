@@ -56,7 +56,15 @@ export const fail = (message: string, code?: string) => ({
 })
 
 export const handlers = {
-  status: () => ok({ quota_per_unit: Q }),
+  status: () =>
+    ok({
+      quota_per_unit: Q,
+      credit_unit: {
+        raw_per_point: Q,
+        display_name: '点',
+        note: '1 点 = 500000 内部额度单位',
+      },
+    }),
   config: () =>
     ok({
       loginEnabled: true,
@@ -83,8 +91,8 @@ export const handlers = {
       unavailable_reason: checked
         ? '今日已签到'
         : undefined,
-      min_quota: 0,
-      max_quota: 5 * Q,
+      min_quota: 2 * Q,
+      max_quota: 2 * Q,
       month: mm,
       stats: {
         checked_in_today: checked,

@@ -437,10 +437,15 @@ export function aggregateLeaderboardFromUsage(usage, hashToUser, { period = 'tod
       : mapped?.userId
         ? `u***${String(mapped.userId).slice(-3)}`
         : `k***${String(hash).slice(0, 4)}`
+    const isMapped = !!(
+      (mapped?.display_name && String(mapped.display_name).trim()) ||
+      (mapped?.username && String(mapped.username).trim())
+    )
     return {
       hash: String(hash).slice(0, 8),
       user_id: mapped?.userId || null,
       name,
+      mapped: isMapped,
       calls: stats.success || stats.calls,
       credits: stats.tokens,
       tokens: stats.tokens,
@@ -457,6 +462,7 @@ export function aggregateLeaderboardFromUsage(usage, hashToUser, { period = 'tod
   return items.map((item, i) => ({
     rank: i + 1,
     name: item.name,
+    mapped: !!item.mapped,
     calls: item.calls,
     credits: item.credits,
   }))

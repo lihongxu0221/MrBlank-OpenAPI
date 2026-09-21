@@ -10,6 +10,7 @@ import {
   UserRound,
   Users,
   Cloud,
+  Gift,
 } from 'lucide-react'
 import { P } from '../../i18n'
 import { navigate, navigateWithQuery } from '../../router/hash'
@@ -24,6 +25,7 @@ const ITEMS = [
   { path: '/admin/connection', label: '连接状态', icon: Cable },
   { path: '/admin/constellation', label: '模型星座', icon: Sparkles },
   { path: '/admin/groups', label: '用户组', icon: UserCog },
+  { path: '/admin/credits', label: '签到兑换', icon: Gift },
   { path: '/admin/users', label: '本站账号', icon: UserRound },
 ]
 
