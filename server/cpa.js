@@ -335,11 +335,23 @@ export async function probeCpaModels(cfg) {
   }
 }
 
+/** Prefer CPA /healthz (cli-proxy-api); CPAMP still exposes /health. Optional fallbacks. */
+async function probeServiceRoot(baseUrl, candidates) {
+  let last = { ok: false, status: 0, latency_ms: 0 }
+  for (const path of candidates) {
+    const result = await probeUrl(`${baseUrl}${path}`)
+    last = result
+    if (result.ok) return result
+  }
+  return last
+}
+
 export async function probeServiceHealth(cfg) {
   const [cpa, billing, cpamp] = await Promise.all([
-    probeUrl(`${cfg.cpaBaseUrl}/health`),
-    probeUrl(`${cfg.billingBaseUrl}/health`),
-    probeUrl(`${cfg.cpampBaseUrl}/health`),
+    probeServiceRoot(cfg.cpaBaseUrl, ["/healthz", "/", "/health"]),
+    probeServiceRoot(cfg.billingBaseUrl, ["/healthz", "/", "/health"]),
+    // CPAMP remains optional; do not treat it as required for site health.
+    probeServiceRoot(cfg.cpampBaseUrl, ["/health", "/healthz", "/"]),
   ])
   return {
     cpa: { ok: cpa.ok, latency_ms: cpa.latency_ms, status: cpa.status },
