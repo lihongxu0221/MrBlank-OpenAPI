@@ -42,6 +42,7 @@ export const ADMIN_ROUTES = [
   '/admin/keys',
   '/admin/usage',
   '/admin/connection',
+  '/admin/constellation',
 ] as const
 
 export function isGated(path: string) {

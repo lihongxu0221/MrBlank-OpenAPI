@@ -22,6 +22,7 @@ import { AdminAccountsPage } from './pages/admin/AdminAccountsPage'
 import { AdminKeysPage } from './pages/admin/AdminKeysPage'
 import { AdminUsagePage } from './pages/admin/AdminUsagePage'
 import { AdminConnectionPage } from './pages/admin/AdminConnectionPage'
+import { AdminConstellationPage } from './pages/admin/AdminConstellationPage'
 import { useEffect, useSyncExternalStore } from 'react'
 import { getSiteConfig, subscribeSiteConfig } from './config/site'
 import { getLanguage } from './i18n'
@@ -88,6 +89,9 @@ export default function App() {
       break
     case '/admin/connection':
       page = <AdminConnectionPage path={path} />
+      break
+    case '/admin/constellation':
+      page = <AdminConstellationPage path={path} />
       break
     default:
       page = (

@@ -40,7 +40,7 @@ async function request<T>(
     })
     if (res.status === 401) {
       setSession(null)
-      throw new ApiError(P('请先使用 Linux.do 登录。'))
+      throw new ApiError(P('请先登录。', 'Please sign in first.'))
     }
     const json = (await res.json()) as Envelope<T>
     if (!json.success) {

@@ -33,6 +33,7 @@ import {
   mapAdminAccounts,
   maskSecretValue,
 } from './admin.js'
+import { createSiteContentStore } from './siteContent.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -65,6 +66,9 @@ const userKeyStore = createUserKeyStore(
   process.env.USER_KEYS_PATH || path.join(__dirname, 'data', 'user-keys.json'),
 )
 const adminAllowlist = loadAdminAllowlist(process.env)
+const siteContent = createSiteContentStore(
+  process.env.SITE_CONTENT_PATH || path.join(__dirname, 'data', 'site-content.json'),
+)
 
 const CLIENT_ID = process.env.LINUXDO_CLIENT_ID || ''
 const CLIENT_SECRET = process.env.LINUXDO_CLIENT_SECRET || ''
@@ -74,6 +78,7 @@ const PORT = Number(process.env.PORT || 8787)
 const HOST = process.env.HOST || '127.0.0.1'
 const SESSION_SECRET = process.env.SESSION_SECRET || ''
 const SITE_ORIGIN = process.env.SITE_ORIGIN || 'https://openapi.juc114.cn'
+const AILY_ADAPTER_URL = (process.env.AILY_ADAPTER_URL || 'http://127.0.0.1:8088').replace(/\/$/, '')
 const COOKIE_NAME = 'mrblank_sid'
 const STATE_TTL_MS = 10 * 60 * 1000
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000
@@ -177,7 +182,7 @@ function getSession(req) {
 function requireAuth(req, res, next) {
   const session = getSession(req)
   if (!session) {
-    res.status(401).json(fail('请先使用 Linux.do 登录。'))
+    res.status(401).json(fail('请先登录。'))
     return
   }
   req.auth = session
@@ -188,7 +193,7 @@ function requireAuth(req, res, next) {
 function requireAdmin(req, res, next) {
   const session = getSession(req)
   if (!session) {
-    res.status(401).json(fail('请先使用 Linux.do 登录。'))
+    res.status(401).json(fail('请先登录。'))
     return
   }
   if (!isAdminUser(session.user, adminAllowlist)) {
@@ -218,6 +223,92 @@ function clearSessionCookie(res) {
     path: '/',
   })
 }
+
+
+function sessionPayload(rec) {
+  return {
+    access_token: rec.access_token,
+    token_type: 'Bearer',
+    access_expires_at: rec.expiresAt,
+    session: { sid: rec.sid, current: true },
+    user: {
+      id: rec.user.id,
+      display_name: rec.user.display_name,
+      username: rec.user.username,
+      email: rec.user.email || '',
+      auth_provider: rec.user.auth_provider || 'linuxdo',
+    },
+    is_admin: isAdminUser(rec.user, adminAllowlist),
+  }
+}
+
+function createUserSession(user) {
+  const sid = randomToken(32)
+  const access_token = randomToken(24)
+  const expiresAt = Math.floor(Date.now() / 1000) + Math.floor(SESSION_TTL_MS / 1000)
+  const rec = {
+    sid,
+    access_token,
+    createdAt: Date.now(),
+    expiresAt,
+    user,
+  }
+  sessions.set(sid, rec)
+  getOrCreateUserStore(user)
+  try {
+    userKeyStore.setProfile(user.id, {
+      display_name: user.display_name,
+      username: user.username,
+      email: user.email,
+    })
+  } catch (e) {
+    console.error('[userKeys] setProfile failed', e?.message || e)
+  }
+  return rec
+}
+
+function postLoginHash(user) {
+  return isAdminUser(user, adminAllowlist) ? '/admin' : '/console'
+}
+
+function extractAilySessionCookie(setCookieHeader) {
+  if (!setCookieHeader) return null
+  const parts = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader]
+  for (const raw of parts) {
+    const m = String(raw).match(/(?:^|,\s*)aily_admin_session=([^;]+)/i)
+    if (m) return decodeURIComponent(m[1].trim())
+  }
+  // Also try first cookie pair if header is a single Set-Cookie
+  for (const raw of parts) {
+    const first = String(raw).split(';')[0]
+    const eq = first.indexOf('=')
+    if (eq > 0 && first.slice(0, eq).trim() === 'aily_admin_session') {
+      return decodeURIComponent(first.slice(eq + 1).trim())
+    }
+  }
+  return null
+}
+
+function mapAilyAuthError(status, message) {
+  const msg = String(message || '').trim()
+  if (status === 429 || /尝试过多|稍后再试|locked|too many/i.test(msg)) {
+    return { status: 429, message: '尝试过多，请稍后再试' }
+  }
+  if (/禁用|disabled/i.test(msg)) {
+    return { status: 401, message: '该 Aily 账号已被禁用' }
+  }
+  if (/用户名或密码错误|密码错误|unauthorized|Invalid/i.test(msg) || status === 401) {
+    return { status: 401, message: '用户名或密码错误' }
+  }
+  if (/请输入用户名/i.test(msg)) {
+    return { status: 400, message: '请输入用户名' }
+  }
+  if (status >= 500) {
+    return { status: 502, message: 'Aily 登录服务暂时不可用，请稍后重试' }
+  }
+  return { status: status >= 400 ? status : 401, message: msg || 'Aily 登录失败' }
+}
+
 
 const probeHistory = [] // { checked_at, overall, latency_ms, model_count }
 const PROBE_HISTORY_MAX = 48
@@ -501,6 +592,9 @@ app.use(express.urlencoded({ extended: false }))
 
 app.get('/api/status', (_req, res) => res.json(pub.status()))
 app.get('/api/welfare/config', (_req, res) => res.json(pub.config()))
+app.get('/api/welfare/constellation', (_req, res) => {
+  res.json(ok(siteContent.getPublicConstellation()))
+})
 app.get('/api/welfare/availability', async (_req, res) => {
   try {
     res.json(await pub.availability())
@@ -641,26 +735,16 @@ app.get('/oauth/linuxdo', async (req, res) => {
     const email = String(ldUser.email || ldUser.primary_email || '').trim()
     if (!id) return failRedirect('userinfo_empty')
 
-    const user = { id, username, display_name, email: email || undefined }
-    getOrCreateUserStore(user)
-    try {
-      userKeyStore.setProfile(id, { display_name, username, email })
-    } catch (e) {
-      console.error('[userKeys] setProfile failed', e?.message || e)
+    const user = {
+      id,
+      username,
+      display_name,
+      email: email || undefined,
+      auth_provider: 'linuxdo',
     }
-
-    const sid = randomToken(32)
-    const access_token = randomToken(24)
-    const expiresAt = Math.floor(Date.now() / 1000) + Math.floor(SESSION_TTL_MS / 1000)
-    sessions.set(sid, {
-      sid,
-      access_token,
-      createdAt: Date.now(),
-      expiresAt,
-      user,
-    })
-    setSessionCookie(res, sid)
-    res.redirect(302, `${SITE_ORIGIN}/#/console`)
+    const rec = createUserSession(user)
+    setSessionCookie(res, rec.sid)
+    res.redirect(302, `${SITE_ORIGIN}/#${postLoginHash(user)}`)
   } catch (err) {
     console.error('[oauth] callback error', err?.message || err)
     return failRedirect('oauth_failed')
@@ -742,6 +826,84 @@ app.post('/api/user/topup', requireAuth, (req, res) => {
   res.json(ok(awarded))
 })
 
+
+app.post('/api/auth/aily', async (req, res) => {
+  const username = String(req.body?.username || '').trim()
+  const password = String(req.body?.password || '')
+  if (!username || !password) {
+    res.status(400).json(fail('请输入用户名和密码'))
+    return
+  }
+  try {
+    const authRes = await fetch(`${AILY_ADAPTER_URL}/admin/auth`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ username, password }),
+    })
+    let authJson = null
+    try {
+      authJson = await authRes.json()
+    } catch {
+      authJson = null
+    }
+    if (!authRes.ok || !authJson?.ok) {
+      const mapped = mapAilyAuthError(authRes.status, authJson?.message)
+      res.status(mapped.status).json(fail(mapped.message))
+      return
+    }
+
+    // Prefer profile from /admin/me using aily session cookie (server-side only; never forward to browser)
+    let me = null
+    const setCookies =
+      typeof authRes.headers.getSetCookie === 'function' ? authRes.headers.getSetCookie() : null
+    const ailyCookie = extractAilySessionCookie(
+      setCookies && setCookies.length ? setCookies : authRes.headers.get('set-cookie'),
+    )
+    if (ailyCookie) {
+      try {
+        const meRes = await fetch(`${AILY_ADAPTER_URL}/admin/me`, {
+          headers: {
+            Accept: 'application/json',
+            Cookie: `aily_admin_session=${ailyCookie}`,
+          },
+        })
+        if (meRes.ok) {
+          const meJson = await meRes.json()
+          me = meJson?.data || meJson
+        }
+      } catch (e) {
+        console.error('[aily-auth] /admin/me failed', e?.message || e)
+      }
+    }
+
+    const ailyUsername = String(me?.username || authJson.username || username).trim()
+    const ailyUserId = me?.userId ?? me?.id
+    const display_name = String(me?.display_name || ailyUsername)
+    const aily_role = Number(me?.role ?? authJson.role ?? 0) || 0
+    const aily_admin = !!(me?.admin ?? authJson.admin ?? aily_role >= 10)
+    const id = ailyUserId != null && ailyUserId !== '' ? `aily:${ailyUserId}` : `aily:${ailyUsername}`
+
+    const user = {
+      id,
+      username: ailyUsername,
+      display_name,
+      email: '',
+      auth_provider: 'aily',
+      aily_role,
+      aily_admin,
+    }
+    const rec = createUserSession(user)
+    setSessionCookie(res, rec.sid)
+    res.json(ok(sessionPayload(rec)))
+  } catch (err) {
+    console.error('[aily-auth] adapter unreachable', err?.message || err)
+    res.status(502).json(fail('Aily 登录服务暂时不可用，请稍后重试'))
+  }
+})
+
 app.post('/api/user/auth/logout', (req, res) => {
   const sid = readSid(req)
   if (sid) sessions.delete(sid)
@@ -750,38 +912,12 @@ app.post('/api/user/auth/logout', (req, res) => {
 })
 
 app.post('/api/user/auth/refresh', requireAuth, (req, res) => {
-  res.json(
-    ok({
-      access_token: req.auth.access_token,
-      token_type: 'Bearer',
-      access_expires_at: req.auth.expiresAt,
-      session: { sid: req.auth.sid, current: true },
-      user: {
-        id: req.auth.user.id,
-        display_name: req.auth.user.display_name,
-        username: req.auth.user.username,
-        email: req.auth.user.email || '',
-      },
-    }),
-  )
+  res.json(ok(sessionPayload(req.auth)))
 })
 
 /** Session restore payload for SPA (cookie-backed). */
 app.get('/api/user/session', requireAuth, (req, res) => {
-  res.json(
-    ok({
-      access_token: req.auth.access_token,
-      token_type: 'Bearer',
-      access_expires_at: req.auth.expiresAt,
-      session: { sid: req.auth.sid, current: true },
-      user: {
-        id: req.auth.user.id,
-        display_name: req.auth.user.display_name,
-        username: req.auth.user.username,
-        email: req.auth.user.email || '',
-      },
-    }),
-  )
+  res.json(ok(sessionPayload(req.auth)))
 })
 
 app.get(['/api/token/', '/api/token'], requireAuth, (req, res) => {
@@ -972,11 +1108,13 @@ app.get('/api/admin/me', requireAuth, (req, res) => {
         username: req.auth.user.username,
         display_name: req.auth.user.display_name,
         email: req.auth.user.email || '',
+        auth_provider: req.auth.user.auth_provider || 'linuxdo',
       },
       allowlist_configured:
         adminAllowlist.ids.size > 0 ||
         adminAllowlist.usernames.size > 0 ||
-        adminAllowlist.emails.size > 0,
+        adminAllowlist.emails.size > 0 ||
+        (adminAllowlist.ailyUsernames && adminAllowlist.ailyUsernames.size > 0),
     }),
   )
 })
@@ -1165,6 +1303,49 @@ app.delete('/api/admin/keys', requireAdmin, async (req, res) => {
   }
 })
 
+app.get('/api/admin/constellation', requireAdmin, (_req, res) => {
+  res.json(ok(siteContent.getAdminConstellation()))
+})
+
+app.put('/api/admin/constellation', requireAdmin, (req, res) => {
+  try {
+    const saved = siteContent.saveConstellation(req.body || {})
+    res.json(ok({ ...saved, updated_at: siteContent.get().updated_at }))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '保存失败'))
+  }
+})
+
+app.post('/api/admin/constellation/seed-from-models', requireAdmin, async (_req, res) => {
+  try {
+    const probe = await probeCpaModels(cpaCfg).catch(() => ({ ok: false, models: [] }))
+    const ids = (probe.models || []).map((m) => m.id || m.name).filter(Boolean)
+    // Force replace empty or allow admin explicit seed: overwrite cards from models
+    const doc = siteContent.get()
+    const cards = ids.slice(0, 24).map((mid, i) => ({
+      id: mid,
+      title: mid,
+      status: '已上线',
+      description: '',
+      tags: [mid],
+      model_ids: [mid],
+      sort_order: (i + 1) * 10,
+      enabled: true,
+    }))
+    const saved = siteContent.saveConstellation({
+      eyebrow: doc.constellation.eyebrow,
+      heading: doc.constellation.heading,
+      lead: ids.length
+        ? '以下条目由 CPA /v1/models 生成，可继续编辑文案与状态。'
+        : doc.constellation.lead,
+      cards: cards.length ? cards : doc.constellation.cards,
+    })
+    res.json(ok({ ...saved, updated_at: siteContent.get().updated_at, seeded: ids.length }))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || '无法从 CPA 拉取模型'))
+  }
+})
+
 app.get('/api/admin/config', requireAdmin, async (_req, res) => {
   try {
     if (!cpaCfg.adminKey) {
@@ -1203,6 +1384,7 @@ app.listen(PORT, HOST, () => {
     `[server] secrets demo=${cpaCfg.demoKey ? 'yes' : 'no'} mgmt=${cpaCfg.managementKey ? 'yes' : 'no'} admin=${cpaCfg.adminKey ? 'yes' : 'no'}`,
   )
   console.log(
-    `[server] admin allowlist ids=${adminAllowlist.ids.size} usernames=${adminAllowlist.usernames.size} emails=${adminAllowlist.emails.size}`,
+    `[server] admin allowlist ids=${adminAllowlist.ids.size} usernames=${adminAllowlist.usernames.size} emails=${adminAllowlist.emails.size} aily=${adminAllowlist.ailyUsernames?.size || 0}`,
   )
+  console.log(`[server] aily_adapter=${AILY_ADAPTER_URL}`)
 })

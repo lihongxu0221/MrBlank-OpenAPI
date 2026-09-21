@@ -16,32 +16,58 @@ export function loadAdminAllowlist(env = process.env) {
     splitList(env.ADMIN_LINUXDO_USERNAMES).map((s) => s.toLowerCase()),
   )
   const emails = new Set(splitList(env.ADMIN_LINUXDO_EMAILS).map((s) => s.toLowerCase()))
-  return { ids, usernames, emails }
+  const ailyUsernames = new Set(
+    splitList(env.ADMIN_AILY_USERNAMES).map((s) => s.toLowerCase()),
+  )
+  return { ids, usernames, emails, ailyUsernames }
 }
 
 /**
- * Match Linux.do session user against allowlist.
- * Checks id, username, display_name/name, and email (case-insensitive for email/name/username).
+ * Match session user against allowlist / aily admin role.
+ * - Linux.do: id, username, display_name/name, email
+ * - Aily: auth_provider aily + (aily_admin / role>=10) OR username in ADMIN_AILY_USERNAMES
  */
 export function isAdminUser(user, allowlist) {
   if (!user || !allowlist) return false
+
+  const provider = String(user.auth_provider || 'linuxdo').toLowerCase()
+
+  if (provider === 'aily') {
+    if (user.aily_admin === true) return true
+    const role = Number(user.aily_role || 0)
+    if (role >= 10) return true
+    const username = String(user.username || '').toLowerCase()
+    if (username && allowlist.ailyUsernames && allowlist.ailyUsernames.has(username)) {
+      return true
+    }
+    // fall through — also allow linuxdo-style email list matches if present
+  }
+
   const hasAny =
     (allowlist.ids && allowlist.ids.size > 0) ||
     (allowlist.usernames && allowlist.usernames.size > 0) ||
-    (allowlist.emails && allowlist.emails.size > 0)
-  if (!hasAny) return false
+    (allowlist.emails && allowlist.emails.size > 0) ||
+    (allowlist.ailyUsernames && allowlist.ailyUsernames.size > 0)
+  if (!hasAny && provider !== 'aily') return false
 
   const id = String(user.id ?? '')
   if (id && allowlist.ids.has(id)) return true
 
   const username = String(user.username || '').toLowerCase()
   if (username && allowlist.usernames.has(username)) return true
+  if (
+    provider === 'aily' &&
+    username &&
+    allowlist.ailyUsernames &&
+    allowlist.ailyUsernames.has(username)
+  ) {
+    return true
+  }
 
   const name = String(user.display_name || user.name || '').toLowerCase()
   if (name && allowlist.usernames.has(name)) return true
 
   const email = String(user.email || '').toLowerCase()
-  // Emails allowlist may match email, or username/name when those fields carry an address.
   if (allowlist.emails && allowlist.emails.size) {
     for (const candidate of [email, username, name]) {
       if (candidate && allowlist.emails.has(candidate)) return true

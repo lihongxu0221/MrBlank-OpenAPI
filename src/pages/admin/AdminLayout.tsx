@@ -5,6 +5,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Shield,
+  Sparkles,
   Users,
 } from 'lucide-react'
 import { P } from '../../i18n'
@@ -18,6 +19,7 @@ const ITEMS = [
   { path: '/admin/keys', label: 'CPA 密钥', icon: KeyRound },
   { path: '/admin/usage', label: '用量监控', icon: Activity },
   { path: '/admin/connection', label: '连接状态', icon: Cable },
+  { path: '/admin/constellation', label: '模型星座', icon: Sparkles },
 ]
 
 export function AdminLayout({
@@ -41,7 +43,7 @@ export function AdminLayout({
       <div className="panel" style={{ marginTop: 12 }}>
         <h2>{P('需要管理员权限')}</h2>
         <p className="page-lead">
-          {P('当前 Linux.do 账号不在管理员白名单中。请联系站点维护者配置 ADMIN_LINUXDO_IDS / ADMIN_LINUXDO_USERNAMES。')}
+          {P('当前账号不在管理员白名单中。请配置 ADMIN_LINUXDO_* / ADMIN_AILY_USERNAMES，或使用具备 Aily 管理角色的账号登录。')}
         </p>
       </div>
     )

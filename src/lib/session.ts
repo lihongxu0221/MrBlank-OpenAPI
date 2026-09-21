@@ -2,6 +2,8 @@ export type SessionUser = {
   id: number | string
   display_name?: string
   username?: string
+  email?: string
+  auth_provider?: 'linuxdo' | 'aily' | string
 }
 
 export type Session = {
@@ -10,6 +12,7 @@ export type Session = {
   access_expires_at: number
   session: { sid: string; current: boolean }
   user: SessionUser
+  is_admin?: boolean
 }
 
 let current: Session | null = null

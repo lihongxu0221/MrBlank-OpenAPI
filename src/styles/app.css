@@ -707,6 +707,36 @@ main#main-content {
   color: var(--muted);
   font-size: 13px;
 }
+
+.guest-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 22px auto 18px;
+  max-width: 22rem;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.guest-divider::before,
+.guest-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.guest-aily-form {
+  text-align: left;
+  max-width: 22rem;
+  margin: 0 auto;
+}
+.guest-aily-form .field {
+  margin-bottom: 12px;
+}
+.guest-aily-form .button {
+  margin-top: 4px;
+}
 .dev-login {
   margin-top: 12px;
 }
