@@ -1,13 +1,27 @@
 /**
  * User groups (Linux.do / Discourse-inspired trust levels).
  * Persisted at server/data/user-groups.json.
- * Quota unit = same as site Q (default 500_000 ≈ $1 display unit).
+ *
+ * Credit / quota unit:
+ *   - Display「点」= raw / Q ; Q = 500_000 (≈ $1 presentation unit)
+ *   - Rolling 5h / week / month quotas use raw units
+ *   - BFF /v1 maps prompt+completion tokens → raw (MVP: 1 token ≈ 1 raw unit)
+ *   - Empty model_ids = all models; non-empty = allowlist (403 if violated)
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 
 const Q = 500_000
+
+/** Public description of the credit unit (API + docs). */
+export const CREDIT_UNIT_INFO = {
+  raw_per_point: Q,
+  display_name: '点',
+  note:
+    '1 点 = 500000 内部额度单位（约 $1 展示换算）。用户组 5h/周/月滚动额度按内部单位计量；BFF /v1 将 prompt+completion tokens 计入（MVP：1 token ≈ 1 内部单位）。',
+  windows: ['window_5h', 'week', 'month'],
+}
 
 const DEFAULT_GROUPS = [
   {
@@ -365,6 +379,53 @@ export function createGroupStore(filePath, { quotaUnit = Q } = {}) {
           : null,
         progress,
         quota_unit: unit,
+        credit_unit: CREDIT_UNIT_INFO,
+      }
+    },
+
+    /** Lifetime totals from rolling usage log (promotion metrics). */
+    lifetimeTotals(userId) {
+      const doc = read()
+      const events = doc.usage[String(userId)]?.events || []
+      let requests = 0
+      let quota = 0
+      for (const e of events) {
+        requests += Number(e.requests) || 0
+        quota += Number(e.quota) || 0
+      }
+      return { request_count: requests, used_quota: quota }
+    },
+
+    isModelAllowed(group, modelId) {
+      const allow = group?.model_ids || []
+      if (!allow.length) return true
+      const mid = String(modelId || '').trim()
+      if (!mid) return true
+      return allow.map(String).includes(mid)
+    },
+
+    assertModelAllowed(group, modelId) {
+      if (this.isModelAllowed(group, modelId)) return { ok: true }
+      const mid = String(modelId || '').trim() || '(empty)'
+      return {
+        ok: false,
+        message: `模型「${mid}」不在当前用户组白名单内。`,
+        code: 'model_not_allowed',
+      }
+    },
+
+    /** Filter OpenAI-style { data: [{ id }] } /v1/models JSON text. */
+    filterModelsResponseBody(bodyText, group) {
+      const allow = group?.model_ids || []
+      if (!allow.length || !bodyText) return bodyText
+      try {
+        const obj = JSON.parse(bodyText)
+        if (!Array.isArray(obj?.data)) return bodyText
+        const set = new Set(allow.map(String))
+        obj.data = obj.data.filter((m) => set.has(String(m?.id || m?.name || '')))
+        return JSON.stringify(obj)
+      } catch {
+        return bodyText
       }
     },
 
@@ -379,13 +440,31 @@ export function createGroupStore(filePath, { quotaUnit = Q } = {}) {
       const info = this.resolveUserGroup(userId, metrics)
       const rem = info.remaining
       if (rem.window_5h <= 0) {
-        return { ok: false, message: '近 5 小时额度已用尽，请稍后再试或等待晋级更高用户组。' }
+        return {
+          ok: false,
+          code: 'quota_5h_exhausted',
+          window: 'window_5h',
+          message: '近 5 小时额度已用尽，请稍后再试或等待晋级更高用户组。',
+          info,
+        }
       }
       if (rem.week <= 0) {
-        return { ok: false, message: '本周额度已用尽。' }
+        return {
+          ok: false,
+          code: 'quota_week_exhausted',
+          window: 'week',
+          message: '本周额度已用尽。',
+          info,
+        }
       }
       if (rem.month <= 0) {
-        return { ok: false, message: '本月额度已用尽。' }
+        return {
+          ok: false,
+          code: 'quota_month_exhausted',
+          window: 'month',
+          message: '本月额度已用尽。',
+          info,
+        }
       }
       return { ok: true, info }
     },
@@ -416,4 +495,4 @@ export function createGroupStore(filePath, { quotaUnit = Q } = {}) {
   }
 }
 
-export { Q as GROUP_QUOTA_UNIT, DEFAULT_GROUPS }
+export { Q as GROUP_QUOTA_UNIT, DEFAULT_GROUPS, CREDIT_UNIT_INFO as GROUP_CREDIT_UNIT }

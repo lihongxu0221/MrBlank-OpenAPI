@@ -149,7 +149,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
       <ConsoleHero
         title={P('用户组')}
-        subtitle={P('类 Linux.do 信任等级：额度窗口、模型白名单与晋级条件。单位与站点额度一致。')}
+        subtitle={P('类 Linux.do 信任等级：额度窗口、模型白名单与晋级条件。1 点 = 500000 内部单位；BFF /v1 强制滚动额度与模型白名单。')}
       />
       <div className="channels-toolbar">
         <span className="muted">{loading ? P('加载中…') : `${groups.length} ${P('个用户组')}`}</span>
@@ -307,7 +307,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
           <Users size={16} /> {P('成员覆盖分配')}
         </h3>
         <p className="page-lead">
-          {P('覆盖分配会固定用户组（不再自动晋级）。用户 ID 为 Linux.do 数字或 aily:… 形式。')}
+          {P('覆盖分配会固定用户组（不再自动晋级）。用户 ID 为 Linux.do 数字 id 或本站 local:… 形式。')}
         </p>
         <div className="field">
           <label>{P('用户 ID')}</label>

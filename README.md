@@ -32,7 +32,8 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
   → nginx → BFF :8787
        ├─ 默认 → CPA billing :8320 → cli-proxy-api :8317
        └─ 可选（AILY_MODEL_ROUTES 命中）→ aily-openai-adapter :8088
-BFF 落盘诊断（含 route_via）；站登录 = 本站本地用户 + Linux.do（不用 aily）
+BFF 先做用户组治理（额度 429 / 模型 403 / models 过滤），再落盘诊断（含 route_via）
+站登录 = 本站本地用户 + Linux.do（不用 aily）
 Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/aily
 ```
 
@@ -50,6 +51,7 @@ Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/a
 - **密钥**：登录用户创建时 BFF 调 CPA `PUT /v0/management/api-keys`，并在磁盘映射 `linux.do user → key`
 - **请求诊断（管理员）**：`#/admin/usage` 双击行打开「请求诊断详情」；正文来自 BFF `/v1` 落盘（CPAMP 汇总无 body）
 - **Aily 上游（管理员）**：`#/admin/aily` 管理共享凭证 / 连通测试；可选 `AILY_MODEL_ROUTES` 旁路；见 `docs/PHASE_D_CHECKLIST.md`
+- **用户组治理（Phase E）**：`#/admin/groups` 配置额度/白名单/晋级；BFF `/v1` 对映射密钥强制 429/403；控制台展示剩余与晋级进度；见 `docs/PHASE_E_CHECKLIST.md`
 - **用量**：BFF `GET /api/log/self` ← CPAMP `GET /v0/management/usage`，按密钥 sha256 过滤
 - **社区排行 / 号池 / 调用实况 / 服务状态**：BFF 聚合 CPAMP usage + auth-files + CPA `/v1/models` 与 health（短缓存）；无数据时返回空列表
 - **签到 / 兑换**：仍为进程内逻辑（未接 CPA 配额）

@@ -1,6 +1,7 @@
 /**
- * Phase C/D — BFF /v1 reverse-proxy with diagnosis capture.
+ * Phase C/D/E — BFF /v1 reverse-proxy with diagnosis capture + group governance.
  * Default upstream: CPA billing. Optional Aily adapter route by model allowlist.
+ * Phase E: per-user rolling quotas (429) and model allowlist (403) when API key maps to a site user.
  */
 import {
   extractModelFromReqBody,
@@ -59,14 +60,43 @@ function forwardHeaders(req, { authOverride } = {}) {
   return out
 }
 
+function bearerFromReq(req) {
+  const auth = req.headers.authorization || req.headers['x-api-key'] || ''
+  return String(auth).replace(/^Bearer\s+/i, '').trim()
+}
+
+function isModelsList(endpoint, method) {
+  const pathOnly = String(endpoint || '').split('?')[0]
+  return method === 'GET' && /\/v1\/models\/?$/.test(pathOnly)
+}
+
+function isConsumingEndpoint(endpoint, method) {
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false
+  const pathOnly = String(endpoint || '').split('?')[0]
+  return /\/v1\/(chat\/completions|completions|messages|responses|embeddings|images\/|audio\/|videos)/.test(
+    pathOnly,
+  )
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.billingBaseUrl CPA billing shim
  * @param {object} opts.store diagnosis store
  * @param {boolean} [opts.enabled]
  * @param {{ adapterUrl?: string, apiKey?: string, match?: (model:string)=>boolean }} [opts.ailyRoute]
+ * @param {{
+ *   enforce?: (ctx: object) => Promise<{ allow: true, userId?: string, groupInfo?: object } | { allow: false, status: number, headers?: object, body: object }>,
+ *   filterModelsBody?: (ctx: object, bodyText: string) => string,
+ *   onComplete?: (ctx: object) => void,
+ * }} [opts.governance]
  */
-export function createV1Proxy({ billingBaseUrl, store, enabled = true, ailyRoute = null }) {
+export function createV1Proxy({
+  billingBaseUrl,
+  store,
+  enabled = true,
+  ailyRoute = null,
+  governance = null,
+}) {
   const cpaBase = String(billingBaseUrl || '').replace(/\/$/, '')
   const ailyBase = String(ailyRoute?.adapterUrl || '').replace(/\/$/, '')
 
@@ -83,6 +113,7 @@ export function createV1Proxy({ billingBaseUrl, store, enabled = true, ailyRoute
     const started = Date.now()
     let ttft_ms = null
     const endpoint = req.originalUrl || req.url || '/v1'
+    const apiKey = bearerFromReq(req)
 
     let reqBuf = Buffer.alloc(0)
     try {
@@ -94,6 +125,71 @@ export function createV1Proxy({ billingBaseUrl, store, enabled = true, ailyRoute
 
     const reqBodyText = reqBuf.length ? reqBuf.toString('utf8') : ''
     const requestedModel = extractModelFromReqBody(reqBodyText)
+
+    /** @type {{ userId?: string, groupInfo?: object, skipUpstream?: boolean }} */
+    let govCtx = { apiKey, requestedModel, endpoint, method: req.method }
+    if (typeof governance?.enforce === 'function') {
+      try {
+        const decision = await governance.enforce({
+          req,
+          apiKey,
+          model: requestedModel,
+          endpoint,
+          method: req.method,
+          isModelsList: isModelsList(endpoint, req.method),
+          isConsuming: isConsumingEndpoint(endpoint, req.method),
+        })
+        if (decision && decision.allow === false) {
+          const status = decision.status || 403
+          if (decision.headers) {
+            for (const [k, v] of Object.entries(decision.headers)) {
+              try {
+                res.setHeader(k, v)
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+          try {
+            res.setHeader('x-mrblank-governance', decision.code || 'denied')
+          } catch {
+            /* ignore */
+          }
+          // Still record a slim diagnosis row for admins
+          try {
+            store.record({
+              method: req.method,
+              endpoint,
+              upstream_url: '',
+              status_code: status,
+              duration_ms: Date.now() - started,
+              ip: clientIp(req),
+              model_name: requestedModel,
+              requested_model: requestedModel,
+              token_name: maskTokenNameFromAuth(req.headers.authorization),
+              req_headers: redactHeaders(req.headers),
+              req_body: reqBodyText,
+              res_headers: {},
+              res_body: JSON.stringify(decision.body || {}),
+              content: decision.body?.error?.message || decision.code || 'governance deny',
+              type: 5,
+              is_stream: false,
+              route_via: 'governance',
+              group_id: decision.group_id || '',
+            })
+          } catch {
+            /* ignore */
+          }
+          res.status(status).json(decision.body || { error: { message: 'forbidden' } })
+          return
+        }
+        if (decision && decision.allow !== false) {
+          govCtx = { ...govCtx, ...decision, apiKey, requestedModel, endpoint, method: req.method }
+        }
+      } catch (err) {
+        console.error('[v1] governance enforce failed', err?.message || err)
+      }
+    }
 
     let routeVia = 'cpa'
     let upstreamBase = cpaBase
@@ -142,8 +238,70 @@ export function createV1Proxy({ billingBaseUrl, store, enabled = true, ailyRoute
         type: 5,
         is_stream: false,
         route_via: routeVia,
+        group_id: govCtx.groupInfo?.group?.id || '',
       })
       res.status(502).json({ error: { message: 'upstream unavailable', diagnosis_id: slim.id, route_via: routeVia } })
+      return
+    }
+
+    const modelsList = isModelsList(endpoint, req.method)
+    let resBodyOverride = null
+
+    // For /v1/models: buffer full body, filter by group, then send
+    if (modelsList && typeof governance?.filterModelsBody === 'function' && govCtx.userId) {
+      const text = await upstream.text().catch(() => '')
+      resBodyOverride = governance.filterModelsBody(govCtx, text) || text
+      res.status(upstream.status)
+      const resHeaderObj = {}
+      upstream.headers.forEach((v, k) => {
+        resHeaderObj[k] = v
+        if (HOP.has(k.toLowerCase()) || k.toLowerCase() === 'content-length') return
+        try {
+          res.setHeader(k, v)
+        } catch {
+          /* ignore */
+        }
+      })
+      try {
+        res.setHeader('x-mrblank-route', routeVia)
+        res.setHeader('content-type', 'application/json')
+        if (govCtx.groupInfo?.group?.id) res.setHeader('x-mrblank-group', govCtx.groupInfo.group.id)
+      } catch {
+        /* ignore */
+      }
+      res.end(resBodyOverride)
+
+      const usage = extractUsageFromBody(resBodyOverride)
+      try {
+        store.record({
+          method: req.method,
+          endpoint,
+          upstream_url: upstreamUrl,
+          status_code: upstream.status,
+          duration_ms: Date.now() - started,
+          ttft_ms: null,
+          ip: clientIp(req),
+          model_name: usage.model_name || requestedModel,
+          requested_model: requestedModel,
+          token_name: maskTokenNameFromAuth(req.headers.authorization),
+          prompt_tokens: usage.prompt_tokens,
+          completion_tokens: usage.completion_tokens,
+          cache_tokens: usage.cache_tokens,
+          req_headers: redactHeaders(req.headers),
+          req_body: reqBodyText,
+          res_headers: redactHeaders(resHeaderObj),
+          res_body: resBodyOverride,
+          upstream_req_headers: redactHeaders(fwd),
+          upstream_req_body: reqBodyText,
+          is_stream: false,
+          type: upstream.status >= 400 ? 5 : 2,
+          content: '',
+          route_via: routeVia,
+          group_id: govCtx.groupInfo?.group?.id || '',
+        })
+      } catch (err) {
+        console.error('[diagnosis] record failed', err?.message || err)
+      }
       return
     }
 
@@ -160,6 +318,7 @@ export function createV1Proxy({ billingBaseUrl, store, enabled = true, ailyRoute
     })
     try {
       res.setHeader('x-mrblank-route', routeVia)
+      if (govCtx.groupInfo?.group?.id) res.setHeader('x-mrblank-group', govCtx.groupInfo.group.id)
     } catch {
       /* ignore */
     }
@@ -231,9 +390,23 @@ export function createV1Proxy({ billingBaseUrl, store, enabled = true, ailyRoute
         type: upstream.status >= 400 ? 5 : 2,
         content: upstream.status >= 400 ? resBodyText.slice(0, 300) : '',
         route_via: routeVia,
+        group_id: govCtx.groupInfo?.group?.id || '',
       })
     } catch (err) {
       console.error('[diagnosis] record failed', err?.message || err)
+    }
+
+    if (typeof governance?.onComplete === 'function') {
+      try {
+        governance.onComplete({
+          ...govCtx,
+          status: upstream.status,
+          usage,
+          isConsuming: isConsumingEndpoint(endpoint, req.method),
+        })
+      } catch (err) {
+        console.error('[v1] governance onComplete failed', err?.message || err)
+      }
     }
   }
 }

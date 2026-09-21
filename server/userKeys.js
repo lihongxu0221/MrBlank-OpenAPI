@@ -122,5 +122,28 @@ export function createUserKeyStore(filePath) {
       }
       return map
     },
+    /**
+     * Resolve site user by raw API key (Bearer value).
+     * Returns null for unknown / disabled keys (e.g. CPA demo not issued via console).
+     */
+    findByApiKey(apiKey) {
+      const key = String(apiKey || '')
+        .replace(/^Bearer\s+/i, '')
+        .trim()
+      if (!key) return null
+      const data = readAll()
+      for (const [userId, u] of Object.entries(data.users || {})) {
+        for (const t of u.tokens || []) {
+          if (!t.fullKey || t.fullKey !== key) continue
+          if (Number(t.status) === 2) continue
+          return {
+            userId: String(userId),
+            token: { id: t.id, name: t.name, status: t.status, group: t.group },
+            profile: u.profile || null,
+          }
+        }
+      }
+      return null
+    },
   }
 }

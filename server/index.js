@@ -36,7 +36,7 @@ import {
   maskSecretValue,
 } from './admin.js'
 import { createSiteContentStore } from './siteContent.js'
-import { createGroupStore } from './groups.js'
+import { createGroupStore, CREDIT_UNIT_INFO } from './groups.js'
 import { createLocalUserStore } from './localUsers.js'
 import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy } from './v1Proxy.js'
@@ -307,6 +307,13 @@ function createUserSession(user) {
     groupStore.ensureUser(user.id, {
       joinedAt: existing?.created_at || profile?.created_at || new Date().toISOString(),
     })
+    // Phase E: evaluate promotion rules on every login
+    try {
+      const store = getOrCreateUserStore(user)
+      groupStore.resolveUserGroup(user.id, userGroupMetrics(user.id, store))
+    } catch (e2) {
+      console.error('[groups] promote-on-login failed', e2?.message || e2)
+    }
   } catch (e) {
     console.error('[userKeys] setProfile failed', e?.message || e)
   }
@@ -324,12 +331,24 @@ function userGroupMetrics(userId, store) {
   if (joined) {
     account_days = Math.max(0, Math.floor((Date.now() - new Date(joined).getTime()) / 86400000))
   }
+  let lifetime = { request_count: 0, used_quota: 0 }
+  try {
+    lifetime = groupStore.lifetimeTotals(userId)
+  } catch {
+    /* ignore */
+  }
   return {
     account_days,
-    request_count: Number(store?.user?.request_count || 0) || 0,
-    used_quota: Number(store?.user?.used_quota || 0) || 0,
+    request_count: Math.max(Number(store?.user?.request_count || 0) || 0, lifetime.request_count || 0),
+    used_quota: Math.max(Number(store?.user?.used_quota || 0) || 0, lifetime.used_quota || 0),
     checkins: Array.isArray(store?.checkins) ? store.checkins.length : 0,
   }
+}
+
+/** Metrics for API-key path (may have no session store). */
+function metricsForUserId(userId) {
+  const store = userStores.get(String(userId)) || null
+  return userGroupMetrics(userId, store)
 }
 
 function resolveAuthGroup(req) {
@@ -569,7 +588,7 @@ async function buildPool() {
 
 function publicHandlers() {
   return {
-    status: () => ok({ quota_per_unit: Q }),
+    status: () => ok({ quota_per_unit: Q, credit_unit: CREDIT_UNIT_INFO }),
     config: () =>
       ok({
         loginEnabled: true,
@@ -628,6 +647,95 @@ app.use(
       adapterUrl: ailyManager.cfg.adapterUrl,
       apiKey: ailyManager.cfg.adapterApiKey,
       match: (model) => ailyManager.modelMatches(model),
+    },
+    governance: {
+      async enforce({ apiKey, model, isModelsList, isConsuming }) {
+        // Unmapped keys (CPA demo / external) bypass site group rules.
+        const owner = apiKey ? userKeyStore.findByApiKey(apiKey) : null
+        if (!owner?.userId) return { allow: true }
+        const userId = owner.userId
+        const metrics = metricsForUserId(userId)
+        const groupInfo = groupStore.resolveUserGroup(userId, metrics)
+
+        if (isConsuming) {
+          const quotaCheck = groupStore.assertQuotaAvailable(userId, metrics)
+          if (!quotaCheck.ok) {
+            return {
+              allow: false,
+              status: 429,
+              code: quotaCheck.code || 'quota_exhausted',
+              group_id: groupInfo.group?.id,
+              headers: {
+                'x-mrblank-governance': quotaCheck.code || 'quota_exhausted',
+                'x-mrblank-group': groupInfo.group?.id || '',
+                'retry-after': quotaCheck.window === 'window_5h' ? '300' : '3600',
+              },
+              body: {
+                error: {
+                  message: quotaCheck.message,
+                  type: 'insufficient_quota',
+                  code: quotaCheck.code || 'quota_exhausted',
+                  param: quotaCheck.window || null,
+                },
+                group_id: groupInfo.group?.id,
+                remaining: quotaCheck.info?.remaining || groupInfo.remaining,
+                credit_unit: CREDIT_UNIT_INFO,
+              },
+            }
+          }
+          if (model) {
+            const modelCheck = groupStore.assertModelAllowed(groupInfo.group, model)
+            if (!modelCheck.ok) {
+              return {
+                allow: false,
+                status: 403,
+                code: modelCheck.code || 'model_not_allowed',
+                group_id: groupInfo.group?.id,
+                headers: {
+                  'x-mrblank-governance': 'model_not_allowed',
+                  'x-mrblank-group': groupInfo.group?.id || '',
+                },
+                body: {
+                  error: {
+                    message: modelCheck.message,
+                    type: 'forbidden',
+                    code: 'model_not_allowed',
+                    param: 'model',
+                  },
+                  group_id: groupInfo.group?.id,
+                  model_allowlist: groupInfo.group?.model_ids || [],
+                },
+              }
+            }
+          }
+        }
+        return { allow: true, userId, groupInfo }
+      },
+      filterModelsBody(ctx, bodyText) {
+        return groupStore.filterModelsResponseBody(bodyText, ctx.groupInfo?.group)
+      },
+      onComplete({ userId, status, usage, isConsuming }) {
+        if (!userId || !isConsuming || !(status >= 200 && status < 300)) return
+        const tokens =
+          (Number(usage?.prompt_tokens) || 0) + (Number(usage?.completion_tokens) || 0)
+        const quota = Math.max(1, tokens) // at least 1 raw unit per successful call
+        try {
+          groupStore.recordUsage(userId, { quota, requests: 1 })
+        } catch (e) {
+          console.error('[groups] recordUsage failed', e?.message || e)
+        }
+        const store = userStores.get(String(userId))
+        if (store?.user) {
+          store.user.request_count = (Number(store.user.request_count) || 0) + 1
+          store.user.used_quota = (Number(store.user.used_quota) || 0) + quota
+        }
+        // Re-evaluate promotion after usage
+        try {
+          groupStore.resolveUserGroup(userId, metricsForUserId(userId))
+        } catch {
+          /* ignore */
+        }
+      },
     },
   }),
 )
@@ -1428,7 +1536,7 @@ app.delete('/api/admin/keys', requireAdmin, async (req, res) => {
 
 
 app.get('/api/admin/groups', requireAdmin, (_req, res) => {
-  res.json(ok({ groups: groupStore.listGroups(), updated_at: null, quota_unit: Q }))
+  res.json(ok({ groups: groupStore.listGroups(), updated_at: null, quota_unit: Q, credit_unit: CREDIT_UNIT_INFO }))
 })
 
 app.put('/api/admin/groups', requireAdmin, (req, res) => {

@@ -83,11 +83,19 @@ export function OverviewPage({ path }: { path: string }) {
           <p className="page-lead" style={{ marginTop: 0 }}>
             {groupInfo.group.description || P('你的额度窗口与可用模型由用户组决定。')}
           </p>
+          <p className="muted" style={{ fontSize: 12, marginTop: -4 }}>
+            {groupInfo.credit_unit?.note ||
+              P('额度单位：1 点 = 500000 内部单位；BFF /v1 滚动窗口按 token 计入。')}
+          </p>
           <div className="stats-grid">
             <div className="stat-card">
               <div className="label">{P('近 5 小时剩余')}</div>
               <div className="value">
                 {formatCredits(groupInfo.remaining?.window_5h ?? 0)} <span className="unit">{P('点')}</span>
+              </div>
+              <div className="hint">
+                {P('已用')} {formatCredits(groupInfo.used?.window_5h ?? 0)} /{' '}
+                {formatCredits(groupInfo.limits?.window_5h ?? 0)}
               </div>
             </div>
             <div className="stat-card">
@@ -95,11 +103,19 @@ export function OverviewPage({ path }: { path: string }) {
               <div className="value">
                 {formatCredits(groupInfo.remaining?.week ?? 0)} <span className="unit">{P('点')}</span>
               </div>
+              <div className="hint">
+                {P('已用')} {formatCredits(groupInfo.used?.week ?? 0)} /{' '}
+                {formatCredits(groupInfo.limits?.week ?? 0)}
+              </div>
             </div>
             <div className="stat-card">
               <div className="label">{P('本月剩余')}</div>
               <div className="value">
                 {formatCredits(groupInfo.remaining?.month ?? 0)} <span className="unit">{P('点')}</span>
+              </div>
+              <div className="hint">
+                {P('已用')} {formatCredits(groupInfo.used?.month ?? 0)} /{' '}
+                {formatCredits(groupInfo.limits?.month ?? 0)}
               </div>
             </div>
             <div className="stat-card">
@@ -119,21 +135,29 @@ export function OverviewPage({ path }: { path: string }) {
           {groupInfo.progress ? (
             <div style={{ marginTop: 12 }}>
               <div className="muted">
-                {P('下一档')}：{groupInfo.progress.next_group_name}
+                {P('距下一组进度')} → {groupInfo.progress.next_group_name}
                 {groupInfo.override ? ` · ${P('已由管理员固定，不自动晋级')}` : ''}
               </div>
               <div className="tag-row" style={{ marginTop: 8 }}>
                 <span className="pill">
-                  {P('天数')} {Math.round((groupInfo.progress.ratios.account_days || 0) * 100)}%
+                  {P('天数')} {groupInfo.progress.current?.account_days ?? 0}/
+                  {groupInfo.progress.requirements?.min_account_days ?? 0} (
+                  {Math.round((groupInfo.progress.ratios.account_days || 0) * 100)}%)
                 </span>
                 <span className="pill">
-                  {P('请求')} {Math.round((groupInfo.progress.ratios.request_count || 0) * 100)}%
+                  {P('请求')} {groupInfo.progress.current?.request_count ?? 0}/
+                  {groupInfo.progress.requirements?.min_request_count ?? 0} (
+                  {Math.round((groupInfo.progress.ratios.request_count || 0) * 100)}%)
                 </span>
                 <span className="pill">
-                  {P('用量')} {Math.round((groupInfo.progress.ratios.used_quota || 0) * 100)}%
+                  {P('用量')} {formatCredits(groupInfo.progress.current?.used_quota ?? 0)}/
+                  {formatCredits(groupInfo.progress.requirements?.min_used_quota ?? 0)} (
+                  {Math.round((groupInfo.progress.ratios.used_quota || 0) * 100)}%)
                 </span>
                 <span className="pill">
-                  {P('签到')} {Math.round((groupInfo.progress.ratios.checkins || 0) * 100)}%
+                  {P('签到')} {groupInfo.progress.current?.checkins ?? 0}/
+                  {groupInfo.progress.requirements?.min_checkins ?? 0} (
+                  {Math.round((groupInfo.progress.ratios.checkins || 0) * 100)}%)
                 </span>
               </div>
             </div>
