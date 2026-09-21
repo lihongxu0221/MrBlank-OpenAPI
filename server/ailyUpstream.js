@@ -10,6 +10,16 @@ import {
   publicModelList,
   normalizeModelRouting,
 } from './ailyModelRouting.js'
+import {
+  chatBodyFromResponses,
+  buildCompletionsUpstreamBody,
+  completionTextFromJson,
+  wrapCompletion,
+  makeCompletionChunk,
+  buildResponsesOutput,
+  wrapResponse,
+  runCompatTurn,
+} from './ailyCompat.js'
 
 const CATALOG_TTL_MS = 5 * 60 * 1000
 const toolReasoningCache = new Map()
@@ -264,6 +274,17 @@ export function createAilyUpstream(deps) {
       return normalizeModelRouting(deps.getModelRouting?.() || {})
     } catch {
       return normalizeModelRouting({})
+    }
+  }
+
+  /** Optional: resolve Grok/OpenAI account route. */
+  async function resolveCompat(model) {
+    if (typeof deps.resolveCompat !== 'function') return { allowed: false, mapped: model }
+    try {
+      return await deps.resolveCompat(model)
+    } catch (e) {
+      console.warn('[aily-upstream] resolveCompat failed:', e?.message || e)
+      return { allowed: false, mapped: model }
     }
   }
   let catalogState = { at: 0, payload: null, index: catalogIndex(null), list: FALLBACK_MODELS() }
@@ -702,22 +723,15 @@ export function createAilyUpstream(deps) {
     }
   }
 
-  /**
-   * Dispatch OpenAI /v1 path to embedded bridge.
-   */
-  async function handleV1({ method, endpoint, reqBuf, res }) {
-    const pathOnly = String(endpoint || '').split('?')[0]
-    if (method === 'GET' && /\/v1\/models\/?$/.test(pathOnly)) {
-      return handleModelsList(res)
-    }
-    if (method === 'POST' && /\/v1\/chat\/completions\/?$/.test(pathOnly)) {
-      let body = {}
-      try {
-        body = reqBuf?.length ? JSON.parse(reqBuf.toString('utf8')) : {}
-      } catch {
-        const errBody = { error: { message: 'Invalid JSON', type: 'invalid_request_error' } }
-        res.status(400).json(errBody)
-        return {
+  function parseBodyOr400(reqBuf, res) {
+    try {
+      return { ok: true, body: reqBuf?.length ? JSON.parse(reqBuf.toString('utf8')) : {} }
+    } catch {
+      const errBody = { error: { message: 'Invalid JSON', type: 'invalid_request_error' } }
+      if (!res.headersSent) res.status(400).json(errBody)
+      return {
+        ok: false,
+        result: {
           status: 400,
           capturedBody: JSON.stringify(errBody),
           upstream_url: '',
@@ -725,23 +739,398 @@ export function createAilyUpstream(deps) {
           usage: null,
           model_name: '',
           upstream_req_body: '',
-        }
-      }
-      return handleChatCompletions(body, res)
-    }
-    // Completions / responses: not fully ported — return clear error
-    if (method === 'POST' && /\/v1\/(completions|responses)\/?$/.test(pathOnly)) {
-      const errBody = {
-        error: {
-          message:
-            'Embedded Aily bridge supports /v1/chat/completions and /v1/models. Use chat/completions for this model.',
-          type: 'not_implemented',
-          code: 'aily_embedded_partial',
         },
       }
-      res.status(501).json(errBody)
+    }
+  }
+
+  function writeResponsesEvent(res, type, extra) {
+    res.write('event: ' + type + '\ndata: ' + JSON.stringify({ type, ...(extra || {}) }) + '\n\n')
+  }
+
+  /**
+   * Shared turn runner: prefer compat account if matched, else Aily.
+   */
+  async function runTurnForModel(openaiBody, hooks) {
+    const requested = openaiBody.model || 'aily-auto'
+    const compat = await resolveCompat(requested)
+    if (compat.allowed && compat.account) {
       return {
-        status: 501,
+        ...(await runCompatTurn(compat, openaiBody, hooks)),
+        _via: 'compat',
+        _requested: requested,
+        _mapped: compat.mapped,
+      }
+    }
+    return { ...(await runAilyTurn(openaiBody, hooks)), _via: 'aily', _requested: requested }
+  }
+
+  async function handleCompletions(openaiBody, res) {
+    const requested = openaiBody.model || 'aily-auto'
+    const isStream = openaiBody.stream === true
+    const cid = `cmpl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const capture = []
+    const write = (s) => {
+      capture.push(s)
+      if (!res.writableEnded) res.write(s)
+    }
+
+    const compat = await resolveCompat(requested)
+    // Compat path: degrade to single-turn chat
+    if (compat.allowed && compat.account) {
+      const chatBody = {
+        model: compat.mapped,
+        messages: [{ role: 'user', content: openaiBody.prompt || '' }],
+        stream: isStream,
+        max_tokens: openaiBody.max_tokens || openaiBody.max_completion_tokens,
+        temperature: openaiBody.temperature,
+      }
+      const result = await runCompatTurn(compat, chatBody, {
+        onStart() {
+          if (isStream && !res.headersSent) {
+            res.status(200)
+            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+            res.setHeader('Cache-Control', 'no-cache')
+            res.setHeader('x-mrblank-route', 'aily-compat')
+          }
+        },
+        onText(t, routing) {
+          if (isStream && t) {
+            write(
+              `data: ${JSON.stringify(makeCompletionChunk(cid, responseModel(requested, routing), t))}\n\n`,
+            )
+          }
+        },
+      })
+      if (result.error) {
+        const status = result.status || 502
+        const body = {
+          error: {
+            message: `Upstream failed: ${String(result.error).slice(0, 500)}`,
+            type: 'upstream_error',
+            code: 'aily_compat',
+          },
+        }
+        if (!res.headersSent) {
+          res.status(status)
+          res.setHeader('Content-Type', 'application/json')
+          res.setHeader('x-mrblank-route', 'aily-compat')
+          res.end(JSON.stringify(body))
+        }
+        return {
+          status,
+          capturedBody: JSON.stringify(body),
+          upstream_url: result.upstream_url || '',
+          is_stream: false,
+          usage: toUsage(result.usage),
+          model_name: requested,
+          upstream_req_body: result.upstream_req_body
+            ? JSON.stringify(result.upstream_req_body)
+            : '',
+          upstream_req_headers: result.upstream_req_headers || {},
+        }
+      }
+      const ou = toUsage(result.usage)
+      const outModel = responseModel(requested, result.routing)
+      if (isStream) {
+        if (!res.headersSent) {
+          res.status(200)
+          res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+          res.setHeader('x-mrblank-route', 'aily-compat')
+        }
+        const finalChunk = makeCompletionChunk(cid, outModel, '', mapStop(result.stopReason))
+        if (ou) finalChunk.usage = ou
+        write(`data: ${JSON.stringify(finalChunk)}\n\n`)
+        write('data: [DONE]\n\n')
+        res.end()
+        return {
+          status: 200,
+          capturedBody: capture.join('').slice(0, 512 * 1024),
+          upstream_url: result.upstream_url || '',
+          is_stream: true,
+          usage: ou,
+          model_name: outModel,
+          upstream_req_body: result.upstream_req_body
+            ? JSON.stringify(result.upstream_req_body)
+            : '',
+          upstream_req_headers: result.upstream_req_headers || {},
+        }
+      }
+      const resp = wrapCompletion({
+        id: cid,
+        model: outModel,
+        text: result.text,
+        finish: mapStop(result.stopReason),
+        usage: ou,
+      })
+      const bodyText = JSON.stringify(resp)
+      if (!res.headersSent) {
+        res.status(200)
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('x-mrblank-route', 'aily-compat')
+      }
+      res.end(bodyText)
+      return {
+        status: 200,
+        capturedBody: bodyText,
+        upstream_url: result.upstream_url || '',
+        is_stream: false,
+        usage: ou,
+        model_name: outModel,
+        upstream_req_body: result.upstream_req_body
+          ? JSON.stringify(result.upstream_req_body)
+          : '',
+        upstream_req_headers: result.upstream_req_headers || {},
+      }
+    }
+
+    // Aily native completions → /api/v3/code/completions
+    const cat = await loadCatalog()
+    const routingCfg = currentRouting()
+    const routeInfo = applyModelRouting(requested, cat.index, routingCfg, resolveAilyModel)
+    if (!routeInfo.allowed) {
+      const body = {
+        error: {
+          message: `模型未在白名单中: ${requested}`,
+          type: 'invalid_request_error',
+          code: 'model_not_allowed',
+        },
+      }
+      if (!res.headersSent) {
+        res.status(403)
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('x-mrblank-route', 'aily')
+        res.end(JSON.stringify(body))
+      }
+      return {
+        status: 403,
+        capturedBody: JSON.stringify(body),
+        upstream_url: '',
+        is_stream: false,
+        usage: null,
+        model_name: requested,
+        upstream_req_body: '',
+      }
+    }
+    const bodyForUp = { ...openaiBody, model: routeInfo.mapped }
+    const upstream_req_body = buildCompletionsUpstreamBody(bodyForUp)
+    const base = deps.getUpstreamBase()
+    const upstreamUrl = `${base}/api/v3/code/completions`
+    const makeHdrs = (token) => ({
+      'Content-Type': 'application/json',
+      Accept: isStream ? 'text/event-stream' : 'application/json',
+      Authorization: `Bearer ${token}`,
+    })
+    let upstream_req_headers = makeHdrs('(pending)')
+    let upRes
+    try {
+      ;({ res: upRes } = await withAuthRetry((token) => {
+        upstream_req_headers = makeHdrs(token)
+        return fetchUpstream(upstreamUrl, {
+          method: 'POST',
+          headers: upstream_req_headers,
+          body: JSON.stringify(upstream_req_body),
+          timeoutMs: 300000,
+        })
+      }))
+    } catch (e) {
+      const body = {
+        error: {
+          message: `Upstream failed: ${e?.message || e}`,
+          type: 'upstream_error',
+          code: 'aily_upstream',
+        },
+      }
+      if (!res.headersSent) {
+        res.status(e?.status || 502).json(body)
+      }
+      return {
+        status: e?.status || 502,
+        capturedBody: JSON.stringify(body),
+        upstream_url: upstreamUrl,
+        is_stream: false,
+        usage: null,
+        model_name: requested,
+        upstream_req_body: JSON.stringify(upstream_req_body),
+        upstream_req_headers,
+      }
+    }
+    if (!upRes.ok) {
+      const errText = await upRes.text().catch(() => '')
+      const body = {
+        error: {
+          message: errText || `error ${upRes.status}`,
+          type: 'upstream_error',
+          code: 'aily_upstream',
+        },
+      }
+      if (!res.headersSent) {
+        res.status(upRes.status)
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('x-mrblank-route', 'aily')
+        res.end(JSON.stringify(body))
+      }
+      return {
+        status: upRes.status,
+        capturedBody: JSON.stringify(body),
+        upstream_url: upstreamUrl,
+        is_stream: false,
+        usage: null,
+        model_name: requested,
+        upstream_req_body: JSON.stringify(upstream_req_body),
+        upstream_req_headers,
+      }
+    }
+    const ctype = (upRes.headers.get('content-type') || '').toLowerCase()
+    let routing = {}
+    let usage = null
+    let text = ''
+    let stopReason = null
+    if (ctype.includes('text/event-stream')) {
+      if (isStream && !res.headersSent) {
+        res.status(200)
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+        res.setHeader('Cache-Control', 'no-cache')
+        res.setHeader('x-mrblank-route', 'aily')
+      }
+      const feed = createSseParser((ev) => {
+        routing = pickRouting(ev, routing)
+        usage = mergeUsage(usage, ev.usage || ev.value)
+        const delta = ev.content || ev.text || ev.completion || ''
+        if (
+          ev.type === 'text_delta' ||
+          ev.type === 'completion_delta' ||
+          ev.type === 'markdown_delta' ||
+          ev.type === 'content'
+        ) {
+          text += delta
+          if (isStream && delta) {
+            write(
+              `data: ${JSON.stringify(makeCompletionChunk(cid, responseModel(requested, routing), delta))}\n\n`,
+            )
+          }
+        }
+        if (ev.type === 'turn_end' || ev.type === 'done' || ev.type === 'response_complete') {
+          stopReason = ev.stop_reason || ev.stopReason || stopReason
+          usage = mergeUsage(usage, ev.usage || ev.value)
+        }
+      })
+      const reader = upRes.body?.getReader?.()
+      if (reader) {
+        const dec = new TextDecoder()
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          feed(dec.decode(value, { stream: true }))
+        }
+        feed(dec.decode())
+      } else {
+        feed(await upRes.text().catch(() => ''))
+      }
+      const ou = toUsage(usage)
+      const outModel = responseModel(requested, routing)
+      if (isStream) {
+        const finalChunk = makeCompletionChunk(cid, outModel, '', mapStop(stopReason))
+        if (ou) finalChunk.usage = ou
+        write(`data: ${JSON.stringify(finalChunk)}\n\n`)
+        write('data: [DONE]\n\n')
+        res.end()
+        return {
+          status: 200,
+          capturedBody: capture.join('').slice(0, 512 * 1024),
+          upstream_url: upstreamUrl,
+          is_stream: true,
+          usage: ou,
+          model_name: outModel,
+          upstream_req_body: JSON.stringify(upstream_req_body),
+          upstream_req_headers,
+        }
+      }
+      const resp = wrapCompletion({
+        id: cid,
+        model: outModel,
+        text,
+        finish: mapStop(stopReason),
+        usage: ou,
+      })
+      const bodyText = JSON.stringify(resp)
+      if (!res.headersSent) {
+        res.status(200)
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('x-mrblank-route', 'aily')
+      }
+      res.end(bodyText)
+      return {
+        status: 200,
+        capturedBody: bodyText,
+        upstream_url: upstreamUrl,
+        is_stream: false,
+        usage: ou,
+        model_name: outModel,
+        upstream_req_body: JSON.stringify(upstream_req_body),
+        upstream_req_headers,
+      }
+    }
+    const json = await upRes.json().catch(() => null)
+    routing = pickRouting(json, routing)
+    usage = json?.usage || json?.data?.usage || usage
+    text = completionTextFromJson(json)
+    const ou = toUsage(usage)
+    const outModel = responseModel(json?.model || requested, routing)
+    const resp =
+      json && json.object === 'text_completion' && Array.isArray(json.choices)
+        ? { ...json, model: outModel }
+        : wrapCompletion({ id: cid, model: outModel, text, finish: 'stop', usage: ou })
+    if (isStream) {
+      if (!res.headersSent) {
+        res.status(200)
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+        res.setHeader('x-mrblank-route', 'aily')
+      }
+      const full = completionTextFromJson(resp)
+      if (full) write(`data: ${JSON.stringify(makeCompletionChunk(cid, outModel, full))}\n\n`)
+      const finalChunk = makeCompletionChunk(cid, outModel, '', 'stop')
+      if (ou) finalChunk.usage = ou
+      write(`data: ${JSON.stringify(finalChunk)}\n\n`)
+      write('data: [DONE]\n\n')
+      res.end()
+      return {
+        status: 200,
+        capturedBody: capture.join('').slice(0, 512 * 1024),
+        upstream_url: upstreamUrl,
+        is_stream: true,
+        usage: ou,
+        model_name: outModel,
+        upstream_req_body: JSON.stringify(upstream_req_body),
+        upstream_req_headers,
+      }
+    }
+    const bodyText = JSON.stringify(resp)
+    if (!res.headersSent) {
+      res.status(200)
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('x-mrblank-route', 'aily')
+    }
+    res.end(bodyText)
+    return {
+      status: 200,
+      capturedBody: bodyText,
+      upstream_url: upstreamUrl,
+      is_stream: false,
+      usage: ou,
+      model_name: outModel,
+      upstream_req_body: JSON.stringify(upstream_req_body),
+      upstream_req_headers,
+    }
+  }
+
+  async function handleResponses(openaiLikeBody, res) {
+    const chatBody = chatBodyFromResponses(openaiLikeBody)
+    if (!chatBody.messages.length) {
+      const errBody = { error: { message: 'input is required', type: 'invalid_request_error' } }
+      if (!res.headersSent) res.status(400).json(errBody)
+      return {
+        status: 400,
         capturedBody: JSON.stringify(errBody),
         upstream_url: '',
         is_stream: false,
@@ -749,6 +1138,368 @@ export function createAilyUpstream(deps) {
         model_name: '',
         upstream_req_body: '',
       }
+    }
+    const model = chatBody.model || 'aily-auto'
+    const isStream = openaiLikeBody.stream === true
+    const rid = `resp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const msgId = 'msg_' + rid.slice(-8)
+    const rsId = 'rs_' + rid.slice(-8)
+    let thinkStarted = false
+    let textStarted = false
+    let liveRouting = {}
+    const created_at = Math.floor(Date.now() / 1000)
+    const skeleton = () => ({
+      id: rid,
+      object: 'response',
+      created_at,
+      status: 'in_progress',
+      model: responseModel(model, liveRouting),
+      output: [],
+    })
+    const capture = []
+    const write = (s) => {
+      capture.push(s)
+      if (!res.writableEnded) res.write(s)
+    }
+    const writeEv = (type, extra) => {
+      const line = 'event: ' + type + '\ndata: ' + JSON.stringify({ type, ...(extra || {}) }) + '\n\n'
+      write(line)
+    }
+
+    const result = await runTurnForModel(chatBody, {
+      onStart() {
+        if (!isStream) return
+        if (!res.headersSent) {
+          res.status(200)
+          res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+          res.setHeader('Cache-Control', 'no-cache')
+          res.setHeader('x-mrblank-route', 'aily')
+        }
+        writeEv('response.created', { response: skeleton() })
+        writeEv('response.in_progress', { response: skeleton() })
+      },
+      onThink(t, routing) {
+        liveRouting = routing
+        if (!isStream || !t) return
+        if (!thinkStarted) {
+          thinkStarted = true
+          writeEv('response.output_item.added', {
+            output_index: 0,
+            item: { type: 'reasoning', id: rsId, status: 'in_progress', summary: [] },
+          })
+        }
+        writeEv('response.reasoning_summary_text.delta', {
+          item_id: rsId,
+          output_index: 0,
+          delta: t,
+        })
+      },
+      onText(t, routing) {
+        liveRouting = routing
+        if (!isStream || !t) return
+        const idx = thinkStarted ? 1 : 0
+        if (!textStarted) {
+          textStarted = true
+          writeEv('response.output_item.added', {
+            output_index: idx,
+            item: {
+              type: 'message',
+              id: msgId,
+              role: 'assistant',
+              status: 'in_progress',
+              content: [],
+            },
+          })
+          writeEv('response.content_part.added', {
+            item_id: msgId,
+            output_index: idx,
+            content_index: 0,
+            part: { type: 'output_text', text: '' },
+          })
+        }
+        writeEv('response.output_text.delta', {
+          item_id: msgId,
+          output_index: idx,
+          content_index: 0,
+          delta: t,
+        })
+      },
+    })
+
+    if (result.error) {
+      const status = result.status || 502
+      const body = {
+        error: {
+          message: `Upstream failed: ${String(result.error).slice(0, 500)}`,
+          type: 'upstream_error',
+          code: 'aily_upstream',
+        },
+      }
+      if (!res.headersSent) {
+        res.status(status)
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('x-mrblank-route', 'aily')
+        res.end(JSON.stringify(body))
+      }
+      return {
+        status,
+        capturedBody: JSON.stringify(body),
+        upstream_url: result.upstream_url || '',
+        is_stream: false,
+        usage: null,
+        model_name: model,
+        upstream_req_body: result.upstream_req_body
+          ? JSON.stringify(result.upstream_req_body)
+          : '',
+        upstream_req_headers: result.upstream_req_headers || {},
+      }
+    }
+
+    const { text, think, toolCalls, usage, routing } = result
+    const ou = toUsage(usage)
+    const output = buildResponsesOutput({ text, think, toolCalls, ids: { rs: rsId, msg: msgId } })
+    const resp = wrapResponse({
+      id: rid,
+      model: responseModel(model, routing),
+      output,
+      usage: ou,
+      status: 'completed',
+    })
+    if (isStream) {
+      const idx = thinkStarted ? 1 : 0
+      if (textStarted) {
+        writeEv('response.output_text.done', {
+          item_id: msgId,
+          output_index: idx,
+          content_index: 0,
+          text: text || '',
+        })
+        writeEv('response.content_part.done', {
+          item_id: msgId,
+          output_index: idx,
+          content_index: 0,
+          part: { type: 'output_text', text: text || '' },
+        })
+        writeEv('response.output_item.done', {
+          output_index: idx,
+          item: {
+            type: 'message',
+            id: msgId,
+            role: 'assistant',
+            status: 'completed',
+            content: text ? [{ type: 'output_text', text }] : [],
+          },
+        })
+      }
+      writeEv('response.completed', { response: resp })
+      res.end()
+      return {
+        status: 200,
+        capturedBody: capture.join('').slice(0, 512 * 1024),
+        upstream_url: result.upstream_url || '',
+        is_stream: true,
+        usage: ou,
+        model_name: resp.model,
+        upstream_req_body: result.upstream_req_body
+          ? JSON.stringify(result.upstream_req_body)
+          : '',
+        upstream_req_headers: result.upstream_req_headers || {},
+      }
+    }
+    const bodyText = JSON.stringify(resp)
+    if (!res.headersSent) {
+      res.status(200)
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('x-mrblank-route', 'aily')
+    }
+    res.end(bodyText)
+    return {
+      status: 200,
+      capturedBody: bodyText,
+      upstream_url: result.upstream_url || '',
+      is_stream: false,
+      usage: ou,
+      model_name: resp.model,
+      upstream_req_body: result.upstream_req_body
+        ? JSON.stringify(result.upstream_req_body)
+        : '',
+      upstream_req_headers: result.upstream_req_headers || {},
+    }
+  }
+
+  /** Chat completions: prefer compat if model matches account, else Aily. */
+  async function handleChatCompletionsRouted(openaiBody, res) {
+    const requested = openaiBody.model || 'aily-auto'
+    const compat = await resolveCompat(requested)
+    if (compat.allowed && compat.account) {
+      // Reuse streaming wrapper with runCompatTurn
+      const model = requested
+      const isStream = openaiBody.stream === true
+      const cid = `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const capture = []
+      const write = (s) => {
+        capture.push(s)
+        if (!res.writableEnded) res.write(s)
+      }
+      const result = await runCompatTurn(compat, openaiBody, {
+        onStart() {
+          if (isStream && !res.headersSent) {
+            res.status(200)
+            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+            res.setHeader('Cache-Control', 'no-cache')
+            res.setHeader('Connection', 'keep-alive')
+            res.setHeader('x-mrblank-route', 'aily-compat')
+          }
+        },
+        onText(t, routing) {
+          if (isStream) {
+            write(
+              `data: ${JSON.stringify(makeChunk(cid, responseModel(model, routing), { content: t }))}\n\n`,
+            )
+          }
+        },
+        onThink(t, routing) {
+          if (isStream) {
+            write(
+              `data: ${JSON.stringify(makeChunk(cid, responseModel(model, routing), { reasoning_content: t }))}\n\n`,
+            )
+          }
+        },
+      })
+      if (result.error) {
+        const status = result.status || 502
+        const body = {
+          error: {
+            message: `Upstream failed: ${String(result.error).slice(0, 500)}`,
+            type: 'upstream_error',
+            code: 'aily_compat',
+          },
+        }
+        if (!res.headersSent) {
+          res.status(status)
+          res.setHeader('Content-Type', 'application/json')
+          res.setHeader('x-mrblank-route', 'aily-compat')
+          res.end(JSON.stringify(body))
+        }
+        return {
+          status,
+          capturedBody: JSON.stringify(body),
+          upstream_url: result.upstream_url || '',
+          is_stream: false,
+          usage: null,
+          model_name: model,
+          upstream_req_body: result.upstream_req_body
+            ? JSON.stringify(result.upstream_req_body)
+            : '',
+          upstream_req_headers: result.upstream_req_headers || {},
+        }
+      }
+      const { text, think, toolCalls, usage, stopReason, routing } = result
+      const finish = toolCalls.length > 0 ? 'tool_calls' : mapStop(stopReason)
+      const outModel = responseModel(model, routing)
+      const ou = toUsage(usage)
+      if (isStream) {
+        if (!res.headersSent) {
+          res.status(200)
+          res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+          res.setHeader('x-mrblank-route', 'aily-compat')
+        }
+        toolCalls.forEach((tc, i) => {
+          write(
+            `data: ${JSON.stringify(
+              makeChunk(cid, outModel, {
+                tool_calls: [
+                  {
+                    index: i,
+                    id: tc.id,
+                    type: 'function',
+                    function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+                  },
+                ],
+              }),
+            )}\n\n`,
+          )
+        })
+        const finalChunk = makeChunk(cid, outModel, {}, finish)
+        if (ou) finalChunk.usage = ou
+        write(`data: ${JSON.stringify(finalChunk)}\n\n`)
+        write('data: [DONE]\n\n')
+        res.end()
+        return {
+          status: 200,
+          capturedBody: capture.join('').slice(0, 512 * 1024),
+          upstream_url: result.upstream_url || '',
+          is_stream: true,
+          usage: ou,
+          model_name: outModel,
+          upstream_req_body: result.upstream_req_body
+            ? JSON.stringify(result.upstream_req_body)
+            : '',
+          upstream_req_headers: result.upstream_req_headers || {},
+        }
+      }
+      const msg = { role: 'assistant', content: text || null }
+      if (think) msg.reasoning_content = think
+      if (toolCalls.length > 0) {
+        msg.tool_calls = toolCalls.map((tc) => ({
+          id: tc.id,
+          type: 'function',
+          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+        }))
+      }
+      const resp = {
+        id: cid,
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: outModel,
+        choices: [{ index: 0, message: msg, finish_reason: finish }],
+      }
+      if (ou) resp.usage = ou
+      const bodyText = JSON.stringify(resp)
+      if (!res.headersSent) {
+        res.status(200)
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('x-mrblank-route', 'aily-compat')
+      }
+      res.end(bodyText)
+      return {
+        status: 200,
+        capturedBody: bodyText,
+        upstream_url: result.upstream_url || '',
+        is_stream: false,
+        usage: ou,
+        model_name: outModel,
+        upstream_req_body: result.upstream_req_body
+          ? JSON.stringify(result.upstream_req_body)
+          : '',
+        upstream_req_headers: result.upstream_req_headers || {},
+      }
+    }
+    return handleChatCompletions(openaiBody, res)
+  }
+
+  /**
+   * Dispatch OpenAI /v1 path to embedded bridge (Aily or compat accounts).
+   */
+  async function handleV1({ method, endpoint, reqBuf, res }) {
+    const pathOnly = String(endpoint || '').split('?')[0]
+    if (method === 'GET' && /\/v1\/models\/?$/.test(pathOnly)) {
+      return handleModelsList(res)
+    }
+    if (method === 'POST' && /\/v1\/chat\/completions\/?$/.test(pathOnly)) {
+      const parsed = parseBodyOr400(reqBuf, res)
+      if (!parsed.ok) return parsed.result
+      return handleChatCompletionsRouted(parsed.body, res)
+    }
+    if (method === 'POST' && /\/v1\/completions\/?$/.test(pathOnly)) {
+      const parsed = parseBodyOr400(reqBuf, res)
+      if (!parsed.ok) return parsed.result
+      return handleCompletions(parsed.body, res)
+    }
+    if (method === 'POST' && /\/v1\/responses\/?$/.test(pathOnly)) {
+      const parsed = parseBodyOr400(reqBuf, res)
+      if (!parsed.ok) return parsed.result
+      return handleResponses(parsed.body, res)
     }
     const errBody = {
       error: {
@@ -773,6 +1524,8 @@ export function createAilyUpstream(deps) {
     loadCatalog,
     handleV1,
     handleChatCompletions,
+    handleCompletions,
+    handleResponses,
     MODEL_ALIASES,
     getModelRouting: currentRouting,
   }

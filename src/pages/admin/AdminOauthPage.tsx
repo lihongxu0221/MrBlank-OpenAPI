@@ -6,6 +6,7 @@ import {
   KeyRound,
   LogIn,
   Trash2,
+  Plus,
 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
@@ -98,6 +99,34 @@ export function AdminOauthPage({ path }: { path: string }) {
     public?: { id: string; name?: string }[]
   }>({ catalog: [], whitelist: [], mappings: [] })
 
+  type UpstreamAccount = {
+    id: number
+    platform: string
+    name: string
+    remark?: string
+    auth_type: string
+    enabled: boolean
+    base_url?: string
+    has_key?: boolean
+    api_key_preview?: string
+    oauth_email?: string
+    has_refresh?: boolean
+    model_routing?: { whitelist: string[]; mappings: { from: string; to: string }[] }
+  }
+  const [upAccounts, setUpAccounts] = useState<UpstreamAccount[]>([])
+  const [upMsg, setUpMsg] = useState<string | null>(null)
+  const [upErr, setUpErr] = useState<string | null>(null)
+  const [upBusy, setUpBusy] = useState(false)
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [wiz, setWiz] = useState({
+    platform: 'grok',
+    name: '',
+    auth_type: 'api_key',
+    api_key: '',
+    base_url: '',
+    enabled: true,
+    whitelistText: '',
+  })
 
   useEffect(() => {
     if (!gate.allowed) return
@@ -105,6 +134,7 @@ export function AdminOauthPage({ path }: { path: string }) {
     api.get('/api/admin/oauth/providers').catch((e) => setErr((e as Error).message))
     loadAlias()
     loadAily()
+    loadUpAccounts()
   }, [gate.allowed])
 
   async function loadAlias() {
@@ -137,6 +167,97 @@ export function AdminOauthPage({ path }: { path: string }) {
       setAilyErr((e as Error).message)
     } finally {
       setAilyLoading(false)
+    }
+  }
+
+
+  async function loadUpAccounts() {
+    try {
+      const d = await api.get<{ items: UpstreamAccount[] }>('/api/admin/aily/accounts')
+      setUpAccounts(d.items || [])
+    } catch (e) {
+      setUpErr((e as Error).message)
+    }
+  }
+
+  async function createUpAccount(e: FormEvent) {
+    e.preventDefault()
+    setUpBusy(true)
+    setUpErr(null)
+    setUpMsg(null)
+    try {
+      const whitelist = wiz.whitelistText
+        .split(/[,\n]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+      await api.post('/api/admin/aily/accounts', {
+        platform: wiz.platform,
+        name: wiz.name || undefined,
+        auth_type: wiz.auth_type,
+        api_key: wiz.api_key || undefined,
+        base_url: wiz.base_url || undefined,
+        enabled: wiz.enabled,
+        model_routing: whitelist.length ? { whitelist, mappings: [] } : undefined,
+      })
+      setUpMsg(P('已添加上游账号'))
+      showToast(P('已添加上游账号'))
+      setWizardOpen(false)
+      setWiz({
+        platform: 'grok',
+        name: '',
+        auth_type: 'api_key',
+        api_key: '',
+        base_url: '',
+        enabled: true,
+        whitelistText: '',
+      })
+      await loadUpAccounts()
+    } catch (err) {
+      setUpErr((err as Error).message)
+    } finally {
+      setUpBusy(false)
+    }
+  }
+
+  async function testUpAccount(id: number) {
+    setUpBusy(true)
+    setUpErr(null)
+    try {
+      const d = await api.post<{ models?: number; sample?: string[] }>('/api/admin/aily/accounts/test', {
+        id,
+      })
+      setUpMsg(`${P('测试通过')} · ${d.models ?? 0} ${P('个模型')}${(d.sample || []).length ? ' · ' + d.sample!.join(', ') : ''}`)
+      showToast(P('连通测试完成'))
+    } catch (err) {
+      setUpErr((err as Error).message)
+    } finally {
+      setUpBusy(false)
+    }
+  }
+
+  async function toggleUpAccount(a: UpstreamAccount) {
+    setUpBusy(true)
+    try {
+      await api.put(`/api/admin/aily/accounts/${a.id}`, { enabled: !a.enabled })
+      await loadUpAccounts()
+    } catch (err) {
+      setUpErr((err as Error).message)
+    } finally {
+      setUpBusy(false)
+    }
+  }
+
+  async function deleteUpAccount(id: number) {
+    if (!confirm(P('确认删除此上游账号？'))) return
+    setUpBusy(true)
+    try {
+      await api.delete(`/api/admin/aily/accounts/${id}`)
+      showToast(P('已删除'))
+      await loadUpAccounts()
+    } catch (err) {
+      setUpErr((err as Error).message)
+    } finally {
+      setUpBusy(false)
     }
   }
 
@@ -898,6 +1019,130 @@ export function AdminOauthPage({ path }: { path: string }) {
           ) : null}
         </div>
       </div>
+
+      {/* ── 上游账号 Grok / OpenAI（与 CPA provider pills 分离） ── */}
+      <div className="panel" style={{ marginTop: 24 }}>
+        <div className="channels-toolbar" style={{ marginBottom: 12 }}>
+          <div>
+            <h3 style={{ margin: 0 }}>{P('上游账号')}</h3>
+            <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
+              {P('Grok / OpenAI 兼容上游（api_key 或粘贴 OAuth JSON）。命中账号白名单/映射的 /v1 请求走内嵌兼容中继，不经 CPA。')}
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" className="button secondary compact" onClick={loadUpAccounts} disabled={upBusy}>
+              <RefreshCw size={14} /> {P('刷新')}
+            </button>
+            <button type="button" className="button compact" onClick={() => setWizardOpen((v) => !v)}>
+              <Plus size={14} /> {wizardOpen ? P('收起') : P('添加账号')}
+            </button>
+          </div>
+        </div>
+
+        {upErr ? <p style={{ color: 'var(--error)' }}>{upErr}</p> : null}
+        {upMsg ? <p style={{ color: 'var(--success, #16a34a)' }}>{upMsg}</p> : null}
+
+        {wizardOpen ? (
+          <form className="guest-login-form" onSubmit={createUpAccount} style={{ marginBottom: 16, padding: 14, border: '1px solid var(--border, #e5e7eb)', borderRadius: 10 }}>
+            <h4 style={{ marginTop: 0 }}>{P('添加上游账号')}</h4>
+            <div className="field">
+              <label>{P('平台')}</label>
+              <select value={wiz.platform} onChange={(e) => setWiz((w) => ({ ...w, platform: e.target.value }))}>
+                <option value="grok">Grok (xAI)</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>{P('名称')}</label>
+              <input value={wiz.name} onChange={(e) => setWiz((w) => ({ ...w, name: e.target.value }))} placeholder="Grok" />
+            </div>
+            <div className="field">
+              <label>{P('鉴权方式')}</label>
+              <select value={wiz.auth_type} onChange={(e) => setWiz((w) => ({ ...w, auth_type: e.target.value }))}>
+                <option value="api_key">API Key</option>
+                <option value="oauth">OAuth JSON</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>{wiz.auth_type === 'oauth' ? P('OAuth JSON / Access Token') : 'API Key'}</label>
+              <textarea
+                rows={3}
+                value={wiz.api_key}
+                onChange={(e) => setWiz((w) => ({ ...w, api_key: e.target.value }))}
+                placeholder={wiz.auth_type === 'oauth' ? '{"access_token":"...","refresh_token":"...","account_id":"..."}' : 'sk-...'}
+                style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}
+              />
+            </div>
+            <div className="field">
+              <label>Base URL ({P('可选')})</label>
+              <input
+                value={wiz.base_url}
+                onChange={(e) => setWiz((w) => ({ ...w, base_url: e.target.value }))}
+                placeholder={wiz.platform === 'grok' ? 'https://api.x.ai/v1' : 'https://api.openai.com/v1'}
+              />
+            </div>
+            <div className="field">
+              <label>{P('模型白名单（可选，逗号分隔；空=按上游目录命中）')}</label>
+              <input
+                value={wiz.whitelistText}
+                onChange={(e) => setWiz((w) => ({ ...w, whitelistText: e.target.value }))}
+                placeholder="grok-3, grok-2"
+              />
+            </div>
+            <button type="submit" className="button" disabled={upBusy}>
+              <Plus size={14} /> {P('保存')}
+            </button>
+          </form>
+        ) : null}
+
+        {!upAccounts.length ? (
+          <p className="muted" style={{ fontSize: 13 }}>{P('暂无上游账号。添加后可为 Grok/OpenAI 模型走内嵌中继。')}</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>{P('名称')}</th>
+                  <th>{P('平台')}</th>
+                  <th>{P('鉴权')}</th>
+                  <th>Key</th>
+                  <th>{P('状态')}</th>
+                  <th>{P('操作')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {upAccounts.map((a) => (
+                  <tr key={a.id}>
+                    <td>{a.name}</td>
+                    <td><code>{a.platform}</code></td>
+                    <td>{a.auth_type === 'oauth' ? 'OAuth' : 'API Key'}</td>
+                    <td>
+                      <code style={{ fontSize: 12 }}>
+                        {a.api_key_preview || (a.oauth_email ? a.oauth_email : '—')}
+                      </code>
+                    </td>
+                    <td>{a.enabled ? P('启用') : P('停用')}</td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <button type="button" className="button secondary compact" disabled={upBusy} onClick={() => testUpAccount(a.id)}>
+                          {P('测试')}
+                        </button>
+                        <button type="button" className="button secondary compact" disabled={upBusy} onClick={() => toggleUpAccount(a)}>
+                          {a.enabled ? P('停用') : P('启用')}
+                        </button>
+                        <button type="button" className="button secondary compact" disabled={upBusy} onClick={() => deleteUpAccount(a.id)}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
     </AdminLayout>
   )
 }

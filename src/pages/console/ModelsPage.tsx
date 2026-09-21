@@ -55,7 +55,7 @@ export function ModelsPage({ path }: { path: string }) {
 
       <div className="panel models-panel">
         <div className="info-banner">
-          {P('模型列表来自 CPA /v1/models（经本站服务端）。价格字段若为 0 表示暂未接入计费展示。')}{' '}
+          {P('模型列表来自 CPA + 本站 Aily（若已配置路由/凭证），经本站服务端合并。价格字段若为 0 表示暂未接入计费展示。')}{' '}
           <button type="button" className="text-link inline" onClick={() => navigate('/channels')}>
             {P('服务状态')}
           </button>

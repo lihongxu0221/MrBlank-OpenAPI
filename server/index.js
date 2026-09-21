@@ -82,7 +82,10 @@ import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy } from './v1Proxy.js'
 import { createAilyManager, loadAilyConfig } from './aily.js'
 import { createAilyUpstream } from './ailyUpstream.js'
-import { createAilyModelRoutingStore, publicModelList, normalizeModelRouting } from './ailyModelRouting.js'
+import { createAilyModelRoutingStore, publicModelList, normalizeModelRouting, exposedModelNames } from './ailyModelRouting.js'
+import { createAilyAccountsStore } from './ailyAccounts.js'
+import { createAilyCompat } from './ailyCompat.js'
+import { createAilyOauth } from './ailyOauth.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -200,6 +203,13 @@ const ailyManager = createAilyManager(loadAilyConfig(process.env))
 const ailyModelRouting = createAilyModelRoutingStore(
   process.env.AILY_MODEL_ROUTING_PATH || path.join(__dirname, 'data', 'aily-model-routing.json'),
 )
+const ailyAccounts = createAilyAccountsStore(
+  process.env.AILY_ACCOUNTS_PATH || path.join(__dirname, 'data', 'aily-accounts.json'),
+)
+const ailyCompat = createAilyCompat({
+  getAccounts: () => ailyAccounts.loadAccounts(),
+})
+const ailyOauth = createAilyOauth({ accountsStore: ailyAccounts })
 const ailyUpstream = createAilyUpstream({
   getAccessToken: () => ailyManager.getAccessToken(),
   getRefreshToken: () => ailyManager.getRefreshToken(),
@@ -207,6 +217,7 @@ const ailyUpstream = createAilyUpstream({
   saveAuth: (patch) => ailyManager.saveAuth(patch),
   refreshToken: () => ailyManager.refreshToken(),
   getModelRouting: () => ailyModelRouting.get(),
+  resolveCompat: (model) => ailyCompat.resolve(model),
 })
 ailyManager.attachUpstream(ailyUpstream)
 
@@ -848,7 +859,15 @@ app.use(
     enabled: v1ProxyEnabled,
     ailyRoute: {
       embedded: true,
-      match: (model) => ailyManager.modelMatches(model),
+      // AILY_MODEL_ROUTES OR enabled grok/openai account whitelist/mapping/catalog
+      match: (model) => {
+        if (ailyManager.modelMatches(model)) return true
+        if (ailyCompat.matchSync(model)) return true
+        // Site aily-model-routing exposed names (whitelist + mapping.from)
+        const exposed = exposedModelNames(ailyModelRouting.get())
+        const m = String(model || '').trim()
+        return !!(exposed.length && m && exposed.includes(m))
+      },
       handleV1: (ctx) => ailyUpstream.handleV1(ctx),
       // legacy optional fields (unused when embedded)
       adapterUrl: ailyManager.cfg.adapterUrl,
@@ -1429,9 +1448,73 @@ app.put(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
 
 app.get('/api/token/options', requireAuth, async (req, res) => {
   try {
-    const allModels = await fetchCpaModels(cpaCfg)
     const groupInfo = resolveAuthGroup(req)
-    const model_details = groupStore.filterModels(allModels, groupInfo.group)
+    let cpaModels = []
+    let cpaErr = null
+    try {
+      cpaModels = await fetchCpaModels(cpaCfg)
+    } catch (err) {
+      cpaErr = err?.message || String(err)
+      console.error('[cpa] models failed', cpaErr)
+    }
+
+    // Merge Aily public models when site routing or AILY_MODEL_ROUTES is configured
+    let ailyModels = []
+    try {
+      const routing = ailyModelRouting.get()
+      const exposed = exposedModelNames(routing)
+      const envRoutes = ailyManager.cfg?.modelRoutes || []
+      if (exposed.length || envRoutes.length) {
+        let catalogList = []
+        try {
+          const result = await ailyUpstream.listModels(false)
+          catalogList =
+            result.data ||
+            (result.models || []).map((id) => ({ id, object: 'model', owned_by: 'aily' }))
+        } catch (e) {
+          console.warn('[aily] plaza catalog:', e?.message || e)
+        }
+        const sourceList =
+          catalogList.length > 0
+            ? catalogList
+            : exposed.map((id) => ({ id, object: 'model', owned_by: 'aily', name: id }))
+        let pub = publicModelList(sourceList, routing)
+        // If only env routes (no whitelist/mappings), filter catalog by env patterns
+        if (!exposed.length && envRoutes.length) {
+          pub = pub.filter((m) => ailyManager.modelMatches(m.id))
+        }
+        ailyModels = pub.map((m) => ({
+          id: m.id,
+          name: m.name || m.id,
+          provider: 'Aily',
+          kind: 'text',
+          text_price: 0,
+          text_out_price: 0,
+          owned_by: 'aily',
+        }))
+      }
+    } catch (e) {
+      console.warn('[aily] plaza merge failed:', e?.message || e)
+    }
+
+    // Dedupe by id: CPA first, then add Aily-only ids (do not overwrite CPA rows)
+    const byId = new Map()
+    for (const m of cpaModels || []) {
+      const id = String(m?.id || m?.name || '').trim()
+      if (id) byId.set(id, m)
+    }
+    for (const m of ailyModels) {
+      const id = String(m.id || '').trim()
+      if (!id || byId.has(id)) continue
+      byId.set(id, m)
+    }
+    const merged = [...byId.values()]
+    const model_details = groupStore.filterModels(merged, groupInfo.group)
+
+    if (!cpaModels.length && !ailyModels.length && cpaErr) {
+      return res.status(502).json(fail(cpaErr || '无法拉取模型列表'))
+    }
+
     res.json(
       ok({
         groups: [
@@ -1446,13 +1529,15 @@ app.get('/api/token/options', requireAuth, async (req, res) => {
         model_details,
         model_allowlist: groupInfo.group?.model_ids || [],
         api_base_url: cpaCfg.publicApiBaseUrl,
-        source: 'cpa',
+        source: cpaErr ? (ailyModels.length ? 'aily' : 'error') : ailyModels.length ? 'cpa+aily' : 'cpa',
+        aily_count: ailyModels.length,
+        cpa_count: (cpaModels || []).length,
         filtered: !!(groupInfo.group?.model_ids || []).length,
       }),
     )
   } catch (err) {
-    console.error('[cpa] models failed', err?.message || err)
-    res.status(502).json(fail(err?.message || '无法从 CPA 拉取模型列表'))
+    console.error('[token/options] failed', err?.message || err)
+    res.status(502).json(fail(err?.message || '无法拉取模型列表'))
   }
 })
 
@@ -2199,6 +2284,108 @@ app.put('/api/admin/aily/models', requireAdmin, async (req, res) => {
     )
   } catch (err) {
     res.status(502).json(fail(err?.message || '保存模型配置失败'))
+  }
+})
+
+
+/* ── Aily upstream accounts (Grok / OpenAI) — separate from CPA auth-files ── */
+app.get('/api/admin/aily/accounts', requireAdmin, (_req, res) => {
+  try {
+    res.json(
+      ok({
+        items: ailyAccounts.listPublic(),
+        platforms: ailyAccounts.COMPAT_PLATFORMS,
+      }),
+    )
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'accounts list failed'))
+  }
+})
+
+app.post('/api/admin/aily/accounts', requireAdmin, (req, res) => {
+  try {
+    const row = ailyAccounts.create(req.body || {})
+    res.json(ok(row))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || 'create failed'))
+  }
+})
+
+app.put('/api/admin/aily/accounts/:id', requireAdmin, (req, res) => {
+  try {
+    const row = ailyAccounts.update(req.params.id, req.body || {})
+    res.json(ok(row))
+  } catch (err) {
+    const status = String(err?.message || '').includes('不存在') ? 404 : 400
+    res.status(status).json(fail(err?.message || 'update failed'))
+  }
+})
+
+app.delete('/api/admin/aily/accounts/:id', requireAdmin, (req, res) => {
+  try {
+    const row = ailyAccounts.remove(req.params.id)
+    res.json(ok(row))
+  } catch (err) {
+    const status = String(err?.message || '').includes('不存在') ? 404 : 400
+    res.status(status).json(fail(err?.message || 'delete failed'))
+  }
+})
+
+app.post('/api/admin/aily/accounts/test', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const saved = body.id ? ailyAccounts.get(body.id) : null
+    const platform = String((saved && saved.platform) || body.platform || '')
+      .trim()
+      .toLowerCase()
+    if (!ailyAccounts.isCompatPlatform(platform)) {
+      return res.status(400).json(fail('不支持的平台（仅 grok / openai）'))
+    }
+    const acc = {
+      id: saved ? saved.id : 0,
+      platform,
+      auth_type: (saved && saved.auth_type) || body.auth_type || 'api_key',
+      api_key: String(body.api_key || (saved && saved.api_key) || ''),
+      base_url: String(
+        body.base_url || (saved && saved.base_url) || ailyAccounts.defaultCompatBase(platform),
+      ),
+      custom_upstream: !!(body.custom_upstream ?? saved?.custom_upstream),
+      oauth: saved?.oauth || null,
+      model_routing: saved?.model_routing || body.model_routing || {},
+    }
+    if (!acc.api_key && !(acc.oauth && acc.oauth.access_token)) {
+      return res.status(400).json(fail('请先填写 API Key 或完成 OAuth'))
+    }
+    if (acc.oauth?.access_token && !acc.api_key) acc.api_key = acc.oauth.access_token
+    const result = await ailyCompat.testAccount(acc)
+    res.json(ok(result))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'test failed'))
+  }
+})
+
+app.post('/api/admin/aily/oauth/start', requireAdmin, async (req, res) => {
+  try {
+    const result = await ailyOauth.startOAuth(req.body || {})
+    res.json(ok(result))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || 'oauth start failed'))
+  }
+})
+
+app.get('/api/admin/aily/oauth/status', requireAdmin, (req, res) => {
+  try {
+    res.json(ok(ailyOauth.oauthStatus(req.query.state)))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'oauth status failed'))
+  }
+})
+
+app.post('/api/admin/aily/oauth/cancel', requireAdmin, (req, res) => {
+  try {
+    res.json(ok(ailyOauth.cancelOAuth(req.body?.state)))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'oauth cancel failed'))
   }
 })
 
