@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   DollarSign,
   Tags,
+  ScanSearch,
 } from 'lucide-react'
 import { P } from '../../i18n'
 import { navigate, navigateWithQuery } from '../../router/hash'
@@ -38,6 +39,7 @@ const ITEMS = [
   { path: '/admin/logs', label: '日志查看', icon: FileText },
   { path: '/admin/monitoring', label: '请求监控', icon: LineChart },
   { path: '/admin/account-actions', label: '认证异常', icon: AlertTriangle },
+  { path: '/admin/codex-inspection', label: 'Codex 巡检', icon: ScanSearch },
   { path: '/admin/model-prices', label: '模型价格', icon: DollarSign },
   { path: '/admin/api-key-aliases', label: '密钥别名', icon: Tags },
   { path: '/admin/aily', label: 'Aily 上游', icon: Cloud },

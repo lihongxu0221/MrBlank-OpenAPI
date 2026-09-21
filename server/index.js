@@ -61,6 +61,8 @@ import { createSiteUsageStore } from './siteUsage.js'
 import { createModelPricesStore } from './modelPrices.js'
 import { createApiKeyAliasesStore } from './apiKeyAliases.js'
 import { createAccountActionsStore } from './accountActions.js'
+import { createUsageImportSessions } from './usageImportSessions.js'
+import { createCodexInspectionStore } from './codexInspection.js'
 import { createCpaCollector } from './cpaCollector.js'
 import { createUserKeyStore } from './userKeys.js'
 import {
@@ -124,6 +126,55 @@ const apiKeyAliases = createApiKeyAliasesStore(
 )
 const accountActions = createAccountActionsStore(
   process.env.ACCOUNT_ACTIONS_PATH || path.join(__dirname, 'data', 'account-actions.json'),
+)
+const usageImportSessions = createUsageImportSessions(
+  process.env.USAGE_IMPORTS_DIR || path.join(__dirname, 'data', 'usage-imports'),
+  siteUsage,
+)
+const codexInspection = createCodexInspectionStore(
+  process.env.CODEX_INSPECTION_PATH || path.join(__dirname, 'data', 'codex-inspection.json'),
+  {
+    listAccounts: async () => {
+      let payload = cpaCollector.getAuthFilesPayload?.() || null
+      if (!payload && cpaCfg.managementKey) {
+        try {
+          await cpaCollector.refresh({ force: true })
+          payload = cpaCollector.getAuthFilesPayload?.() || null
+        } catch {
+          payload = null
+        }
+      }
+      return payload ? mapAdminAccounts(payload) : []
+    },
+    refreshAuthFile: async (name) => {
+      const result = await refreshAuthFile(cpaCfg, name)
+      try {
+        await cpaCollector.refresh({ force: true })
+      } catch {
+        /* ignore */
+      }
+      return result
+    },
+    setAuthFileDisabled: async (name, disabled) => {
+      const result = await setAuthFileDisabled(cpaCfg, name, disabled)
+      try {
+        await cpaCollector.refresh({ force: true })
+      } catch {
+        /* ignore */
+      }
+      return result
+    },
+    deleteAuthFile: async (name) => {
+      const result = await deleteAuthFile(cpaCfg, name)
+      try {
+        await cpaCollector.refresh({ force: true })
+      } catch {
+        /* ignore */
+      }
+      return result
+    },
+    refreshCollector: async () => cpaCollector.refresh({ force: true }),
+  },
 )
 const cpaCollector = createCpaCollector({
   intervalMs: Number(process.env.CPA_COLLECTOR_INTERVAL_MS || 20_000) || 20_000,
@@ -944,7 +995,7 @@ app.use(
   }),
 )
 
-app.use(express.json({ limit: '1mb' }))
+app.use(express.json({ limit: '8mb' }))
 app.use(express.urlencoded({ extended: false }))
 
 app.get('/api/status', (_req, res) => res.json(pub.status()))
@@ -2898,6 +2949,134 @@ app.delete('/api/admin/api-key-aliases', requireAdmin, (req, res) => {
     res.status(err?.status || 400).json(fail(err?.message || 'alias delete failed'))
   }
 })
+
+
+// ——— Wave C: usage import/export + site-side Codex inspection ———
+
+app.get('/api/admin/usage/export', requireAdmin, (req, res) => {
+  try {
+    const period = String(req.query?.period || 'all')
+    const limit = req.query?.limit != null ? Number(req.query.limit) : 0
+    const bundle = siteUsage.exportBundle({ period, limit })
+    const filename = `site-usage-export-${new Date().toISOString().slice(0, 10)}.json`
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    res.json(ok(bundle))
+  } catch (err) {
+    console.error('[admin] usage/export', err?.message || err)
+    res.status(500).json(fail(err?.message || 'usage export failed'))
+  }
+})
+
+app.post('/api/admin/usage/import', requireAdmin, (req, res) => {
+  try {
+    const body = req.body || {}
+    const mode = body.mode === 'merge' ? 'merge' : 'append'
+    const payload = body.events || body.bundle || body
+    const result = siteUsage.importEvents(payload, {
+      mode,
+      maxImport: Number(body.max_import) > 0 ? Number(body.max_import) : 100_000,
+    })
+    res.json(ok(result))
+  } catch (err) {
+    console.error('[admin] usage/import', err?.message || err)
+    res.status(err?.status || 400).json(fail(err?.message || 'usage import failed'))
+  }
+})
+
+app.post('/api/admin/usage/import-sessions', requireAdmin, (req, res) => {
+  try {
+    const body = req.body || {}
+    const meta = usageImportSessions.start({
+      mode: body.mode,
+      expected_chunks: body.expected_chunks,
+    })
+    res.status(201).json(ok(meta))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'import session start failed'))
+  }
+})
+
+app.get('/api/admin/usage/import-sessions/:id', requireAdmin, (req, res) => {
+  try {
+    res.json(ok(usageImportSessions.get(req.params.id)))
+  } catch (err) {
+    res.status(err?.status || 404).json(fail(err?.message || 'import session not found'))
+  }
+})
+
+app.post('/api/admin/usage/import-sessions/:id/chunk', requireAdmin, (req, res) => {
+  try {
+    const result = usageImportSessions.addChunk(req.params.id, req.body || {})
+    res.json(ok(result))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'import chunk failed'))
+  }
+})
+
+app.post('/api/admin/usage/import-sessions/:id/complete', requireAdmin, (req, res) => {
+  try {
+    const meta = usageImportSessions.complete(req.params.id)
+    res.json(ok(meta))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'import complete failed'))
+  }
+})
+
+app.post('/api/admin/usage/import-sessions/:id/cancel', requireAdmin, (req, res) => {
+  try {
+    res.json(ok(usageImportSessions.cancel(req.params.id)))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'import cancel failed'))
+  }
+})
+
+app.post('/api/admin/codex-inspection/run', requireAdmin, async (req, res) => {
+  try {
+    const asyncMode = req.body?.async === true || String(req.query?.async || '') === '1'
+    const run = await codexInspection.startRun({ async: asyncMode })
+    res.status(asyncMode ? 202 : 200).json(ok(run))
+  } catch (err) {
+    console.error('[admin] codex-inspection/run', err?.message || err)
+    res.status(err?.status || 500).json(fail(err?.message || 'codex inspection run failed'))
+  }
+})
+
+app.get('/api/admin/codex-inspection/runs', requireAdmin, (req, res) => {
+  try {
+    const limit = req.query?.limit != null ? Number(req.query.limit) : 30
+    res.json(ok(codexInspection.listRuns({ limit })))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'codex inspection list failed'))
+  }
+})
+
+app.get('/api/admin/codex-inspection/runs/:id', requireAdmin, (req, res) => {
+  try {
+    res.json(ok(codexInspection.getRun(req.params.id)))
+  } catch (err) {
+    res.status(err?.status || 404).json(fail(err?.message || 'run not found'))
+  }
+})
+
+app.post('/api/admin/codex-inspection/runs/:id/cancel', requireAdmin, (req, res) => {
+  try {
+    res.json(ok(codexInspection.cancelRun(req.params.id)))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'cancel failed'))
+  }
+})
+
+app.post('/api/admin/codex-inspection/runs/:id/actions', requireAdmin, async (req, res) => {
+  try {
+    const result = await codexInspection.applyActions(req.params.id, req.body || {})
+    res.json(ok(result))
+  } catch (err) {
+    console.error('[admin] codex-inspection/actions', err?.message || err)
+    res.status(err?.status || 400).json(fail(err?.message || 'actions failed'))
+  }
+})
+
 
 
 

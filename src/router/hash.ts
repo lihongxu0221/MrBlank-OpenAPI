@@ -90,6 +90,7 @@ export const ADMIN_ROUTES = [
   '/admin/logs',
   '/admin/monitoring',
   '/admin/account-actions',
+  '/admin/codex-inspection',
   '/admin/model-prices',
   '/admin/api-key-aliases',
   '/admin/keys',

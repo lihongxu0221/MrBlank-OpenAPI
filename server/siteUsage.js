@@ -447,6 +447,107 @@ export function createSiteUsageStore(filePath, opts = {}) {
     return [...set].sort((a, b) => a.localeCompare(b))
   }
 
+  function normalizeEvent(raw) {
+    if (!raw || typeof raw !== 'object') return null
+    const prompt = Number(raw.prompt_tokens) || 0
+    const completion = Number(raw.completion_tokens) || 0
+    const tokens = Number(raw.tokens) || prompt + completion
+    const ts = raw.ts ? String(raw.ts) : new Date().toISOString()
+    if (!Date.parse(ts)) return null
+    return {
+      ts,
+      userId: raw.userId != null ? String(raw.userId) : null,
+      keyHash: raw.keyHash ? String(raw.keyHash) : null,
+      model: raw.model ? String(raw.model) : null,
+      endpoint: raw.endpoint ? String(raw.endpoint) : null,
+      success: raw.success !== false,
+      tokens,
+      prompt_tokens: prompt,
+      completion_tokens: completion,
+    }
+  }
+
+  function eventKey(e) {
+    return [e.ts, e.keyHash || '', e.userId || '', e.model || '', e.endpoint || '', e.tokens, e.success ? 1 : 0].join('|')
+  }
+
+  /** JSON-download friendly export of site-usage events. */
+  function exportBundle({ period = 'all', limit = 0 } = {}) {
+    let events = eventsInPeriod(period).map((e) => ({ ...e }))
+    const lim = Number(limit) || 0
+    if (lim > 0 && events.length > lim) events = events.slice(events.length - lim)
+    return {
+      version: 1,
+      source: 'site-usage',
+      exported_at: new Date().toISOString(),
+      period,
+      count: events.length,
+      events,
+    }
+  }
+
+  /**
+   * Import events from a JSON blob (exportBundle shape or {events}/array).
+   * @param {any} payload
+   * @param {{ mode?: 'append'|'merge', maxEvents?: number, maxImport?: number }} [opts]
+   */
+  function importEvents(payload, opts = {}) {
+    const mode = opts.mode === 'merge' ? 'merge' : 'append'
+    const maxImport = Number(opts.maxImport) > 0 ? Number(opts.maxImport) : 100_000
+    const cap = Number(opts.maxEvents) > 0 ? Number(opts.maxEvents) : maxEvents
+
+    let list = []
+    if (Array.isArray(payload)) list = payload
+    else if (Array.isArray(payload?.events)) list = payload.events
+    else if (Array.isArray(payload?.data?.events)) list = payload.data.events
+    else {
+      const err = new Error('Invalid import payload: expected { events: [...] }')
+      err.status = 400
+      throw err
+    }
+    if (list.length > maxImport) {
+      const err = new Error(`Import too large: ${list.length} events (max ${maxImport}). Use chunked import-sessions.`)
+      err.status = 413
+      throw err
+    }
+
+    const existing = mode === 'merge' ? new Set(store.events.map(eventKey)) : null
+    let added = 0
+    let skipped = 0
+    let invalid = 0
+    for (const raw of list) {
+      const e = normalizeEvent(raw)
+      if (!e) {
+        invalid += 1
+        continue
+      }
+      if (existing) {
+        const k = eventKey(e)
+        if (existing.has(k)) {
+          skipped += 1
+          continue
+        }
+        existing.add(k)
+      }
+      store.events.push(e)
+      added += 1
+    }
+    dirty = true
+    prune()
+    if (store.events.length > cap) {
+      store.events = store.events.slice(store.events.length - cap)
+    }
+    flush()
+    return {
+      mode,
+      received: list.length,
+      added,
+      skipped,
+      invalid,
+      total_events: store.events.length,
+    }
+  }
+
   prune()
   if (dirty) flush()
 
@@ -462,5 +563,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
     monitoringAnalytics,
     distinctModels,
     periodStartMs,
+    exportBundle,
+    importEvents,
   }
 }

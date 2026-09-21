@@ -40,6 +40,7 @@ import { AdminMonitoringPage } from './pages/admin/AdminMonitoringPage'
 import { AdminAccountActionsPage } from './pages/admin/AdminAccountActionsPage'
 import { AdminModelPricesPage } from './pages/admin/AdminModelPricesPage'
 import { AdminApiKeyAliasesPage } from './pages/admin/AdminApiKeyAliasesPage'
+import { AdminCodexInspectionPage } from './pages/admin/AdminCodexInspectionPage'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { getSiteConfig, subscribeSiteConfig } from './config/site'
 import { getLanguage } from './i18n'
@@ -152,6 +153,9 @@ export default function App() {
       break
     case '/admin/api-key-aliases':
       page = <AdminApiKeyAliasesPage path={path} />
+      break
+    case '/admin/codex-inspection':
+      page = <AdminCodexInspectionPage path={path} />
       break
     case '/admin/constellation':
       page = <AdminConstellationPage path={path} />

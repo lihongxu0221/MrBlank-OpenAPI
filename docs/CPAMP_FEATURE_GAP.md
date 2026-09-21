@@ -1,6 +1,6 @@
 # CPAMP Feature Gap Inventory (MrBlank-OpenAPI)
 
-Updated: 2026-09-21 (Asia/Shanghai) — Wave A + Wave B implemented  
+Updated: 2026-09-21 (Asia/Shanghai) — Wave A + Wave B + Wave C implemented  
 Sources: `https://www.juc114.cn/management.html` (SPA bundle), VPS `seakee/cpa-manager-plus:v1.13.1` on `:18317`, CPA `eceasy/cli-proxy-api:v7.3.10` on `:8317`, local `src/pages/admin/*` + `server/index.js`.
 
 **Scope:** inventory + gap only — no feature implementation in this change.
@@ -159,6 +159,7 @@ Compose env: `USAGE_COLLECTOR_MODE=auto`, `USAGE_POLL_INTERVAL_MS=500`, `USAGE_B
 | `/admin/account-actions` | Auth triage candidates (Wave B lite) |
 | `/admin/model-prices` | Price book + costed usage (Wave B) |
 | `/admin/api-key-aliases` | Hash↔label aliases (Wave B) |
+| `/admin/codex-inspection` | Site-side Codex inspection lite (Wave C) |
 | `/admin/constellation` | Homepage constellation (site-specific) |
 | `/admin/groups` | User groups (site-specific) |
 | `/admin/credits` | Check-in / redeem (site-specific) |
@@ -168,7 +169,7 @@ Compose env: `USAGE_COLLECTOR_MODE=auto`, `USAGE_POLL_INTERVAL_MS=500`, `USAGE_B
 
 Present: `me`, `overview`, `connection`, `accounts`, `usage` (site-usage), `keys` CRUD, `config` (GET sanitized), `request-log` GET/PUT, `openai-compatibility` GET/PUT, `diagnosis/logs`, Wave A settings/providers/oauth/plugins/logs, Wave B `dashboard/summary`, `monitoring/*`, `account-actions`, `model-prices*`, `api-key-aliases`, plus site-only users/groups/credits/aily/constellation.
 
-Wave A done: settings writers, provider CRUD, auth-file mutate/download/upload, OAuth console, plugins GET, logs viewer. Wave B done: dashboard summary, monitoring analytics, header-snapshots (diagnosis-derived), account-actions lite, model-prices + costed usage, api-key-aliases. Still absent (Wave C): usage import/export, codex-inspection, quota snapshots, raw config.yaml write.
+Wave A done: settings writers, provider CRUD, auth-file mutate/download/upload, OAuth console, plugins GET, logs viewer. Wave B done: dashboard summary, monitoring analytics, header-snapshots (diagnosis-derived), account-actions lite, model-prices + costed usage, api-key-aliases. Wave C done: usage import/export + site-side codex-inspection. Still absent (intentional): quota snapshots, raw config.yaml write, plugin-store, full CPAMP usage.sqlite clone.
 
 Architecture intent (`docs/CPA_KERNEL.md`): CPA Management Key is production kernel; **site-usage** replaces CPAMP global usage for leaderboard/admin; CPAMP optional.
 
@@ -192,11 +193,11 @@ Legend — **Native:** implement via CPA Management API. **Rebuild:** needs site
 | OAuth model alias / excluded | settings/accounts modules | none | Editors | **CPA-native** |
 | Plugins + plugin store | `/plugins`, `/plugin-store` | none | List/enable; store optional | **CPA-native** (store = Skip/optional) |
 | Usage analytics (global CPA traffic) | `/usage-analytics` + `/usage` | `/admin/usage` = **site BFF only** | Global CPA-path usage (non-BFF keys) | **Rebuild** collector **or** keep site-only policy |
-| Usage import/export | usage/export + import-sessions | none | Import/export tooling | **Rebuild** |
+| Usage import/export | usage/export + import-sessions | none | ✅ Wave C: `/api/admin/usage/export|import` + import-sessions | **Rebuild** done |
 | Request monitoring analytics | `/monitoring` POST analytics | Diagnosis logs only | ✅ Wave B: `/admin/monitoring` + POST analytics | **Rebuild** done (site-usage) |
 | Header snapshots | `monitoring/header-snapshots` | none | ◐ Wave B: diagnosis-derived empty/partial feed | **Rebuild** partial |
 | Account action candidates | `/monitoring/account-actions` | none | ✅ Wave B lite: ignore/resolve dismissals (no auth-file delete) | **Rebuild** partial |
-| Codex inspection | codex-inspection runs | none | Full inspection workflow | **Rebuild**/optional (CPAMP-only) |
+| Codex inspection | codex-inspection runs | none | ✅ Wave C lite: site-side runs on CPA auth-files | **Rebuild** done (lite) |
 | Model prices + cost | model-prices + usage-summary | none | ✅ Wave B: `model-prices.json` + usage-summary | **Rebuild** done |
 | Config panel (raw YAML) | `/config` + `config.yaml` PUT | sanitized GET only | Structured editors; **avoid raw PUT** | **CPA-native** (prefer field PUTs; YAML write = dangerous) |
 | Logs viewer | `/logs` | none | Tail CPA logs when logging-to-file on | **CPA-native** |
@@ -232,7 +233,7 @@ Parity definition for MrBlank: **every CPAMP ops capability needed to run the ga
 
 1. ✅ Header / failure feed from BFF diagnosis + auth-files status (account-actions lite).
 2. ⏸ Account history / window usage — defer (needs quota header persistence).
-3. ⏸ Codex inspection: **defer** (Wave C / optional).
+3. ✅ Codex inspection lite (Wave C): site-side auth-files probe; not CPAMP-native.
 
 ### Phase G4 — Optional CPAMP bridge
 
@@ -302,4 +303,16 @@ MrBlank already chose a partial rebuild path via `server/siteUsage.js` + `cpaCol
 - Admin APIs under `requireAdmin`: `/api/admin/dashboard/summary`, `/monitoring/analytics`, `/monitoring/header-snapshots`, `/account-actions` (+ ignore/resolve), `/model-prices` (+ runtime-models, usage-summary), `/api-key-aliases`.
 - UI: richer `/admin`, `/admin/monitoring`, `/admin/account-actions`, `/admin/model-prices`, `/admin/api-key-aliases`.
 - **Safety unchanged:** no `config.yaml` PUT; no JSON POST to `/auth-files?name=`; account-actions dismissals are local only (never delete auth-files during triage).
-- **Not in Wave B:** Codex inspection, usage import/export, quota-snapshots (Wave C).
+- **Not in Wave B:** Codex inspection, usage import/export, quota-snapshots (→ Wave C).
+
+
+## Wave C implementation notes (2026-09-21 CST)
+
+- **Usage I/O (site-usage):** `GET /api/admin/usage/export`, `POST /api/admin/usage/import` (append/merge, size-capped); optional chunked `import-sessions` under `server/data/usage-imports/`.
+- **UI:** Export/Import controls on `/admin/usage`.
+- **Codex inspection lite:** store `server/data/codex-inspection.json`; `POST /api/admin/codex-inspection/run`, `GET .../runs`, `GET .../runs/:id`, `POST .../cancel`, `POST .../actions`.
+- Filters CPA auth-files to codex/openai-like providers; records ok/expired/error/disabled findings.
+- **Default actions:** refresh auth-file + disable account. **Delete** only with explicit `confirm:true` + UI danger confirm.
+- UI `/admin/codex-inspection` documents: 「本站版 Codex 巡检（基于 CPA auth-files，非 CPAMP 原版）」.
+- **Safety unchanged:** no `config.yaml` PUT; no JSON POST to `/auth-files?name=`; no casual auth-file DELETE.
+- **Intentional remaining gaps:** quota-snapshots, plugin-store marketplace, raw config.yaml editor, full CPAMP usage.sqlite / global CPA-path monitoring, system update channel UI.
