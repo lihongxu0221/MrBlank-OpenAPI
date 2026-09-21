@@ -22,7 +22,7 @@
 | CPA `/v1` 反代 | ✅ | → billing shim `:8320` |
 | 控制台密钥/模型/用量 | ✅ | BFF ↔ CPA/CPAMP |
 | 动态排行榜/号池/调用实况/服务状态 | ✅ | 无数据则空，不造假 |
-| 管理后台 `#/admin`（CPAMP 子集） | ✅ | Phase B：连接/号池/密钥/用量 + 权限；见 PHASE_B_CHECKLIST |
+| 管理后台 `#/admin`（CPAMP 子集） | ✅ | Phase B + C 诊断；见 PHASE_B/C_CHECKLIST |
 | 管理员白名单 | ✅ | `lihongxu0330@gmail.com` |
 | 站名/Base URL 可配置 | ✅ | `site-config.json` |
 | 本站用户名密码登录 | 🟡 | Phase A：本地用户库（非 Aily adapter） |
@@ -38,7 +38,7 @@
 | 登录后分流 | P0 | 管理员 → `#/admin`；普通用户 → `#/console` |
 | 管理员后台能力对齐 CPAMP | ✅ B | 日常子集完成；完整运维仍用 www |
 | UI 风格一致 | P0 | 登录表单、管理页、诊断弹窗均用现站 token |
-| 请求响应诊断（aily 完整移植） | P0 | 仅管理员；双击使用记录；见 aily 诊断文档 |
+| 请求响应诊断（aily 完整移植） | ✅ C | 管理员 `#/admin/usage`；BFF `/v1` 落盘；见 PHASE_C_CHECKLIST |
 | Aily 上游转发 + 请求响应基于 CPA | P0 | 站登录已本站化；阶段 D 只做上游转发/诊断对接 CPA |
 | 用户分组晋升规则可配 | P1 | 仿 Linux.do TL；5h/周/月额度；模型白名单强制生效 |
 | 签到/兑换发额度 | P2 | CPA 无此能力时需自建额度层 |
@@ -70,13 +70,14 @@
 **完成标准**：白名单管理员可完成日常看用量/管密钥/看连接，无需打开 CPAMP 也能完成子集操作。  
 **验收清单**：[`docs/PHASE_B_CHECKLIST.md`](./PHASE_B_CHECKLIST.md)
 
-### 阶段 C — 请求诊断（管理员）
+### 阶段 C — 请求诊断（管理员） ✅
 1. 代理/调用链路落盘 `req_body` / `res_body` / upstream 字段（脱敏）  
 2. 使用记录列表 + 双击「请求诊断详情」弹窗（概览 / 请求信息 / 上游诊断）  
 3. 对照 `/opt/aily-openai-adapter/docs/使用记录-请求诊断详情.md` 功能清单打勾  
 4. 普通用户不可见正文  
 
-**完成标准**：管理员对一次真实 `/v1` 调用可打开完整诊断；普通用户双击无效。
+**完成标准**：管理员对一次真实 `/v1` 调用可打开完整诊断；普通用户双击无效。  
+**验收清单**：[`docs/PHASE_C_CHECKLIST.md`](./PHASE_C_CHECKLIST.md)（含与 aily 文档的差距说明；CPAMP 无 body）。
 
 ### 阶段 D — Aily ↔ CPA 转发整合
 1. 明确架构：客户端 → openapi `/v1` → CPA；（Aily 上游账号由 CPA/管理侧维护或 BFF 配置）  

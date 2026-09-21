@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
+import { DiagnosisModal } from './diagnosis/DiagnosisModal'
 
 type Usage = {
   total_requests: number
@@ -13,30 +14,74 @@ type Usage = {
   total_tokens: number
   by_model: { model: string; calls: number; failed: number; tokens: number }[]
   by_endpoint: { endpoint: string; calls: number; failed: number; tokens: number }[]
+  source?: string
+}
+
+type DiagItem = {
+  id: string
+  created_at?: string
+  endpoint?: string
+  model_name?: string
+  requested_model?: string
+  status_code?: number
+  duration_ms?: number | null
+  ip?: string
+  token_name?: string
+  has_detail?: boolean
+  type?: number
+  prompt_tokens?: number
+  completion_tokens?: number
+}
+
+type DiagList = {
+  items: DiagItem[]
+  total: number
+  stats?: { total: number; with_detail: number; path?: string }
+  note?: string
+}
+
+function fmtTime(iso?: string) {
+  if (!iso) return '-'
+  try {
+    return new Date(iso).toLocaleString('zh-CN', { hour12: false })
+  } catch {
+    return String(iso)
+  }
 }
 
 export function AdminUsagePage({ path }: { path: string }) {
   const gate = useAdminGate()
   const [data, setData] = useState<Usage | null>(null)
+  const [logs, setLogs] = useState<DiagList | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [diagId, setDiagId] = useState<string | null>(null)
+  const coarse = useMemo(
+    () => typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches,
+    [],
+  )
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!gate.allowed) return
     setLoading(true)
     setErr(null)
     try {
-      setData(await api.get<Usage>('/api/admin/usage'))
+      const [usage, diag] = await Promise.all([
+        api.get<Usage>('/api/admin/usage'),
+        api.get<DiagList>('/api/admin/diagnosis/logs?limit=50'),
+      ])
+      setData(usage)
+      setLogs(diag)
     } catch (e) {
       setErr((e as Error).message)
     } finally {
       setLoading(false)
     }
-  }
+  }, [gate.allowed])
 
   useEffect(() => {
     if (gate.allowed) load()
-  }, [gate.allowed])
+  }, [gate.allowed, load])
 
   const successRate = useMemo(() => {
     if (!data) return null
@@ -45,9 +90,18 @@ export function AdminUsagePage({ path }: { path: string }) {
     return ((Number(data.success_count) || 0) / total) * 100
   }, [data])
 
+  function openRow(row: DiagItem, fromButton = false) {
+    if (fromButton) return
+    if (!gate.allowed) return
+    setDiagId(row.id)
+  }
+
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
-      <ConsoleHero title={P('用量监控')} subtitle={P('CPAMP 全局用量汇总（日常运营子集；非单用户过滤）。')} />
+      <ConsoleHero
+        title={P('用量监控')}
+        subtitle={P('CPAMP 汇总 + BFF 请求诊断（双击行打开「请求诊断详情」；触控单击）。')}
+      />
       <div className="channels-toolbar">
         <span className="muted">
           {data
@@ -79,6 +133,67 @@ export function AdminUsagePage({ path }: { path: string }) {
           <div className="label">tokens</div>
           <div className="value">{data?.total_tokens?.toLocaleString('zh-CN') ?? '—'}</div>
         </div>
+      </div>
+
+      <div className="panel" style={{ marginTop: 16 }}>
+        <h3>{P('请求诊断')}</h3>
+        <p className="muted" style={{ marginTop: 0 }}>
+          {logs?.note ||
+            P('经本站 BFF /v1 转发的调用会落盘 req/res Body（脱敏）。CPAMP 汇总不含正文。')}
+          {logs?.stats
+            ? ` · 已捕获 ${logs.stats.total} 条（含正文 ${logs.stats.with_detail}）`
+            : ''}
+        </p>
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>{P('时间')}</th>
+                <th>{P('路径')}</th>
+                <th>{P('模型')}</th>
+                <th>HTTP</th>
+                <th>{P('耗时')}</th>
+                <th>IP</th>
+                <th>{P('正文')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(logs?.items || []).map((row) => {
+                const bad = Number(row.status_code) >= 400 || Number(row.type) === 5
+                return (
+                  <tr
+                    key={row.id}
+                    className="diag-row"
+                    title={coarse ? P('单击打开诊断') : P('双击打开诊断')}
+                    onDoubleClick={() => {
+                      if (!coarse) openRow(row)
+                    }}
+                    onClick={() => {
+                      if (coarse) openRow(row)
+                    }}
+                  >
+                    <td>{fmtTime(row.created_at)}</td>
+                    <td>
+                      <code>{row.endpoint || '-'}</code>
+                    </td>
+                    <td>{row.requested_model || row.model_name || '-'}</td>
+                    <td>
+                      <span className={`st-badge ${bad ? 'bad' : 'ok'}`}>{row.status_code || '-'}</span>
+                    </td>
+                    <td>{row.duration_ms != null ? `${row.duration_ms} ms` : '-'}</td>
+                    <td>{row.ip || '-'}</td>
+                    <td>{row.has_detail ? P('有') : P('无')}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        {!loading && !(logs?.items || []).length ? (
+          <p className="empty-state">
+            {P('暂无 BFF 诊断记录。请用任意 API Key 调用 https://openapi.juc114.cn/v1/... 后再刷新。')}
+          </p>
+        ) : null}
       </div>
 
       <div className="panel" style={{ marginTop: 16 }}>
@@ -135,6 +250,8 @@ export function AdminUsagePage({ path }: { path: string }) {
           </table>
         </div>
       </div>
+
+      {diagId ? <DiagnosisModal id={diagId} onClose={() => setDiagId(null)} /> : null}
     </AdminLayout>
   )
 }

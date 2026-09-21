@@ -37,6 +37,8 @@ import {
 import { createSiteContentStore } from './siteContent.js'
 import { createGroupStore } from './groups.js'
 import { createLocalUserStore } from './localUsers.js'
+import { createDiagnosisStore } from './diagnosis.js'
+import { createV1Proxy } from './v1Proxy.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -65,6 +67,9 @@ loadEnvFile(path.join(rootDir, '.env'))
 loadEnvFile(path.join(__dirname, '.env'))
 
 const cpaCfg = loadCpaConfig(process.env)
+const diagnosisStore = createDiagnosisStore(
+  process.env.DIAGNOSIS_PATH || path.join(__dirname, 'data', 'diagnosis'),
+)
 const userKeyStore = createUserKeyStore(
   process.env.USER_KEYS_PATH || path.join(__dirname, 'data', 'user-keys.json'),
 )
@@ -611,6 +616,16 @@ const pub = publicHandlers()
 const app = express()
 app.set('trust proxy', 1)
 app.use(cookieParser(SESSION_SECRET))
+const v1ProxyEnabled = String(process.env.V1_PROXY_ENABLED || '1') !== '0'
+app.use(
+  '/v1',
+  createV1Proxy({
+    billingBaseUrl: cpaCfg.billingBaseUrl,
+    store: diagnosisStore,
+    enabled: v1ProxyEnabled,
+  }),
+)
+
 app.use(express.json({ limit: '1mb' }))
 app.use(express.urlencoded({ extended: false }))
 
@@ -1268,6 +1283,41 @@ app.get('/api/admin/usage', requireAdmin, async (_req, res) => {
   }
 })
 
+app.get('/api/admin/diagnosis/logs', requireAdmin, (req, res) => {
+  try {
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50))
+    const offset = Math.max(0, Number(req.query.offset) || 0)
+    const q = String(req.query.q || '')
+    const result = diagnosisStore.list({ limit, offset, q })
+    res.json(
+      ok({
+        ...result,
+        stats: diagnosisStore.stats(),
+        note: 'Bodies only on detail endpoint. CPAMP usage has no req/res bodies — capture requires /v1 via BFF.',
+      }),
+    )
+  } catch (err) {
+    console.error('[admin] diagnosis list', err?.message || err)
+    res.status(500).json(fail(err?.message || 'diagnosis list failed'))
+  }
+})
+
+app.get('/api/admin/diagnosis/logs/:id', requireAdmin, (req, res) => {
+  try {
+    const rec = diagnosisStore.get(req.params.id)
+    if (!rec) {
+      res.status(404).json(fail('记录不存在'))
+      return
+    }
+    res.json(ok(rec))
+  } catch (err) {
+    console.error('[admin] diagnosis detail', err?.message || err)
+    res.status(500).json(fail(err?.message || 'diagnosis detail failed'))
+  }
+})
+
+
+
 app.get('/api/admin/keys', requireAdmin, async (_req, res) => {
   try {
     if (!cpaCfg.managementKey) {
@@ -1539,6 +1589,7 @@ app.use((req, res) => {
 
 app.listen(PORT, HOST, () => {
   console.log(`[server] listening on http://${HOST}:${PORT}`)
+  console.log(`[server] v1_proxy=${v1ProxyEnabled ? 'on→' + cpaCfg.billingBaseUrl : 'off'} diagnosis=${diagnosisStore.stats().path}`)
   console.log(`[server] redirect_uri=${REDIRECT_URI}`)
   console.log(`[server] client_id=${CLIENT_ID}`)
   console.log(`[server] public_api_base=${cpaCfg.publicApiBaseUrl}`)

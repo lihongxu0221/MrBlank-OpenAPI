@@ -27,7 +27,7 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
 | 组件 | 地址 | 用途 |
 |---|---|---|
 | 本站静态 + BFF | openapi.juc114.cn → `:8787` | Linux.do / 本站账号登录、控制台 `/api` |
-| `/v1` | openapi.juc114.cn/v1 → `:8320` | 对外 OpenAI 兼容调用（CPA） |
+| `/v1` | openapi.juc114.cn/v1 → BFF `:8787` → `:8320` | 对外 OpenAI 兼容调用；BFF 捕获诊断 dump |
 | CPA | `127.0.0.1:8317` | cli-proxy-api；Management Key 管 api-keys |
 | CPAMP | `127.0.0.1:18317`（www） | 用量汇总；Admin Key **仅服务端**；勿改 www UI |
 
@@ -35,6 +35,7 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
 
 - **模型**：BFF `GET /api/token/options` ← CPA `GET /v1/models`（demo key）
 - **密钥**：登录用户创建时 BFF 调 CPA `PUT /v0/management/api-keys`，并在磁盘映射 `linux.do user → key`
+- **请求诊断（管理员）**：`#/admin/usage` 双击行打开「请求诊断详情」；正文来自 BFF `/v1` 落盘（CPAMP 汇总无 body）
 - **用量**：BFF `GET /api/log/self` ← CPAMP `GET /v0/management/usage`，按密钥 sha256 过滤
 - **社区排行 / 号池 / 调用实况 / 服务状态**：BFF 聚合 CPAMP usage + auth-files + CPA `/v1/models` 与 health（短缓存）；无数据时返回空列表
 - **签到 / 兑换**：仍为进程内逻辑（未接 CPA 配额）
@@ -89,7 +90,7 @@ Nginx：
 
 - 静态根目录 → `dist/`
 - `/api/`、`/oauth/` → `http://127.0.0.1:8787`
-- `/v1/` → `http://127.0.0.1:8320`（CPA billing）
+- `/v1/` → `http://127.0.0.1:8787`（BFF 诊断捕获 → CPA billing `:8320`）
 
 ## 路由
 
