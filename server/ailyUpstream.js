@@ -359,18 +359,23 @@ export function createAilyUpstream(deps) {
     const base = deps.getUpstreamBase()
     const upstream_req_body = buildAilyBody(openaiBody, cat.index)
     const upstreamUrl = `${base}/api/v2/chat_stateless`
+    const makeUpstreamHeaders = (token) => ({
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      Authorization: `Bearer ${token}`,
+    })
+    // Snapshot for diagnosis (credentials redacted by diagnosis.record)
+    let upstream_req_headers = makeUpstreamHeaders('(pending)')
 
-    const doFetch = (token) =>
-      fetchUpstream(upstreamUrl, {
+    const doFetch = (token) => {
+      upstream_req_headers = makeUpstreamHeaders(token)
+      return fetchUpstream(upstreamUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: upstream_req_headers,
         body: JSON.stringify(upstream_req_body),
         timeoutMs: 300000,
       })
+    }
 
     let res
     try {
@@ -381,6 +386,7 @@ export function createAilyUpstream(deps) {
         status: e?.status || 502,
         upstream_url: upstreamUrl,
         upstream_req_body,
+        upstream_req_headers,
       }
     }
 
@@ -391,6 +397,7 @@ export function createAilyUpstream(deps) {
         status: res.status,
         upstream_url: upstreamUrl,
         upstream_req_body,
+        upstream_req_headers,
       }
     }
 
@@ -493,6 +500,7 @@ export function createAilyUpstream(deps) {
       routing,
       upstream_url: upstreamUrl,
       upstream_req_body,
+      upstream_req_headers,
     }
   }
 
@@ -562,6 +570,7 @@ export function createAilyUpstream(deps) {
         upstream_req_body: result.upstream_req_body
           ? JSON.stringify(result.upstream_req_body)
           : '',
+        upstream_req_headers: result.upstream_req_headers || {},
       }
     }
 
@@ -607,6 +616,7 @@ export function createAilyUpstream(deps) {
         upstream_req_body: result.upstream_req_body
           ? JSON.stringify(result.upstream_req_body)
           : '',
+        upstream_req_headers: result.upstream_req_headers || {},
       }
     }
 
@@ -644,6 +654,7 @@ export function createAilyUpstream(deps) {
       upstream_req_body: result.upstream_req_body
         ? JSON.stringify(result.upstream_req_body)
         : '',
+      upstream_req_headers: result.upstream_req_headers || {},
     }
   }
 

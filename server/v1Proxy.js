@@ -290,7 +290,7 @@ export function createV1Proxy({
           req_body: reqBodyText,
           res_headers: {},
           res_body: handled?.capturedBody || '',
-          upstream_req_headers: {},
+          upstream_req_headers: handled?.upstream_req_headers || {},
           upstream_req_body: handled?.upstream_req_body || '',
           is_stream: !!handled?.is_stream,
           type: (handled?.status || 200) >= 400 ? 5 : 2,
