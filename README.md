@@ -31,7 +31,7 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
   → https://openapi.juc114.cn/v1
   → nginx → BFF :8787
        ├─ 默认 → CPA billing :8320 → cli-proxy-api :8317
-       └─ 可选（AILY_MODEL_ROUTES 命中）→ aily-openai-adapter :8088
+       └─ 可选（AILY_MODEL_ROUTES 命中）→ 本站内嵌 Aily 桥接（.aily tokens → api.yiyu.pro / api.aily.pro）
 BFF 先做用户组治理（额度 429 / 模型 403 / models 过滤），再落盘诊断（含 route_via）
 站登录 = 本站本地用户 + Linux.do（不用 aily）
 Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/aily
@@ -43,14 +43,14 @@ Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/a
 | `/v1` | openapi.juc114.cn/v1 → BFF `:8787` → `:8320`（默认） | 对外 OpenAI 兼容；CPA 为模型源 |
 | CPA | `127.0.0.1:8317` | cli-proxy-api；Management Key 管 api-keys |
 | CPAMP | `127.0.0.1:18317`（www） | 用量汇总；Admin Key **仅服务端**；勿改 www UI |
-| Aily adapter | `127.0.0.1:8088` / aily.juc114.cn | 上游 Aily token 与 OpenAI 适配；**不是** openapi 对外主入口 |
+| Aily（内嵌） | openapi BFF + `.aily` | 上游凭证与 OpenAI 兼容桥接已并入本站；独立 `:8088` 适配器为可选/遗留 |
 
 控制台能力：
 
 - **模型**：BFF `GET /api/token/options` ← CPA `GET /v1/models`（demo key）
 - **密钥**：登录用户创建时 BFF 调 CPA `PUT /v0/management/api-keys`，并在磁盘映射 `linux.do user → key`
 - **请求诊断（管理员）**：`#/admin/usage` 双击行打开「请求诊断详情」；正文来自 BFF `/v1` 落盘（CPAMP 汇总无 body）
-- **Aily 上游（管理员）**：`#/admin/aily` 管理共享凭证 / 连通测试；可选 `AILY_MODEL_ROUTES` 旁路；见 `docs/PHASE_D_CHECKLIST.md`
+- **Aily 上游（管理员）**：`#/admin/oauth`（Aily 区块）管理共享凭证 / 连通测试；可选 `AILY_MODEL_ROUTES` 走内嵌桥接；见 `docs/PHASE_D_CHECKLIST.md`
 - **用户组治理（Phase E）**：`#/admin/groups` 配置额度/白名单/晋级；BFF `/v1` 对映射密钥强制 429/403；控制台展示剩余与晋级进度；见 `docs/PHASE_E_CHECKLIST.md`
 - **用量**：BFF `GET /api/log/self` ← CPAMP `GET /v0/management/usage`，按密钥 sha256 过滤
 - **社区排行 / 号池 / 调用实况 / 服务状态**：BFF 聚合 CPAMP usage + auth-files + CPA `/v1/models` 与 health（短缓存）；无数据时返回空列表
@@ -75,7 +75,7 @@ Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/a
 | `BOOTSTRAP_ADMIN_USER` / `BOOTSTRAP_ADMIN_PASSWORD` | 首次启动创建本站管理员（若用户名不存在）；勿提交真实密码 |
 | `LOCAL_USERS_PATH` | 本地用户 JSON（默认 `server/data/local-users.json`） |
 | `ADMIN_LOCAL_USERNAMES` | 可选：额外将指定本站用户名视为管理员（本地 `role=admin` 已足够） |
-| `AILY_ADAPTER_URL` | 预留阶段 D 上游转发/诊断（**不用于站登录**） |
+| `AILY_MODEL_ROUTES` | 命中模型走内嵌 Aily 桥接（**不用于站登录**）；`AILY_ADAPTER_*` 为遗留可选 |
 | `SITE_CREDITS_PATH` | 签到/兑换/站点积分 JSON（默认 `server/data/site-credits.json`） |
 | `USER_GROUPS_PATH` | 用户组 JSON（默认 `server/data/user-groups.json`） |
 

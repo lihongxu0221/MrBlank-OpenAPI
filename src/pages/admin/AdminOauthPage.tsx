@@ -16,17 +16,17 @@ import { useToast } from '../../hooks/useStore'
 
 type AilyStatus = {
   auth_file?: string
-  adapter_url?: string
   upstream?: string
   upstream_from_env?: boolean
+  aily_base_url?: string
+  aily_base_from_env?: boolean
   has_access_token?: boolean
   has_refresh_token?: boolean
   access_preview?: string
   refresh_preview?: string
   updated_at?: string | null
-  adapter_api_key_configured?: boolean
-  admin_proxy_configured?: boolean
   model_routes?: string[]
+  bridge?: string
   cpa_note?: string
   cpa_openai_compatibility?:
     | { name: string; base_url: string; prefix?: string; disabled?: boolean; models: { name: string; alias: string }[]; api_key_count: number }[]
@@ -36,7 +36,22 @@ type AilyStatus = {
 
 type TestResult = {
   upstream?: { ok?: boolean; message?: string; user?: string | null; upstream?: string }
-  adapter?: { ok?: boolean; message?: string; sample?: string[]; models?: string[]; latency_ms?: number }
+  models?: {
+    ok?: boolean
+    message?: string
+    sample?: string[]
+    models?: string[]
+    latency_ms?: number
+    upstream?: string
+    embedded?: boolean
+  }
+  adapter?: {
+    ok?: boolean
+    message?: string
+    sample?: string[]
+    models?: string[]
+    latency_ms?: number
+  }
 }
 
 const PRIMARY = ['anthropic', 'codex', 'antigravity', 'kimi', 'xai', 'devin']
@@ -94,7 +109,11 @@ export function AdminOauthPage({ path }: { path: string }) {
     try {
       const d = await api.get<AilyStatus>('/api/admin/aily/status')
       setAilyStatus(d)
-      if (!baseUrl && d.upstream) setBaseUrl(d.upstream)
+      if (d.aily_base_from_env || d.upstream_from_env) {
+        setBaseUrl(d.upstream || '')
+      } else {
+        setBaseUrl(d.aily_base_url || '')
+      }
     } catch (e) {
       setAilyErr((e as Error).message)
     } finally {
@@ -257,7 +276,7 @@ export function AdminOauthPage({ path }: { path: string }) {
   }
 
   async function doClear() {
-    if (!confirm(P('确认清除本机 Aily access/refresh token？这会影响 aily-openai-adapter 上游鉴权。'))) return
+    if (!confirm(P('确认清除本机 Aily access/refresh token？这会影响内嵌 Aily 上游鉴权。'))) return
     setAilyMsg(null)
     setAilyErr(null)
     try {
@@ -387,7 +406,7 @@ export function AdminOauthPage({ path }: { path: string }) {
           <div>
             <h3 style={{ margin: 0 }}>{P('Aily 上游')}</h3>
             <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
-              {P('管理 Aily 凭证与连通测试；客户端仍走 CPA。')}
+              {P('管理 Aily 凭证与连通测试；客户端默认走 CPA，命中路由时用内嵌桥接。')}
               {ailyStatus?.updated_at
                 ? ` · ${P('凭证更新')} ${new Date(ailyStatus.updated_at).toLocaleString('zh-CN', {
                     timeZone: 'Asia/Shanghai',
@@ -411,11 +430,12 @@ export function AdminOauthPage({ path }: { path: string }) {
 
         <ul className="muted" style={{ margin: '0 0 12px', paddingLeft: 18, lineHeight: 1.7, fontSize: 13 }}>
           <li>
-            {P('适配器')} · <code>{ailyStatus?.adapter_url || '—'}</code>
+            {P('桥接')} · {P('内嵌于本站 BFF')}
+            {ailyStatus?.bridge ? ` (${ailyStatus.bridge})` : ''}
           </li>
           <li>
             {P('上游')} · <code>{ailyStatus?.upstream || '—'}</code>
-            {ailyStatus?.upstream_from_env ? ' (env)' : ''}
+            {ailyStatus?.upstream_from_env || ailyStatus?.aily_base_from_env ? ' (env)' : ''}
           </li>
           <li>
             {P('选择性路由')} ·{' '}
@@ -439,9 +459,9 @@ export function AdminOauthPage({ path }: { path: string }) {
             </div>
           </div>
           <div className="stat-card">
-            <div className="label">{P('Adapter API Key')}</div>
+            <div className="label">{P('凭证状态')}</div>
             <div className="value" style={{ fontSize: 16 }}>
-              {ailyStatus?.adapter_api_key_configured ? P('已配置') : P('未配置')}
+              {ailyStatus?.has_access_token ? P('已授权') : P('未配置')}
             </div>
           </div>
           <div className="stat-card">
@@ -462,12 +482,21 @@ export function AdminOauthPage({ path }: { path: string }) {
               </span>
             </p>
             <p style={{ marginBottom: 0 }}>
-              <strong>{P('Adapter /v1/models')}</strong> ·{' '}
-              <span style={{ color: ailyTest.adapter?.ok ? 'var(--success, #16a34a)' : 'var(--error)' }}>
-                {ailyTest.adapter?.message || '—'}
+              <strong>{P('内嵌模型目录')}</strong> ·{' '}
+              <span
+                style={{
+                  color: (ailyTest.models || ailyTest.adapter)?.ok
+                    ? 'var(--success, #16a34a)'
+                    : 'var(--error)',
+                }}
+              >
+                {(ailyTest.models || ailyTest.adapter)?.message || '—'}
               </span>
-              {ailyTest.adapter?.sample?.length ? (
-                <span className="muted"> · {ailyTest.adapter.sample.join(', ')}</span>
+              {(ailyTest.models || ailyTest.adapter)?.sample?.length ? (
+                <span className="muted">
+                  {' '}
+                  · {(ailyTest.models || ailyTest.adapter)!.sample!.join(', ')}
+                </span>
               ) : null}
             </p>
           </div>
@@ -475,27 +504,50 @@ export function AdminOauthPage({ path }: { path: string }) {
 
         <div style={{ marginBottom: 16 }}>
           <h4 style={{ marginTop: 0 }}>{P('邮箱验证码登录')}</h4>
+          <p className="muted" style={{ margin: '0 0 12px', fontSize: 13 }}>
+            {P('用邮箱验证码登录，或直接粘贴已有 Token。中国区 Token 应对 api.yiyu.pro，国际区对 api.aily.pro。')}
+          </p>
           <form className="guest-login-form" onSubmit={doLogin}>
             <div className="field">
-              <label>{P('上游 Base URL')}</label>
-              <input
+              <label>{P('Aily 区域')}</label>
+              <select
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://api.yiyu.pro"
-              />
+                disabled={!!(ailyStatus?.aily_base_from_env || ailyStatus?.upstream_from_env)}
+              >
+                <option value="">{P('自动（按 Token 的 region）')}</option>
+                <option value="https://api.yiyu.pro">{P('中国 · api.yiyu.pro')}</option>
+                <option value="https://api.aily.pro">{P('国际 · api.aily.pro')}</option>
+              </select>
+              <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
+                {ailyStatus?.aily_base_from_env || ailyStatus?.upstream_from_env
+                  ? `${P('当前由 AILY_BASE_URL 指定：')}${ailyStatus?.upstream || ''}`
+                  : `${P('当前上游')} ${ailyStatus?.upstream || P('（未配置）')}；${P('未手动指定时按 Token 的 region 自动选择')}`}
+              </p>
             </div>
             <div className="field">
               <label>{P('邮箱')}</label>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
-            </div>
-            <div className="field">
-              <label>{P('验证码')}</label>
               <div style={{ display: 'flex', gap: 8 }}>
-                <input value={code} onChange={(e) => setCode(e.target.value)} style={{ flex: 1 }} />
+                <input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  type="email"
+                  required
+                  placeholder="you@example.com"
+                  style={{ flex: 1 }}
+                />
                 <button type="button" className="button secondary" onClick={sendCode}>
                   {P('发送验证码')}
                 </button>
               </div>
+            </div>
+            <div className="field">
+              <label>{P('验证码')}</label>
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder={P('6 位验证码')}
+              />
             </div>
             <button type="submit" className="button">
               <LogIn size={14} /> {P('登录并保存 Token')}
@@ -533,7 +585,7 @@ export function AdminOauthPage({ path }: { path: string }) {
           {compatErr ? <p style={{ color: 'var(--error)' }}>{compatErr}</p> : null}
           {!compatErr && (!compat || !compat.length) ? (
             <p className="muted" style={{ fontSize: 13 }}>
-              {P('当前为空。可在修好 Docker 网络后手工配置，或设置 AILY_MODEL_ROUTES 按模型旁路。')}
+              {P('当前为空。默认用 AILY_MODEL_ROUTES 走本站内嵌 Aily 桥接；CPA openai-compatibility 仍可选。')}
             </p>
           ) : null}
           {compat?.length ? (

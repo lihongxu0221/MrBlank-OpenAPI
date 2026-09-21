@@ -81,6 +81,7 @@ import { createLocalUserStore } from './localUsers.js'
 import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy } from './v1Proxy.js'
 import { createAilyManager, loadAilyConfig } from './aily.js'
+import { createAilyUpstream } from './ailyUpstream.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -195,6 +196,15 @@ const HOST = process.env.HOST || '127.0.0.1'
 const SESSION_SECRET = process.env.SESSION_SECRET || ''
 const SITE_ORIGIN = process.env.SITE_ORIGIN || 'https://openapi.juc114.cn'
 const ailyManager = createAilyManager(loadAilyConfig(process.env))
+const ailyUpstream = createAilyUpstream({
+  getAccessToken: () => ailyManager.getAccessToken(),
+  getRefreshToken: () => ailyManager.getRefreshToken(),
+  getUpstreamBase: () => ailyManager.getUpstreamBase(),
+  saveAuth: (patch) => ailyManager.saveAuth(patch),
+  refreshToken: () => ailyManager.refreshToken(),
+})
+ailyManager.attachUpstream(ailyUpstream)
+
 const COOKIE_NAME = 'mrblank_sid'
 const STATE_TTL_MS = 10 * 60 * 1000
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000
@@ -835,9 +845,12 @@ app.use(
     store: diagnosisStore,
     enabled: v1ProxyEnabled,
     ailyRoute: {
+      embedded: true,
+      match: (model) => ailyManager.modelMatches(model),
+      handleV1: (ctx) => ailyUpstream.handleV1(ctx),
+      // legacy optional fields (unused when embedded)
       adapterUrl: ailyManager.cfg.adapterUrl,
       apiKey: ailyManager.cfg.adapterApiKey,
-      match: (model) => ailyManager.modelMatches(model),
     },
     governance: {
       async enforce({ apiKey, model, isModelsList, isConsuming }) {
@@ -1628,9 +1641,10 @@ app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
     const health = await probeServiceHealth(cpaCfg)
     const cpaLatency = Date.now() - started
     const models = await probeCpaModels(cpaCfg)
-    const ailyAdapter = await ailyManager.testAdapterModels().catch((e) => ({
+    const ailyModels = await ailyManager.testEmbeddedModels().catch((e) => ({
       ok: false,
       message: e?.message || String(e),
+      models: [],
     }))
     const ailyStatus = ailyManager.publicStatus()
     const collector = cpaCollector.getStatus()
@@ -1641,12 +1655,10 @@ app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
         billing_base: cpaCfg.billingBaseUrl,
         cpamp_base: cpaCfg.cpampBaseUrl,
         public_api_base: cpaCfg.publicApiBaseUrl,
-        aily_adapter_url: ailyStatus.adapter_url,
         secrets: {
           demo: !!cpaCfg.demoKey,
           management: !!cpaCfg.managementKey,
           admin: !!cpaCfg.adminKey,
-          aily_adapter_key: !!ailyStatus.adapter_api_key_configured,
         },
         health,
         cpa_latency_ms: health?.cpa?.latency_ms ?? cpaLatency,
@@ -1659,14 +1671,16 @@ app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
           error: models.error,
         },
         aily: {
-          ok: !!ailyAdapter.ok,
-          message: ailyAdapter.message || null,
-          model_count: Array.isArray(ailyAdapter.models) ? ailyAdapter.models.length : 0,
-          latency_ms: ailyAdapter.latency_ms || null,
+          ok: !!ailyModels.ok,
+          message: ailyModels.message || null,
+          model_count: Array.isArray(ailyModels.models) ? ailyModels.models.length : 0,
+          latency_ms: ailyModels.latency_ms || null,
           model_routes: ailyStatus.model_routes,
           has_access_token: ailyStatus.has_access_token,
+          upstream: ailyStatus.upstream,
+          bridge: 'embedded',
         },
-        note: 'CPA + billing are primary. CPAMP is optional and not required for pool/accounts/config.',
+        note: 'CPA + billing are primary. Aily uses in-process bridge (shared .aily tokens). Separate :8088 adapter is optional/legacy.',
       }),
     )
   } catch (err) {
@@ -2033,9 +2047,9 @@ app.get('/api/admin/aily/status', requireAdmin, async (_req, res) => {
         architecture: {
           primary: 'client → openapi /v1 → BFF → CPA billing :8320 → CPA',
           aily_credentials: 'shared .aily auth file + upstream APIs (not site login)',
-          selective_route: 'AILY_MODEL_ROUTES → BFF → aily :8088 (optional)',
-          cpa_aily_catalog:
-            'CPA openai-compatibility can point at host aily only if Docker can reach :8088 (currently blocked on 172.17.0.1)',
+          selective_route:
+            'AILY_MODEL_ROUTES → BFF in-process Aily bridge (api.yiyu.pro / api.aily.pro + .aily tokens)',
+          legacy_adapter: 'separate aily-openai-adapter :8088 is optional/legacy; not required',
         },
       }),
     )
@@ -2047,11 +2061,11 @@ app.get('/api/admin/aily/status', requireAdmin, async (_req, res) => {
 
 app.post('/api/admin/aily/test', requireAdmin, async (_req, res) => {
   try {
-    const [upstream, adapter] = await Promise.all([
+    const [upstream, models] = await Promise.all([
       ailyManager.testUpstreamMe().catch((e) => ({ ok: false, message: e?.message || String(e) })),
-      ailyManager.testAdapterModels().catch((e) => ({ ok: false, message: e?.message || String(e) })),
+      ailyManager.testEmbeddedModels(true).catch((e) => ({ ok: false, message: e?.message || String(e) })),
     ])
-    res.json(ok({ upstream, adapter }))
+    res.json(ok({ upstream, models, adapter: models /* alias for older UI */ }))
   } catch (err) {
     res.status(502).json(fail(err?.message || 'aily test failed'))
   }
@@ -2108,10 +2122,19 @@ app.post('/api/admin/aily/logout', requireAdmin, (_req, res) => {
 
 app.get('/api/admin/aily/adapter-models', requireAdmin, async (_req, res) => {
   try {
-    const result = await ailyManager.testAdapterModels()
+    const result = await ailyManager.testEmbeddedModels(true)
     res.status(result.ok ? 200 : 502).json(result.ok ? ok(result) : fail(result.message))
   } catch (err) {
-    res.status(502).json(fail(err?.message || 'adapter models failed'))
+    res.status(502).json(fail(err?.message || 'aily models failed'))
+  }
+})
+
+app.get('/api/admin/aily/models', requireAdmin, async (_req, res) => {
+  try {
+    const result = await ailyManager.testEmbeddedModels(true)
+    res.status(result.ok ? 200 : 502).json(result.ok ? ok(result) : fail(result.message))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'aily models failed'))
   }
 })
 
@@ -3110,6 +3133,6 @@ app.listen(PORT, HOST, () => {
   console.log(
     `[server] site-credits checkin=${creditStore.getConfig().checkin_enabled} grant=${creditStore.getConfig().daily_grant_min}-${creditStore.getConfig().daily_grant_max} codes=${creditStore.listCodes().length}`,
   )
-  console.log(`[server] local_users=${localUserStore.listUsers().length} aily_adapter=${ailyManager.cfg.adapterUrl} aily_routes=${ailyManager.cfg.modelRoutes.length}`)
+  console.log(`[server] local_users=${localUserStore.listUsers().length} aily_bridge=embedded aily_upstream=${ailyManager.getUpstreamBase()} aily_routes=${ailyManager.cfg.modelRoutes.length}`)
   console.log(`[server] cpaCollector=${cpaCollector.getStatus().ok ? 'ok' : 'pending'} siteUsage=${siteUsage.stats().events}`)
 })

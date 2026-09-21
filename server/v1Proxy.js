@@ -1,6 +1,6 @@
 /**
  * Phase C/D/E — BFF /v1 reverse-proxy with diagnosis capture + group governance.
- * Default upstream: CPA billing. Optional Aily adapter route by model allowlist.
+ * Default upstream: CPA billing. Optional in-process Aily bridge by model allowlist.
  * Phase E: per-user rolling quotas (429) and model allowlist (403) when API key maps to a site user.
  */
 import {
@@ -11,14 +11,22 @@ import {
 } from './diagnosis.js'
 
 
-/** Pure CPA vs Aily route selection (testable). */
-export function selectUpstreamRoute({ requestedModel, cpaBase, ailyBase, ailyApiKey, match }) {
+/** Pure CPA vs Aily route selection (testable).
+ * Embedded mode: match alone is enough (in-process bridge uses .aily tokens).
+ * Legacy mode: ailyBase + ailyApiKey still supported if provided without handler.
+ */
+export function selectUpstreamRoute({ requestedModel, cpaBase, ailyBase, ailyApiKey, match, embedded = true }) {
   const cpa = String(cpaBase || '').replace(/\/$/, '')
   const aily = String(ailyBase || '').replace(/\/$/, '')
-  if (aily && ailyApiKey && typeof match === 'function' && match(requestedModel)) {
-    return { routeVia: 'aily', upstreamBase: aily, authOverride: ailyApiKey }
+  if (typeof match === 'function' && match(requestedModel)) {
+    if (embedded) {
+      return { routeVia: 'aily', mode: 'embedded', upstreamBase: '', authOverride: null }
+    }
+    if (aily && ailyApiKey) {
+      return { routeVia: 'aily', mode: 'legacy', upstreamBase: aily, authOverride: ailyApiKey }
+    }
   }
-  return { routeVia: 'cpa', upstreamBase: cpa, authOverride: null }
+  return { routeVia: 'cpa', mode: 'cpa', upstreamBase: cpa, authOverride: null }
 }
 
 
@@ -95,7 +103,7 @@ function isConsumingEndpoint(endpoint, method) {
  * @param {string} opts.billingBaseUrl CPA billing shim
  * @param {object} opts.store diagnosis store
  * @param {boolean} [opts.enabled]
- * @param {{ adapterUrl?: string, apiKey?: string, match?: (model:string)=>boolean }} [opts.ailyRoute]
+ * @param {{ match?: (model:string)=>boolean, handleV1?: Function, embedded?: boolean, adapterUrl?: string, apiKey?: string }} [opts.ailyRoute]
  * @param {{
  *   enforce?: (ctx: object) => Promise<{ allow: true, userId?: string, groupInfo?: object } | { allow: false, status: number, headers?: object, body: object }>,
  *   filterModelsBody?: (ctx: object, bodyText: string) => string,
@@ -111,6 +119,7 @@ export function createV1Proxy({
 }) {
   const cpaBase = String(billingBaseUrl || '').replace(/\/$/, '')
   const ailyBase = String(ailyRoute?.adapterUrl || '').replace(/\/$/, '')
+  const ailyEmbedded = ailyRoute?.embedded !== false
 
   return async function v1Proxy(req, res) {
     if (!enabled) {
@@ -217,10 +226,95 @@ export function createV1Proxy({
       ailyBase,
       ailyApiKey: ailyRoute?.apiKey,
       match: ailyRoute?.match,
+      embedded: ailyEmbedded && typeof ailyRoute?.handleV1 === 'function',
     })
     let routeVia = selected.routeVia
     let upstreamBase = selected.upstreamBase
     let authOverride = selected.authOverride
+
+    // ── Embedded Aily bridge (in-process) ──
+    if (routeVia === 'aily' && selected.mode === 'embedded' && typeof ailyRoute?.handleV1 === 'function') {
+      let handled
+      try {
+        handled = await ailyRoute.handleV1({
+          method: req.method,
+          endpoint,
+          reqBuf,
+          reqBodyText,
+          requestedModel,
+          res,
+        })
+      } catch (err) {
+        const slim = store.record({
+          method: req.method,
+          endpoint,
+          upstream_url: '',
+          status_code: 502,
+          duration_ms: Date.now() - started,
+          ip: clientIp(req),
+          model_name: requestedModel,
+          requested_model: requestedModel,
+          token_name: maskTokenNameFromAuth(req.headers.authorization),
+          req_headers: redactHeaders(req.headers),
+          req_body: reqBodyText,
+          res_headers: {},
+          res_body: String(err?.message || err),
+          content: `aily embedded failed: ${err?.message || err}`,
+          type: 5,
+          is_stream: false,
+          route_via: 'aily',
+          group_id: govCtx.groupInfo?.group?.id || '',
+        })
+        if (!res.headersSent) {
+          res.status(502).json({
+            error: { message: 'aily upstream unavailable', diagnosis_id: slim.id, route_via: 'aily' },
+          })
+        }
+        return
+      }
+      try {
+        store.record({
+          method: req.method,
+          endpoint,
+          upstream_url: handled?.upstream_url || '',
+          status_code: handled?.status || 200,
+          duration_ms: Date.now() - started,
+          ip: clientIp(req),
+          model_name: handled?.model_name || requestedModel,
+          requested_model: requestedModel,
+          token_name: maskTokenNameFromAuth(req.headers.authorization),
+          prompt_tokens: handled?.usage?.prompt_tokens || 0,
+          completion_tokens: handled?.usage?.completion_tokens || 0,
+          cache_tokens: handled?.usage?.cache_tokens || 0,
+          req_headers: redactHeaders(req.headers),
+          req_body: reqBodyText,
+          res_headers: {},
+          res_body: handled?.capturedBody || '',
+          upstream_req_headers: {},
+          upstream_req_body: handled?.upstream_req_body || '',
+          is_stream: !!handled?.is_stream,
+          type: (handled?.status || 200) >= 400 ? 5 : 2,
+          content: (handled?.status || 200) >= 400 ? String(handled?.capturedBody || '').slice(0, 300) : '',
+          route_via: 'aily',
+          group_id: govCtx.groupInfo?.group?.id || '',
+        })
+      } catch (err) {
+        console.error('[diagnosis] record failed', err?.message || err)
+      }
+      if (typeof governance?.onComplete === 'function') {
+        try {
+          governance.onComplete({
+            ...govCtx,
+            status: handled?.status || 200,
+            usage: handled?.usage || {},
+            isConsuming: isConsumingEndpoint(endpoint, req.method),
+          })
+        } catch (err) {
+          console.error('[v1] governance onComplete failed', err?.message || err)
+        }
+      }
+      return
+    }
 
     const pathPart = endpoint.startsWith('/v1') ? endpoint : `/v1${endpoint}`
     const upstreamUrl = `${upstreamBase}${pathPart}`

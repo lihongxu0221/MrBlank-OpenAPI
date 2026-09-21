@@ -1,11 +1,11 @@
 /**
- * Phase D — Aily upstream credential management + optional adapter helpers.
+ * Phase D — Aily upstream credential management + in-process OpenAI bridge.
  *
  * Prefer CPA as /v1 source of truth. This module:
- *  - manages the shared Aily auth file (.aily) used by aily-openai-adapter
+ *  - manages the shared Aily auth file (.aily)
  *  - talks to Aily upstream (api.yiyu.pro / api.aily.pro) for login/refresh/test
- *  - probes the local adapter :8088 /v1 with a server-held API key
- *  - optionally proxies aily admin APIs when AILY_ADAPTER_ADMIN_* is set
+ *  - embeds OpenAI-compatible access (listModels / chat) via createAilyUpstream
+ *  - AILY_ADAPTER_URL / AILY_ADAPTER_API_KEY are legacy no-ops (separate :8088 optional)
  *
  * Site login NEVER uses this module.
  */
@@ -85,7 +85,7 @@ export function loadAilyConfig(env = process.env) {
     path.join(env.HOME || '/home/ubuntu', '.config/aily-project/.aily')
   const adminConfigFile =
     env.AILY_ADMIN_CONFIG_FILE || path.join(path.dirname(authFile), 'admin.json')
-  const adapterUrl = (env.AILY_ADAPTER_URL || 'http://127.0.0.1:8088').replace(/\/$/, '')
+  const adapterUrl = (env.AILY_ADAPTER_URL || '').trim().replace(/\/$/, '')
   const adapterApiKey =
     env.AILY_ADAPTER_API_KEY || readSecretFile(env.AILY_ADAPTER_API_KEY_FILE) || ''
   const adminUser = (env.AILY_ADAPTER_ADMIN_USER || '').trim()
@@ -213,21 +213,27 @@ export function createAilyManager(cfg = loadAilyConfig()) {
   function publicStatus() {
     const auth = readAuth()
     const upstream = getUpstreamBase(auth)
+    const adminCfg = readAdminCfg()
+    const configuredBase = String(adminCfg.aily_base_url || '').trim().replace(/\/+$/, '')
     return {
       auth_file: cfg.authFile,
-      adapter_url: cfg.adapterUrl,
       upstream,
       upstream_from_env: !!cfg.envBase,
+      aily_base_url: cfg.envBase ? '' : configuredBase,
+      aily_base_from_env: !!cfg.envBase,
       has_access_token: !!auth.access_token,
       has_refresh_token: !!auth.refresh_token,
       access_preview: maskToken(auth.access_token),
       refresh_preview: maskToken(auth.refresh_token),
       updated_at: auth.updated_at || null,
+      model_routes: cfg.modelRoutes.slice(),
+      bridge: 'embedded',
+      // legacy fields kept for older UI (soft no-op)
+      adapter_url: cfg.adapterUrl || null,
       adapter_api_key_configured: !!cfg.adapterApiKey,
       admin_proxy_configured: !!(cfg.adminUser && cfg.adminPassword),
-      model_routes: cfg.modelRoutes.slice(),
       cpa_note:
-        'Client /v1 stays on openapi→CPA. Aily models need CPA openai-compatibility (Docker must reach host :8088) OR AILY_MODEL_ROUTES selective BFF routing.',
+        'Client /v1 stays on openapi→CPA. Matching AILY_MODEL_ROUTES uses in-process Aily bridge (shared .aily tokens). Separate aily-openai-adapter :8088 is optional/legacy.',
     }
   }
 
@@ -254,29 +260,23 @@ export function createAilyManager(cfg = loadAilyConfig()) {
     }
   }
 
-  async function testAdapterModels() {
-    if (!cfg.adapterApiKey) {
-      return { ok: false, message: 'AILY_ADAPTER_API_KEY not configured on server', models: [] }
+  /** @type {null | { listModels: Function, handleV1: Function }} */
+  let upstreamBridge = null
+
+  function attachUpstream(bridge) {
+    upstreamBridge = bridge
+  }
+
+  async function testEmbeddedModels(force = false) {
+    if (!upstreamBridge?.listModels) {
+      return { ok: false, message: 'Embedded Aily bridge not attached', models: [], embedded: true }
     }
-    const started = Date.now()
-    const res = await fetchJson(`${cfg.adapterUrl}/v1/models`, {
-      headers: { Authorization: `Bearer ${cfg.adapterApiKey}`, Accept: 'application/json' },
-      timeoutMs: 12000,
-    })
-    const models = Array.isArray(res.json?.data)
-      ? res.json.data.map((m) => m.id).filter(Boolean)
-      : []
-    return {
-      ok: res.ok,
-      status: res.status,
-      latency_ms: Date.now() - started,
-      models,
-      sample: models.slice(0, 12),
-      message: res.ok
-        ? `adapter OK · ${models.length} models`
-        : res.json?.error?.message || res.json?.message || `HTTP ${res.status}`,
-      adapter_url: cfg.adapterUrl,
-    }
+    return upstreamBridge.listModels(force)
+  }
+
+  /** @deprecated use testEmbeddedModels — kept as alias for callers */
+  async function testAdapterModels(force = false) {
+    return testEmbeddedModels(force)
   }
 
   async function sendEmailCode(email, ailyBaseUrl) {
@@ -421,6 +421,13 @@ export function createAilyManager(cfg = loadAilyConfig()) {
     publicStatus,
     testUpstreamMe,
     testAdapterModels,
+    testEmbeddedModels,
+    attachUpstream,
+    getAccessToken: () => normalizeAilyToken(readAuth().access_token),
+    getRefreshToken: () => normalizeAilyToken(readAuth().refresh_token),
+    getUpstreamBase: () => getUpstreamBase(),
+    saveAuth,
+    readAuth,
     sendEmailCode,
     emailCodeLogin,
     saveTokens,
@@ -428,5 +435,8 @@ export function createAilyManager(cfg = loadAilyConfig()) {
     clearTokens,
     proxyAdmin,
     modelMatches: (model) => modelMatchesAilyRoute(model, cfg.modelRoutes),
+    getUpstream() {
+      return upstreamBridge
+    },
   }
 }

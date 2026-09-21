@@ -92,7 +92,7 @@
 **验收清单**：[`docs/PHASE_C_CHECKLIST.md`](./PHASE_C_CHECKLIST.md)（含与 aily 文档的差距说明；CPAMP 无 body）。
 
 ### 阶段 D — Aily ↔ CPA 转发整合 ✅
-1. 架构（CPA-first）：客户端 → openapi `/v1` → BFF → CPA billing；可选 `AILY_MODEL_ROUTES` 旁路 aily `:8088`  
+1. 架构（CPA-first）：客户端 → openapi `/v1` → BFF → CPA billing；可选 `AILY_MODEL_ROUTES` 走内嵌 Aily 桥接  
 2. 管理员 `#/admin/aily`：共享 `.aily` 凭证、邮箱登录/粘贴 token、刷新、连通测试；CPA `openai-compatibility` 只读  
 3. 诊断落盘含 `route_via=cpa|aily`（阶段 C 弹窗可用）  
 4. 未改 www / aily 进程；诚实缺口：CPA Docker 暂无法直连宿主机 `:8088`，完整 aily 目录需手工 openai-compatibility + 网络  
