@@ -123,6 +123,7 @@ function getOrCreateUserStore(user) {
         id: user.id,
         display_name: user.display_name,
         username: user.username,
+        email: user.email || '',
         quota: 0,
         settled_quota: 0,
         used_quota: 0,
@@ -140,6 +141,7 @@ function getOrCreateUserStore(user) {
   } else {
     store.user.display_name = user.display_name
     store.user.username = user.username
+    if (user.email) store.user.email = user.email
   }
   return store
 }
@@ -636,12 +638,13 @@ app.get('/oauth/linuxdo', async (req, res) => {
     const id = ldUser.id
     const username = ldUser.username || String(id)
     const display_name = ldUser.name || username
+    const email = String(ldUser.email || ldUser.primary_email || '').trim()
     if (!id) return failRedirect('userinfo_empty')
 
-    const user = { id, username, display_name }
+    const user = { id, username, display_name, email: email || undefined }
     getOrCreateUserStore(user)
     try {
-      userKeyStore.setProfile(id, { display_name, username })
+      userKeyStore.setProfile(id, { display_name, username, email })
     } catch (e) {
       console.error('[userKeys] setProfile failed', e?.message || e)
     }
@@ -757,6 +760,7 @@ app.post('/api/user/auth/refresh', requireAuth, (req, res) => {
         id: req.auth.user.id,
         display_name: req.auth.user.display_name,
         username: req.auth.user.username,
+        email: req.auth.user.email || '',
       },
     }),
   )
@@ -774,6 +778,7 @@ app.get('/api/user/session', requireAuth, (req, res) => {
         id: req.auth.user.id,
         display_name: req.auth.user.display_name,
         username: req.auth.user.username,
+        email: req.auth.user.email || '',
       },
     }),
   )
@@ -966,8 +971,12 @@ app.get('/api/admin/me', requireAuth, (req, res) => {
         id: req.auth.user.id,
         username: req.auth.user.username,
         display_name: req.auth.user.display_name,
+        email: req.auth.user.email || '',
       },
-      allowlist_configured: adminAllowlist.ids.size > 0 || adminAllowlist.usernames.size > 0,
+      allowlist_configured:
+        adminAllowlist.ids.size > 0 ||
+        adminAllowlist.usernames.size > 0 ||
+        adminAllowlist.emails.size > 0,
     }),
   )
 })
@@ -1194,6 +1203,6 @@ app.listen(PORT, HOST, () => {
     `[server] secrets demo=${cpaCfg.demoKey ? 'yes' : 'no'} mgmt=${cpaCfg.managementKey ? 'yes' : 'no'} admin=${cpaCfg.adminKey ? 'yes' : 'no'}`,
   )
   console.log(
-    `[server] admin allowlist ids=${adminAllowlist.ids.size} usernames=${adminAllowlist.usernames.size}`,
+    `[server] admin allowlist ids=${adminAllowlist.ids.size} usernames=${adminAllowlist.usernames.size} emails=${adminAllowlist.emails.size}`,
   )
 })

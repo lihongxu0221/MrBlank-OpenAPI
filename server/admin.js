@@ -15,16 +15,39 @@ export function loadAdminAllowlist(env = process.env) {
   const usernames = new Set(
     splitList(env.ADMIN_LINUXDO_USERNAMES).map((s) => s.toLowerCase()),
   )
-  return { ids, usernames }
+  const emails = new Set(splitList(env.ADMIN_LINUXDO_EMAILS).map((s) => s.toLowerCase()))
+  return { ids, usernames, emails }
 }
 
+/**
+ * Match Linux.do session user against allowlist.
+ * Checks id, username, display_name/name, and email (case-insensitive for email/name/username).
+ */
 export function isAdminUser(user, allowlist) {
-  if (!user) return false
+  if (!user || !allowlist) return false
+  const hasAny =
+    (allowlist.ids && allowlist.ids.size > 0) ||
+    (allowlist.usernames && allowlist.usernames.size > 0) ||
+    (allowlist.emails && allowlist.emails.size > 0)
+  if (!hasAny) return false
+
   const id = String(user.id ?? '')
-  const username = String(user.username || '').toLowerCase()
-  if (allowlist.ids.size === 0 && allowlist.usernames.size === 0) return false
   if (id && allowlist.ids.has(id)) return true
+
+  const username = String(user.username || '').toLowerCase()
   if (username && allowlist.usernames.has(username)) return true
+
+  const name = String(user.display_name || user.name || '').toLowerCase()
+  if (name && allowlist.usernames.has(name)) return true
+
+  const email = String(user.email || '').toLowerCase()
+  // Emails allowlist may match email, or username/name when those fields carry an address.
+  if (allowlist.emails && allowlist.emails.size) {
+    for (const candidate of [email, username, name]) {
+      if (candidate && allowlist.emails.has(candidate)) return true
+    }
+  }
+
   return false
 }
 
@@ -48,7 +71,8 @@ export function sanitizeConfig(cfg) {
       lower.includes('password') ||
       lower === 'api-keys'
     ) {
-      if (Array.isArray(v)) out[k] = v.map((item) => (typeof item === 'string' ? maskSecretValue(item) : '[redacted]'))
+      if (Array.isArray(v))
+        out[k] = v.map((item) => (typeof item === 'string' ? maskSecretValue(item) : '[redacted]'))
       else if (typeof v === 'string') out[k] = maskSecretValue(v)
       else out[k] = '[redacted]'
       continue
@@ -126,7 +150,6 @@ export function mapAdminAccounts(authFilesPayload) {
       updated_at: f.updated_at || null,
       status_message: f.status_message || '',
       recent_requests: recent.slice(-12),
-      // never expose path / raw auth material
     }
   })
 }

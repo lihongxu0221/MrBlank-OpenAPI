@@ -111,11 +111,15 @@ OpenAPI 站内运营控制台是 **CPAMP 能力的兼容风格子集**（概览 
 在 VPS `.env`（或 systemd 环境）中设置：
 
 ```bash
-# 数字 ID（推荐）与/或用户名，逗号或空格分隔
+# 数字 ID、用户名、和/或邮箱（逗号或空格分隔；邮箱/用户名大小写不敏感）
 ADMIN_LINUXDO_IDS=123456
 ADMIN_LINUXDO_USERNAMES=your_linuxdo_name
+ADMIN_LINUXDO_EMAILS=you@example.com
 ```
 
+匹配 Linux.do OAuth 返回的 `id` / `username` / `name`（display_name）/ `email`。
+
 - 未配置任一项时：**无人**可进入管理接口（403）
+- 仅白名单用户能看见导航「管理」并访问 `#/admin`
 - 浏览器只拿到脱敏数据；`CPAMP_ADMIN_KEY` / `CPA_MANAGEMENT_KEY` 仅服务端读取
 - 完整高级配置仍使用 www CPAMP 面板

@@ -91,6 +91,7 @@ export function createUserKeyStore(filePath) {
         ...(u.profile || {}),
         display_name: profile.display_name || u.profile?.display_name || '',
         username: profile.username || u.profile?.username || '',
+        email: profile.email || u.profile?.email || '',
         updated_at: new Date().toISOString(),
       }
       writeAll(data)
