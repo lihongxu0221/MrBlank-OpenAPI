@@ -1,6 +1,6 @@
 # CPAMP Feature Gap Inventory (MrBlank-OpenAPI)
 
-Updated: 2026-09-21 (Asia/Shanghai) — Wave A implemented  
+Updated: 2026-09-21 (Asia/Shanghai) — Wave A + Wave B implemented  
 Sources: `https://www.juc114.cn/management.html` (SPA bundle), VPS `seakee/cpa-manager-plus:v1.13.1` on `:18317`, CPA `eceasy/cli-proxy-api:v7.3.10` on `:8317`, local `src/pages/admin/*` + `server/index.js`.
 
 **Scope:** inventory + gap only — no feature implementation in this change.
@@ -141,7 +141,7 @@ Compose env: `USAGE_COLLECTOR_MODE=auto`, `USAGE_POLL_INTERVAL_MS=500`, `USAGE_B
 
 | Path | Page |
 |------|------|
-| `/admin` | Overview (CPA health, accounts count, keys count, site-usage totals) |
+| `/admin` | Overview + Wave B dashboard cards (today / 30m RPM·TPM / top models / collector) |
 | `/admin/accounts` | CPA auth-files via collector (read-only list + force refresh) |
 | `/admin/aily` | Aily upstream tokens (site-specific, not CPAMP) |
 | `/admin/keys` | CPA api-keys add/delete |
@@ -155,6 +155,10 @@ Compose env: `USAGE_COLLECTOR_MODE=auto`, `USAGE_POLL_INTERVAL_MS=500`, `USAGE_B
 | `/admin/oauth` | OAuth start/callback/status + aliases (Wave A) |
 | `/admin/plugins` | Plugins list (+ PUT if CPA supports) (Wave A) |
 | `/admin/logs` | CPA file logs viewer (Wave A) |
+| `/admin/monitoring` | Request monitoring analytics (Wave B, site-usage) |
+| `/admin/account-actions` | Auth triage candidates (Wave B lite) |
+| `/admin/model-prices` | Price book + costed usage (Wave B) |
+| `/admin/api-key-aliases` | Hash↔label aliases (Wave B) |
 | `/admin/constellation` | Homepage constellation (site-specific) |
 | `/admin/groups` | User groups (site-specific) |
 | `/admin/credits` | Check-in / redeem (site-specific) |
@@ -162,9 +166,9 @@ Compose env: `USAGE_COLLECTOR_MODE=auto`, `USAGE_POLL_INTERVAL_MS=500`, `USAGE_B
 
 ### 3.2 `/api/admin/*` (relevant to CPAMP parity)
 
-Present: `me`, `overview`, `connection`, `accounts`, `usage` (site-usage), `keys` CRUD, `config` (GET sanitized), `request-log` GET/PUT, `openai-compatibility` GET/PUT, `diagnosis/logs`, plus site-only users/groups/credits/aily/constellation.
+Present: `me`, `overview`, `connection`, `accounts`, `usage` (site-usage), `keys` CRUD, `config` (GET sanitized), `request-log` GET/PUT, `openai-compatibility` GET/PUT, `diagnosis/logs`, Wave A settings/providers/oauth/plugins/logs, Wave B `dashboard/summary`, `monitoring/*`, `account-actions`, `model-prices*`, `api-key-aliases`, plus site-only users/groups/credits/aily/constellation.
 
-Wave A done: settings writers, provider CRUD, auth-file mutate/download/upload, OAuth console, plugins GET, logs viewer. Still absent (Wave B/C): dashboard summary, monitoring analytics, model-prices, account-actions, api-key-aliases, usage import/export, codex-inspection, quota snapshots, raw config.yaml write.
+Wave A done: settings writers, provider CRUD, auth-file mutate/download/upload, OAuth console, plugins GET, logs viewer. Wave B done: dashboard summary, monitoring analytics, header-snapshots (diagnosis-derived), account-actions lite, model-prices + costed usage, api-key-aliases. Still absent (Wave C): usage import/export, codex-inspection, quota snapshots, raw config.yaml write.
 
 Architecture intent (`docs/CPA_KERNEL.md`): CPA Management Key is production kernel; **site-usage** replaces CPAMP global usage for leaderboard/admin; CPAMP optional.
 
@@ -176,10 +180,10 @@ Legend — **Native:** implement via CPA Management API. **Rebuild:** needs site
 
 | Feature | CPAMP how | MrBlank now | Missing | CPA-native vs rebuild |
 |---------|-----------|-------------|---------|------------------------|
-| Dashboard RPM/TPM / today / model cost | `/dashboard` + `dashboard/summary` | Overview counters (site-usage + pool) | Rich 30m RPM/TPM, cost rank, health alert cards | **Rebuild** (site-usage rollups) or optional CPAMP |
+| Dashboard RPM/TPM / today / model cost | `/dashboard` + `dashboard/summary` | Overview counters (site-usage + pool) | ✅ Wave B: `/api/admin/dashboard/summary` + richer `/admin` cards | **Rebuild** done (site-usage) |
 | Basic settings (debug/proxy/logging/ws-auth/force-prefix/usage-stats) | `/settings` field endpoints | Only `request-log` page; config read-only | Writable toggles for remaining fields | **CPA-native** |
 | API keys CRUD | `/api-keys` → CPA `api-keys` | `/admin/keys` | — mostly done | CPA-native (done) |
-| API key aliases | CPAMP `api-key-aliases` | none | Aliases UI + API | **Rebuild** (map hashes↔labels in site DB) |
+| API key aliases | CPAMP `api-key-aliases` | none | ✅ Wave B: `/admin/api-key-aliases` + site JSON store | **Rebuild** done |
 | AI provider keys (gemini/claude/codex/vertex/xai/interactions) | `/ai-providers/*` | none | Full provider CRUD pages | **CPA-native** |
 | OpenAI compatibility | AI providers + compat | `/admin/compat` | — done (JSON editor) | CPA-native (done) |
 | Auth-files list / status | `/accounts` | `/admin/accounts` read-only | Mutate: note/priority/disable/delete/download/upload | **CPA-native** (extend accounts) |
@@ -189,11 +193,11 @@ Legend — **Native:** implement via CPA Management API. **Rebuild:** needs site
 | Plugins + plugin store | `/plugins`, `/plugin-store` | none | List/enable; store optional | **CPA-native** (store = Skip/optional) |
 | Usage analytics (global CPA traffic) | `/usage-analytics` + `/usage` | `/admin/usage` = **site BFF only** | Global CPA-path usage (non-BFF keys) | **Rebuild** collector **or** keep site-only policy |
 | Usage import/export | usage/export + import-sessions | none | Import/export tooling | **Rebuild** |
-| Request monitoring analytics | `/monitoring` POST analytics | Diagnosis logs only | Charts, selectors, search | **Rebuild** |
-| Header snapshots | `monitoring/header-snapshots` | none | Error/quota header feed | **Rebuild** (can sample via CPA if exposed) |
-| Account action candidates | `/monitoring/account-actions` | none | Fail-auth triage workflow | **Rebuild** from diagnosis + auth-files |
+| Request monitoring analytics | `/monitoring` POST analytics | Diagnosis logs only | ✅ Wave B: `/admin/monitoring` + POST analytics | **Rebuild** done (site-usage) |
+| Header snapshots | `monitoring/header-snapshots` | none | ◐ Wave B: diagnosis-derived empty/partial feed | **Rebuild** partial |
+| Account action candidates | `/monitoring/account-actions` | none | ✅ Wave B lite: ignore/resolve dismissals (no auth-file delete) | **Rebuild** partial |
 | Codex inspection | codex-inspection runs | none | Full inspection workflow | **Rebuild**/optional (CPAMP-only) |
-| Model prices + cost | model-prices + usage-summary | none | Price book + costed usage | **Rebuild** (prices file + site-usage) |
+| Model prices + cost | model-prices + usage-summary | none | ✅ Wave B: `model-prices.json` + usage-summary | **Rebuild** done |
 | Config panel (raw YAML) | `/config` + `config.yaml` PUT | sanitized GET only | Structured editors; **avoid raw PUT** | **CPA-native** (prefer field PUTs; YAML write = dangerous) |
 | Logs viewer | `/logs` | none | Tail CPA logs when logging-to-file on | **CPA-native** |
 | System info / updates | `/system`, `/system/updates` | connection page partial | Version/update channel UI | Skip/optional |
@@ -216,19 +220,19 @@ Parity definition for MrBlank: **every CPAMP ops capability needed to run the ga
 6. ✅ Plugins list (GET). PUT `/plugins` returns **404 on CPA v7.3.10** — UI shows 501/note.
 7. ✅ Logs viewer gated on `logging-to-file` (`/api/admin/logs` + `/admin/logs`).
 
-### Phase G2 — Site usage depth (rebuild; replaces CPAMP usage.sqlite for openapi)
+### Phase G2 — Site usage depth (rebuild; replaces CPAMP usage.sqlite for openapi) ✅ DONE (Wave B)
 
-1. Extend `siteUsage.js` rollups: 30m RPM/TPM, today success rate, by-model / by-key / by-account snapshots.
-2. Admin dashboard cards parity with CPAMP `dashboard/summary` using site data.
-3. Optional api-key alias table in site DB (hash → label) for nicer usage UI.
-4. Model price table (JSON/SQLite in BFF) + cost estimate on site-usage summarize.
+1. ✅ Extend `siteUsage.js` rollups: 30m RPM/TPM, today success rate, by-model snapshots.
+2. ✅ Admin dashboard cards parity with CPAMP `dashboard/summary` using site data.
+3. ✅ Optional api-key alias table in site DB (hash → label).
+4. ✅ Model price table (`server/data/model-prices.json`) + costed usage-summary.
 5. Keep policy clear: **leaderboard stays site-issued keys only**; admin may show “BFF-observed” vs “CPA-global” if a second collector is added later.
 
-### Phase G3 — Monitoring / triage (rebuild)
+### Phase G3 — Monitoring / triage (rebuild) ◐ PARTIAL (Wave B)
 
-1. Header / failure feed from BFF diagnosis + auth-files status (account-actions lite).
-2. Account history / window usage only if quota headers are persisted from `/v1` or periodic CPA probes.
-3. Codex inspection: **defer** unless product-required (CPAMP-only complexity).
+1. ✅ Header / failure feed from BFF diagnosis + auth-files status (account-actions lite).
+2. ⏸ Account history / window usage — defer (needs quota header persistence).
+3. ⏸ Codex inspection: **defer** (Wave C / optional).
 
 ### Phase G4 — Optional CPAMP bridge
 
@@ -290,3 +294,12 @@ MrBlank already chose a partial rebuild path via `server/siteUsage.js` + `cpaCol
 - **Safety:** no `config.yaml` PUT; field endpoints only.
 - **Probe incident:** exploratory `DELETE auth-files?name=` and `POST auth-files?name=` with JSON corrupted/removed probe credentials (`262879651@qq.com` deleted; `lihongxu0330@gmail.com` antigravity file overwritten then removed). Remaining: `antigravity-lihongxu0331@gmail.com.json`, `xai-lihongxu0330@hotmail.com.json`. Re-auth via `/admin/oauth` as needed.
 - CPA endpoints **404 on this build:** `qwen-auth-url`, `iflow-auth-url`, `gemini-cli-auth-url`, `PUT /plugins`.
+
+
+## Wave B implementation notes (2026-09-21 CST)
+
+- Rebuild path: `siteUsage.dashboardSummary` / `monitoringAnalytics`; stores `modelPrices.js`, `apiKeyAliases.js`, `accountActions.js`.
+- Admin APIs under `requireAdmin`: `/api/admin/dashboard/summary`, `/monitoring/analytics`, `/monitoring/header-snapshots`, `/account-actions` (+ ignore/resolve), `/model-prices` (+ runtime-models, usage-summary), `/api-key-aliases`.
+- UI: richer `/admin`, `/admin/monitoring`, `/admin/account-actions`, `/admin/model-prices`, `/admin/api-key-aliases`.
+- **Safety unchanged:** no `config.yaml` PUT; no JSON POST to `/auth-files?name=`; account-actions dismissals are local only (never delete auth-files during triage).
+- **Not in Wave B:** Codex inspection, usage import/export, quota-snapshots (Wave C).

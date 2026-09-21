@@ -36,6 +36,10 @@ import { AdminProvidersPage } from './pages/admin/AdminProvidersPage'
 import { AdminOauthPage } from './pages/admin/AdminOauthPage'
 import { AdminPluginsPage } from './pages/admin/AdminPluginsPage'
 import { AdminLogsPage } from './pages/admin/AdminLogsPage'
+import { AdminMonitoringPage } from './pages/admin/AdminMonitoringPage'
+import { AdminAccountActionsPage } from './pages/admin/AdminAccountActionsPage'
+import { AdminModelPricesPage } from './pages/admin/AdminModelPricesPage'
+import { AdminApiKeyAliasesPage } from './pages/admin/AdminApiKeyAliasesPage'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { getSiteConfig, subscribeSiteConfig } from './config/site'
 import { getLanguage } from './i18n'
@@ -136,6 +140,18 @@ export default function App() {
       break
     case '/admin/logs':
       page = <AdminLogsPage path={path} />
+      break
+    case '/admin/monitoring':
+      page = <AdminMonitoringPage path={path} />
+      break
+    case '/admin/account-actions':
+      page = <AdminAccountActionsPage path={path} />
+      break
+    case '/admin/model-prices':
+      page = <AdminModelPricesPage path={path} />
+      break
+    case '/admin/api-key-aliases':
+      page = <AdminApiKeyAliasesPage path={path} />
       break
     case '/admin/constellation':
       page = <AdminConstellationPage path={path} />

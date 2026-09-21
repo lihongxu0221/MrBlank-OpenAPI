@@ -186,18 +186,20 @@ export function createSiteUsageStore(filePath, opts = {}) {
   }
 
   function activityByModel({ period = 'today' } = {}) {
-    /** @type {Map<string, { calls: number, successful: number, tokens: number }>} */
+    /** @type {Map<string, { calls: number, successful: number, tokens: number, prompt_tokens: number, completion_tokens: number }>} */
     const byModel = new Map()
     for (const e of eventsInPeriod(period)) {
       const model = e.model || 'unknown'
       let row = byModel.get(model)
       if (!row) {
-        row = { calls: 0, successful: 0, tokens: 0 }
+        row = { calls: 0, successful: 0, tokens: 0, prompt_tokens: 0, completion_tokens: 0 }
         byModel.set(model, row)
       }
       row.calls += 1
       if (e.success) row.successful += 1
       row.tokens += Number(e.tokens) || 0
+      row.prompt_tokens += Number(e.prompt_tokens) || 0
+      row.completion_tokens += Number(e.completion_tokens) || 0
     }
     return [...byModel.entries()]
       .map(([model, s]) => ({
@@ -205,6 +207,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
         calls: s.calls,
         successful: s.successful,
         tokens: s.tokens,
+        prompt_tokens: s.prompt_tokens,
+        completion_tokens: s.completion_tokens,
         credits: s.tokens,
       }))
       .sort((a, b) => b.calls - a.calls)
@@ -255,8 +259,208 @@ export function createSiteUsageStore(filePath, opts = {}) {
     return { path: filePath, events: store.events.length, dirty }
   }
 
+
+  function eventsBetween(fromMs, toMs) {
+    const from = Number(fromMs) || 0
+    const to = Number(toMs) > 0 ? Number(toMs) : Date.now()
+    return store.events.filter((e) => {
+      const ts = Date.parse(e.ts || '') || 0
+      return ts >= from && ts <= to
+    })
+  }
+
+  function pickBucketMs(spanMs) {
+    if (spanMs <= 2 * 3600000) return 5 * 60000
+    if (spanMs <= 24 * 3600000) return 30 * 60000
+    if (spanMs <= 7 * 86400000) return 2 * 3600000
+    return 6 * 3600000
+  }
+
+  /**
+   * CPAMP-like dashboard summary from site-usage events.
+   * @param {{ todayStartMs?: number }} [opts]
+   */
+  function dashboardSummary({ todayStartMs } = {}) {
+    const now = Date.now()
+    const todayStart = Number(todayStartMs) > 0 ? Number(todayStartMs) : periodStartMs('today')
+    const window30 = now - 30 * 60000
+    let todayReq = 0
+    let todayOk = 0
+    let todayFail = 0
+    let todayTokens = 0
+    let todayPrompt = 0
+    let todayCompletion = 0
+    let m30Req = 0
+    let m30Tokens = 0
+    /** @type {Map<string, { calls: number, tokens: number, success: number }>} */
+    const byModel = new Map()
+
+    for (const e of store.events) {
+      const ts = Date.parse(e.ts || '') || 0
+      if (ts < todayStart && ts < window30) continue
+      const tokens = Number(e.tokens) || 0
+      const model = e.model || 'unknown'
+      if (ts >= todayStart) {
+        todayReq += 1
+        if (e.success) todayOk += 1
+        else todayFail += 1
+        todayTokens += tokens
+        todayPrompt += Number(e.prompt_tokens) || 0
+        todayCompletion += Number(e.completion_tokens) || 0
+        let row = byModel.get(model)
+        if (!row) {
+          row = { calls: 0, tokens: 0, success: 0 }
+          byModel.set(model, row)
+        }
+        row.calls += 1
+        row.tokens += tokens
+        if (e.success) row.success += 1
+      }
+      if (ts >= window30) {
+        m30Req += 1
+        m30Tokens += tokens
+      }
+    }
+
+    const models = [...byModel.entries()].map(([model, s]) => ({
+      model,
+      calls: s.calls,
+      success: s.success,
+      tokens: s.tokens,
+    }))
+    const topByTokens = models.slice().sort((a, b) => b.tokens - a.tokens || b.calls - a.calls).slice(0, 10)
+    const topByCalls = models.slice().sort((a, b) => b.calls - a.calls || b.tokens - a.tokens).slice(0, 10)
+
+    return {
+      source: 'site-usage',
+      generated_at: new Date().toISOString(),
+      today_start_ms: todayStart,
+      today: {
+        requests: todayReq,
+        success: todayOk,
+        failure: todayFail,
+        tokens: todayTokens,
+        prompt_tokens: todayPrompt,
+        completion_tokens: todayCompletion,
+        success_rate: todayReq ? todayOk / todayReq : null,
+      },
+      last_30m: {
+        requests: m30Req,
+        tokens: m30Tokens,
+        rpm: Math.round((m30Req / 30) * 1000) / 1000,
+        tpm: Math.round((m30Tokens / 30) * 1000) / 1000,
+      },
+      top_models_by_tokens: topByTokens,
+      top_models_by_calls: topByCalls,
+    }
+  }
+
+  /**
+   * Time-bucket + per-model series for monitoring page.
+   * @param {{ fromMs: number, toMs: number, bucketMs?: number }} opts
+   */
+  function monitoringAnalytics({ fromMs, toMs, bucketMs } = {}) {
+    const to = Number(toMs) > 0 ? Number(toMs) : Date.now()
+    const from = Number(fromMs) >= 0 ? Number(fromMs) : to - 24 * 3600000
+    const span = Math.max(1, to - from)
+    const bucket = Number(bucketMs) > 0 ? Number(bucketMs) : pickBucketMs(span)
+    const events = eventsBetween(from, to)
+
+    const bucketCount = Math.max(1, Math.ceil(span / bucket))
+    /** @type {{ t: number, requests: number, success: number, failure: number, tokens: number }[]} */
+    const buckets = []
+    for (let i = 0; i < bucketCount; i++) {
+      buckets.push({
+        t: from + i * bucket,
+        requests: 0,
+        success: 0,
+        failure: 0,
+        tokens: 0,
+      })
+    }
+
+    /** @type {Map<string, { requests: number, success: number, failure: number, tokens: number, series: number[] }>} */
+    const byModel = new Map()
+
+    for (const e of events) {
+      const ts = Date.parse(e.ts || '') || 0
+      let idx = Math.floor((ts - from) / bucket)
+      if (idx < 0) idx = 0
+      if (idx >= buckets.length) idx = buckets.length - 1
+      const tokens = Number(e.tokens) || 0
+      buckets[idx].requests += 1
+      buckets[idx].tokens += tokens
+      if (e.success) buckets[idx].success += 1
+      else buckets[idx].failure += 1
+
+      const model = e.model || 'unknown'
+      let row = byModel.get(model)
+      if (!row) {
+        row = {
+          requests: 0,
+          success: 0,
+          failure: 0,
+          tokens: 0,
+          series: new Array(bucketCount).fill(0),
+        }
+        byModel.set(model, row)
+      }
+      row.requests += 1
+      row.tokens += tokens
+      row.series[idx] += 1
+      if (e.success) row.success += 1
+      else row.failure += 1
+    }
+
+    const models = [...byModel.entries()]
+      .map(([model, s]) => ({
+        model,
+        requests: s.requests,
+        success: s.success,
+        failure: s.failure,
+        tokens: s.tokens,
+        series: s.series,
+      }))
+      .sort((a, b) => b.requests - a.requests || b.tokens - a.tokens)
+
+    return {
+      source: 'site-usage',
+      from_ms: from,
+      to_ms: to,
+      bucket_ms: bucket,
+      totals: {
+        requests: events.length,
+        success: events.filter((e) => e.success).length,
+        failure: events.filter((e) => !e.success).length,
+        tokens: events.reduce((s, e) => s + (Number(e.tokens) || 0), 0),
+      },
+      buckets,
+      by_model: models,
+    }
+  }
+
+  function distinctModels({ period = 'all' } = {}) {
+    const set = new Set()
+    for (const e of eventsInPeriod(period)) {
+      if (e.model) set.add(String(e.model))
+    }
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }
+
   prune()
   if (dirty) flush()
 
-  return { recordEvent, leaderboard, activityByModel, summarize, stats, flush }
+  return {
+    recordEvent,
+    leaderboard,
+    activityByModel,
+    summarize,
+    stats,
+    flush,
+    eventsBetween,
+    dashboardSummary,
+    monitoringAnalytics,
+    distinctModels,
+    periodStartMs,
+  }
 }

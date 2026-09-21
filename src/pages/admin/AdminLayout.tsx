@@ -19,6 +19,10 @@ import {
   LogIn,
   Puzzle,
   FileText,
+  LineChart,
+  AlertTriangle,
+  DollarSign,
+  Tags,
 } from 'lucide-react'
 import { P } from '../../i18n'
 import { navigate, navigateWithQuery } from '../../router/hash'
@@ -32,6 +36,10 @@ const ITEMS = [
   { path: '/admin/oauth', label: 'OAuth 登录', icon: LogIn },
   { path: '/admin/plugins', label: '插件管理', icon: Puzzle },
   { path: '/admin/logs', label: '日志查看', icon: FileText },
+  { path: '/admin/monitoring', label: '请求监控', icon: LineChart },
+  { path: '/admin/account-actions', label: '认证异常', icon: AlertTriangle },
+  { path: '/admin/model-prices', label: '模型价格', icon: DollarSign },
+  { path: '/admin/api-key-aliases', label: '密钥别名', icon: Tags },
   { path: '/admin/aily', label: 'Aily 上游', icon: Cloud },
   { path: '/admin/keys', label: 'CPA 密钥', icon: KeyRound },
   { path: '/admin/usage', label: '用量监控', icon: Activity },

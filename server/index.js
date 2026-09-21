@@ -58,6 +58,9 @@ import {
   fetchCpaLogs,
 } from './cpa.js'
 import { createSiteUsageStore } from './siteUsage.js'
+import { createModelPricesStore } from './modelPrices.js'
+import { createApiKeyAliasesStore } from './apiKeyAliases.js'
+import { createAccountActionsStore } from './accountActions.js'
 import { createCpaCollector } from './cpaCollector.js'
 import { createUserKeyStore } from './userKeys.js'
 import {
@@ -112,6 +115,15 @@ const userKeyStore = createUserKeyStore(
 )
 const siteUsage = createSiteUsageStore(
   process.env.SITE_USAGE_PATH || path.join(__dirname, 'data', 'site-usage.json'),
+)
+const modelPrices = createModelPricesStore(
+  process.env.MODEL_PRICES_PATH || path.join(__dirname, 'data', 'model-prices.json'),
+)
+const apiKeyAliases = createApiKeyAliasesStore(
+  process.env.API_KEY_ALIASES_PATH || path.join(__dirname, 'data', 'api-key-aliases.json'),
+)
+const accountActions = createAccountActionsStore(
+  process.env.ACCOUNT_ACTIONS_PATH || path.join(__dirname, 'data', 'account-actions.json'),
 )
 const cpaCollector = createCpaCollector({
   intervalMs: Number(process.env.CPA_COLLECTOR_INTERVAL_MS || 20_000) || 20_000,
@@ -2688,6 +2700,205 @@ app.get('/api/admin/logs', requireAdmin, async (req, res) => {
     res.status(status).json(fail(err?.message || 'logs failed', err?.code))
   }
 })
+
+
+// ——— Wave B: dashboard / monitoring / model-prices / aliases / account-actions ———
+
+app.get('/api/admin/dashboard/summary', requireAdmin, (req, res) => {
+  try {
+    const todayStartMs = req.query?.today_start_ms != null ? Number(req.query.today_start_ms) : undefined
+    const summary = siteUsage.dashboardSummary({ todayStartMs })
+    const collector = cpaCollector.getStatus()
+    res.json(
+      ok({
+        ...summary,
+        collector: {
+          ok: !!collector.ok,
+          lastSync: collector.lastSync || null,
+          error: collector.error || null,
+          latency_ms: collector.latency_ms ?? null,
+          account_count: collector.account_count ?? 0,
+          interval_ms: collector.interval_ms ?? null,
+        },
+      }),
+    )
+  } catch (err) {
+    console.error('[admin] dashboard/summary', err?.message || err)
+    res.status(500).json(fail(err?.message || 'dashboard summary failed'))
+  }
+})
+
+app.post('/api/admin/monitoring/analytics', requireAdmin, (req, res) => {
+  try {
+    const body = req.body || {}
+    const fromMs = body.from_ms != null ? Number(body.from_ms) : Number(req.query?.from_ms)
+    const toMs = body.to_ms != null ? Number(body.to_ms) : Number(req.query?.to_ms)
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+      res.status(400).json(fail('from_ms and to_ms required'))
+      return
+    }
+    if (toMs < fromMs) {
+      res.status(400).json(fail('to_ms must be >= from_ms'))
+      return
+    }
+    const bucketMs = body.bucket_ms != null ? Number(body.bucket_ms) : undefined
+    const analytics = siteUsage.monitoringAnalytics({ fromMs, toMs, bucketMs })
+    res.json(ok(analytics))
+  } catch (err) {
+    console.error('[admin] monitoring/analytics', err?.message || err)
+    res.status(500).json(fail(err?.message || 'monitoring analytics failed'))
+  }
+})
+
+app.get('/api/admin/monitoring/header-snapshots', requireAdmin, (req, res) => {
+  try {
+    const limit = Math.min(100, Math.max(1, Number(req.query?.limit) || 30))
+    const diag = diagnosisStore.list({ limit: 80 })
+    const items = (diag.items || [])
+      .filter((r) => {
+        const code = Number(r.status_code) || 0
+        return code >= 400 || code === 0
+      })
+      .slice(0, limit)
+      .map((r) => ({
+        id: r.id,
+        created_at: r.created_at || null,
+        model: r.model_name || r.requested_model || null,
+        endpoint: r.endpoint || null,
+        status_code: r.status_code ?? null,
+        content: r.content || null,
+        source: 'bff:diagnosis',
+      }))
+    res.json(
+      ok({
+        items,
+        total: items.length,
+        note:
+          items.length === 0
+            ? 'No header/quota snapshots persisted yet. Showing empty list (CPA has no header-snapshots API). Diagnosis errors appear here when present.'
+            : 'Derived from BFF diagnosis failures (CPA has no /monitoring/header-snapshots).',
+      }),
+    )
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'header-snapshots failed'))
+  }
+})
+
+app.get('/api/admin/account-actions', requireAdmin, async (req, res) => {
+  try {
+    const includeDismissed = String(req.query?.include_dismissed || '') === '1'
+    let accounts = []
+    try {
+      const payload = cpaCollector.getAuthFilesPayload()
+      if (payload) accounts = mapAdminAccounts(payload)
+      else if (cpaCfg.managementKey) {
+        const fresh = await fetchCpaAuthFilesCached(cpaCfg).catch(() => null)
+        if (fresh) accounts = mapAdminAccounts(fresh)
+      }
+    } catch {
+      accounts = []
+    }
+    const diag = diagnosisStore.list({ limit: 100 })
+    const data = accountActions.listCandidates({
+      accounts,
+      diagnosisItems: diag.items || [],
+      includeDismissed,
+    })
+    res.json(ok(data))
+  } catch (err) {
+    console.error('[admin] account-actions', err?.message || err)
+    res.status(500).json(fail(err?.message || 'account-actions failed'))
+  }
+})
+
+app.post('/api/admin/account-actions/:id/ignore', requireAdmin, (req, res) => {
+  try {
+    const d = accountActions.dismiss(req.params.id, 'ignore')
+    res.json(ok({ id: req.params.id, dismissal: d }))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'ignore failed'))
+  }
+})
+
+app.post('/api/admin/account-actions/:id/resolve', requireAdmin, (req, res) => {
+  try {
+    const d = accountActions.dismiss(req.params.id, 'resolve')
+    res.json(ok({ id: req.params.id, dismissal: d }))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'resolve failed'))
+  }
+})
+
+app.get('/api/admin/model-prices', requireAdmin, (_req, res) => {
+  try {
+    res.json(ok(modelPrices.getPrices()))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'model-prices failed'))
+  }
+})
+
+app.put('/api/admin/model-prices', requireAdmin, (req, res) => {
+  try {
+    const body = req.body || {}
+    const items = Array.isArray(body) ? body : body.prices
+    const data = modelPrices.putPrices(items)
+    res.json(ok(data))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'model-prices put failed'))
+  }
+})
+
+app.get('/api/admin/model-prices/runtime-models', requireAdmin, (req, res) => {
+  try {
+    const period = String(req.query?.period || 'all')
+    const models = siteUsage.distinctModels({ period })
+    res.json(ok({ models, period, source: 'site-usage' }))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'runtime-models failed'))
+  }
+})
+
+app.get('/api/admin/model-prices/usage-summary', requireAdmin, (req, res) => {
+  try {
+    const period = String(req.query?.period || 'today')
+    const data = modelPrices.usageSummaryCosted(siteUsage, { period })
+    res.json(ok(data))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'usage-summary failed'))
+  }
+})
+
+app.get('/api/admin/api-key-aliases', requireAdmin, (_req, res) => {
+  try {
+    res.json(ok({ items: apiKeyAliases.list() }))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'aliases failed'))
+  }
+})
+
+app.put('/api/admin/api-key-aliases', requireAdmin, (req, res) => {
+  try {
+    const body = req.body || {}
+    const hash = body.hash || body.key_hash
+    const label = body.label
+    const note = body.note || ''
+    const item = apiKeyAliases.put(hash, label, note)
+    res.json(ok({ item, items: apiKeyAliases.list() }))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'alias put failed'))
+  }
+})
+
+app.delete('/api/admin/api-key-aliases', requireAdmin, (req, res) => {
+  try {
+    const hash = req.body?.hash || req.body?.key_hash || req.query?.hash
+    const data = apiKeyAliases.remove(hash)
+    res.json(ok({ ...data, items: apiKeyAliases.list() }))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'alias delete failed'))
+  }
+})
+
 
 
 app.use((req, res) => {
