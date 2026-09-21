@@ -30,11 +30,15 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
 浏览器 / SDK
   → https://openapi.juc114.cn/v1
   → nginx → BFF :8787
-       ├─ 默认 → CPA billing :8320 → cli-proxy-api :8317
-       └─ 可选（AILY_MODEL_ROUTES 命中）→ 本站内嵌 Aily 桥接（.aily tokens → api.yiyu.pro / api.aily.pro）
+       ├─ 默认（裸模型名）→ CPA billing :8320 → cli-proxy-api :8317
+       └─ Aily 内嵌桥接（.aily / compat）当且仅当：
+            · model 以 aily/ 开头（广场列出的非冲突 id，如 aily/glm-5.3），或
+            · AILY_MODEL_ROUTES 环境模式命中（可选覆盖裸名），或
+            · Grok/OpenAI 账号白名单/映射命中
 BFF 先做用户组治理（额度 429 / 模型 403 / models 过滤），再落盘诊断（含 route_via）
 站登录 = 本站本地用户 + Linux.do（不用 aily）
-Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/aily
+Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/oauth
+同名消歧：CPA 用原名；Aily 对外用 aily/ 前缀（站点 routing 白名单不再抢占裸名）
 ```
 
 | 组件 | 地址 | 用途 |
@@ -47,7 +51,7 @@ Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/a
 
 控制台能力：
 
-- **模型**：BFF `GET /api/token/options` ← CPA `GET /v1/models`（demo key）
+- **模型**：BFF `GET /api/token/options` ← CPA `GET /v1/models` + 可选 Aily（`aily/` 前缀 id，`provider: Aily`）
 - **密钥**：登录用户创建时 BFF 调 CPA `PUT /v0/management/api-keys`，并在磁盘映射 `linux.do user → key`
 - **请求诊断（管理员）**：`#/admin/usage` 双击行打开「请求诊断详情」；正文来自 BFF `/v1` 落盘（CPAMP 汇总无 body）
 - **Aily 上游（管理员）**：`#/admin/oauth`（Aily 区块）管理共享凭证 / 连通测试；可选 `AILY_MODEL_ROUTES` 走内嵌桥接；见 `docs/PHASE_D_CHECKLIST.md`
@@ -75,7 +79,7 @@ Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/a
 | `BOOTSTRAP_ADMIN_USER` / `BOOTSTRAP_ADMIN_PASSWORD` | 首次启动创建本站管理员（若用户名不存在）；勿提交真实密码 |
 | `LOCAL_USERS_PATH` | 本地用户 JSON（默认 `server/data/local-users.json`） |
 | `ADMIN_LOCAL_USERNAMES` | 可选：额外将指定本站用户名视为管理员（本地 `role=admin` 已足够） |
-| `AILY_MODEL_ROUTES` | 命中模型走内嵌 Aily 桥接（**不用于站登录**）；`AILY_ADAPTER_*` 为遗留可选 |
+| `AILY_MODEL_ROUTES` | 可选：裸模型名命中时走内嵌 Aily（覆盖「裸名默认 CPA」）；广场 Aily 模型仍用 `aily/` 前缀；**不用于站登录**；`AILY_ADAPTER_*` 为遗留可选 |
 | `SITE_CREDITS_PATH` | 签到/兑换/站点积分 JSON（默认 `server/data/site-credits.json`） |
 | `USER_GROUPS_PATH` | 用户组 JSON（默认 `server/data/user-groups.json`） |
 

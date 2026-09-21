@@ -82,7 +82,7 @@ import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy } from './v1Proxy.js'
 import { createAilyManager, loadAilyConfig } from './aily.js'
 import { createAilyUpstream } from './ailyUpstream.js'
-import { createAilyModelRoutingStore, publicModelList, normalizeModelRouting, exposedModelNames } from './ailyModelRouting.js'
+import { createAilyModelRoutingStore, publicModelList, normalizeModelRouting, exposedModelNames, isAilyPrefixed, stripAilyPrefix } from './ailyModelRouting.js'
 import { createAilyAccountsStore } from './ailyAccounts.js'
 import { createAilyCompat } from './ailyCompat.js'
 import { createAilyOauth } from './ailyOauth.js'
@@ -859,14 +859,18 @@ app.use(
     enabled: v1ProxyEnabled,
     ailyRoute: {
       embedded: true,
-      // AILY_MODEL_ROUTES OR enabled grok/openai account whitelist/mapping/catalog
+      // Prefer CPA for bare ids. Aily only when:
+      //  - model starts with aily/  (plaza / explicit), OR
+      //  - AILY_MODEL_ROUTES env patterns, OR
+      //  - ailyCompat (Grok/OpenAI accounts)
+      // Site whitelist/mappings alone must NOT steal bare ids from CPA.
       match: (model) => {
-        if (ailyManager.modelMatches(model)) return true
-        if (ailyCompat.matchSync(model)) return true
-        // Site aily-model-routing exposed names (whitelist + mapping.from)
-        const exposed = exposedModelNames(ailyModelRouting.get())
         const m = String(model || '').trim()
-        return !!(exposed.length && m && exposed.includes(m))
+        if (!m) return false
+        if (isAilyPrefixed(m)) return true
+        if (ailyManager.modelMatches(m)) return true
+        if (ailyCompat.matchSync(m)) return true
+        return false
       },
       handleV1: (ctx) => ailyUpstream.handleV1(ctx),
       // legacy optional fields (unused when embedded)
@@ -1458,7 +1462,8 @@ app.get('/api/token/options', requireAuth, async (req, res) => {
       console.error('[cpa] models failed', cpaErr)
     }
 
-    // Merge Aily public models when site routing or AILY_MODEL_ROUTES is configured
+    // Merge Aily public models when site routing or AILY_MODEL_ROUTES is configured.
+    // Public ids are always aily/{name} so they never collide with CPA bare ids.
     let ailyModels = []
     try {
       const routing = ailyModelRouting.get()
@@ -1477,15 +1482,18 @@ app.get('/api/token/options', requireAuth, async (req, res) => {
         const sourceList =
           catalogList.length > 0
             ? catalogList
-            : exposed.map((id) => ({ id, object: 'model', owned_by: 'aily', name: id }))
+            : exposed.map((id) => ({ id, object: 'model', owned_by: 'aily', name: stripAilyPrefix(id) || id }))
         let pub = publicModelList(sourceList, routing)
-        // If only env routes (no whitelist/mappings), filter catalog by env patterns
+        // If only env routes (no whitelist/mappings), filter catalog by env patterns (bare or prefixed)
         if (!exposed.length && envRoutes.length) {
-          pub = pub.filter((m) => ailyManager.modelMatches(m.id))
+          pub = pub.filter(
+            (m) =>
+              ailyManager.modelMatches(m.id) || ailyManager.modelMatches(stripAilyPrefix(m.id)),
+          )
         }
         ailyModels = pub.map((m) => ({
-          id: m.id,
-          name: m.name || m.id,
+          id: m.id, // already aily/...
+          name: m.name || stripAilyPrefix(m.id) || m.id,
           provider: 'Aily',
           kind: 'text',
           text_price: 0,
@@ -1497,7 +1505,7 @@ app.get('/api/token/options', requireAuth, async (req, res) => {
       console.warn('[aily] plaza merge failed:', e?.message || e)
     }
 
-    // Dedupe by id: CPA first, then add Aily-only ids (do not overwrite CPA rows)
+    // Dedupe by id: CPA first (bare), then Aily prefixed ids (never overwrite CPA)
     const byId = new Map()
     for (const m of cpaModels || []) {
       const id = String(m?.id || m?.name || '').trim()

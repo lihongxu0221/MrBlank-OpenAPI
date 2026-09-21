@@ -6,7 +6,7 @@
 
 | 能力 | 位置 | 对应设计文档 |
 |------|------|----------------|
-| 内嵌 Aily 桥（chat + models catalog） | `server/ailyUpstream.js`，由 `AILY_MODEL_ROUTES` **或** 站点 `aily-model-routing` 暴露名选择性命中 | §6.2、§8.1 chat/models |
+| 内嵌 Aily 桥（chat + models catalog） | `server/ailyUpstream.js`；命中：`aily/` 前缀 / `AILY_MODEL_ROUTES` / compat；站点 routing 只做白名单映射，**不再**用裸名抢 CPA | §6.2、§8.1 chat/models |
 | Aily 凭证管理 | `server/aily.js` + `/api/admin/aily/*` + `AdminOauthPage` | §7.3、§6.7 |
 | 模型白名单 / 映射 / 同步 | `server/ailyModelRouting.js` → `server/data/aily-model-routing.json` | §6.3 |
 | Admin GET/PUT `/api/admin/aily/models` | `server/index.js` | §8.2 |
@@ -16,7 +16,7 @@
 | **上游账号 Grok/OpenAI CRUD + test + OAuth start/status** | `server/ailyAccounts.js` + `ailyCompat.js` + `ailyOauth.js`；Admin `/api/admin/aily/accounts*`、`/api/admin/aily/oauth/*`；`AdminOauthPage`「上游账号」面板 | §6.3–6.4、§8.2 |
 | **pickProviderRoute + runOpenAICompatibleTurn / Codex** | `server/ailyCompat.js`；命中账号白名单/映射/目录时 `/v1` 不经 CPA | §6.3、relay |
 | **`/v1/responses`、`/v1/completions` 内嵌路径** | `ailyUpstream.handleV1`（仅 Aily/compat 命中时；未命中仍走 CPA 代理） | §8.1 |
-| **用户「模型广场」合并 Aily** | `GET /api/token/options` 合并 CPA + 站点 routing 暴露名 / 目录；`ModelsPage` 文案 | 用户控制台 |
+| **用户「模型广场」合并 Aily** | `GET /api/token/options` 合并 CPA + Aily（对外 id=`aily/{name}`）；`ModelsPage` 文案 | 用户控制台 |
 
 ## 未做 / 残留
 
@@ -39,15 +39,19 @@
 
 命中以下任一则走内嵌桥（Aily 或 compat），否则 **CPA 不变**：
 
-1. `AILY_MODEL_ROUTES` 环境模式匹配  
-2. 站点 `aily-model-routing.json` 的 whitelist / mapping.from 暴露名  
+1. 请求 model 以 `aily/` 开头（广场对外 id；去掉前缀后再做 mapping / 上游 resolve）  
+2. `AILY_MODEL_ROUTES` 环境模式匹配（可选：让裸名也走 Aily）  
 3. 已启用 grok/openai 账号的 whitelist / mapping /（空暴露时）缓存 catalog  
+
+**不再**仅因站点 `aily-model-routing.json` 白名单/映射出现裸名（如 `glm-5.3`）就劫持 CPA。
+
+广场合并：Aily 行的 API id 一律 `aily/{upstream或映射名}`，`provider: 'Aily'`；显示名可友好。
 
 ## 验证建议
 
 1. `/admin/overview`、`/admin/users`、`/admin/usage` 未登录仍 401  
-2. 未配置路由/账号时 `/v1` 仍只走 CPA  
-3. 配置了 mappings 后：用户控制台「模型广场」可见 Aily 模型；对应 model 的 chat/responses/completions 走内嵌  
+2. 裸名 `glm-5.3` → CPA；`aily/glm-5.3` → Aily（需 token）；`AILY_MODEL_ROUTES` 可覆盖裸名  
+3. 配置了 mappings 后：广场可见 `aily/...`；Admin「模型限制」仍管理上游裸 id  
 4. Admin → OAuth →「上游账号」可增删测 Grok/OpenAI  
 
-修订：2026-09-21（Asia/Shanghai）
+修订：2026-09-21（Asia/Shanghai）· aily/ 前缀消歧

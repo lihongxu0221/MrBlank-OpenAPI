@@ -65,3 +65,42 @@ describe('v1Proxy route selection (cpa vs aily embedded)', () => {
     assert.equal(modelMatchesAilyRoute('', ['aily-*']), false)
   })
 })
+
+describe('aily/ prefix vs bare CPA (disambiguation)', () => {
+  it('bare id does not match site whitelist-style matcher alone', () => {
+    // Simulates index.js match: prefix / env / compat only — not exposed names
+    const envPatterns = []
+    const match = (model) => {
+      const m = String(model || '').trim()
+      if (!m) return false
+      if (m.startsWith('aily/')) return true
+      if (modelMatchesAilyRoute(m, envPatterns)) return true
+      return false
+    }
+    const bare = selectUpstreamRoute({
+      requestedModel: 'glm-5.3',
+      cpaBase: 'http://cpa:8320',
+      match,
+      embedded: true,
+    })
+    assert.equal(bare.routeVia, 'cpa')
+    const pref = selectUpstreamRoute({
+      requestedModel: 'aily/glm-5.3',
+      cpaBase: 'http://cpa:8320',
+      match,
+      embedded: true,
+    })
+    assert.equal(pref.routeVia, 'aily')
+  })
+
+  it('AILY_MODEL_ROUTES still overrides bare id', () => {
+    const match = (model) => modelMatchesAilyRoute(model, ['glm-5.3'])
+    const r = selectUpstreamRoute({
+      requestedModel: 'glm-5.3',
+      cpaBase: 'http://cpa:8320',
+      match,
+      embedded: true,
+    })
+    assert.equal(r.routeVia, 'aily')
+  })
+})

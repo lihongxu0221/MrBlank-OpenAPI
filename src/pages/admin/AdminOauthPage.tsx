@@ -861,7 +861,7 @@ export function AdminOauthPage({ path }: { path: string }) {
           <div style={{ marginBottom: 16, padding: 14, border: '1px solid var(--border, #e5e7eb)', borderRadius: 10 }}>
             <h4 style={{ marginTop: 0 }}>{P('模型限制（可选）')}</h4>
             <p className="muted" style={{ margin: '0 0 12px', fontSize: 13 }}>
-              {P('/v1/models（命中 Aily 路由时）只返回白名单勾选的名称，以及映射左侧的请求名。两者都空才不限制。不影响未命中路由的 CPA 流量。')}
+              {P('此处管理上游目录 id（可与 CPA 同名）。广场 / 调用请用 aily/ 前缀（如 aily/glm-5.3）；裸名默认走 CPA。可选 AILY_MODEL_ROUTES 覆盖裸名。白名单与映射都空才不限制。')}
             </p>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <button
