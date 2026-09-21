@@ -64,17 +64,19 @@ Client Bearer sk-mrblank-<userId>-…
 - `src/pages/admin/AdminGroupsPage.tsx` — 文案  
 - `docs/ROADMAP.md`、本清单、README  
 
-## Live smoke (fill after deploy)
+## Live smoke (2026-09-21 Asia/Shanghai)
 
 | Check | Result |
 |-------|--------|
-| Deploy + `systemctl restart mrblank-openapi` | |
-| `GET /api/status` credit_unit | |
-| Admin save groups | |
-| Mapped key models filter | |
-| Mapped key disallowed model → 403 | |
-| Quota exhaust → 429 | |
-| Console Overview group panel | |
-| openapi / aily / www untouched | |
+| Deploy `5ed671a` + `systemctl restart mrblank-openapi` | ✅ active；v1_proxy on→:8320 |
+| `GET /api/status` credit_unit | ✅ `quota_per_unit=500000`；`credit_unit.note` 非空 |
+| Admin save groups + member assign | ✅ `/api/admin/groups` PUT 200 |
+| Mapped key `GET /v1/models`（白名单仅 `__phase_e_deny__`） | ✅ `data` 空列表（过滤生效） |
+| Mapped key disallowed model | ✅ **403** `x-mrblank-governance: model_not_allowed` |
+| `window_5h=0` 后 chat | ✅ **429** `quota_5h_exhausted`；`retry-after: 300` |
+| `GET /api/user/group` | ✅ group / remaining / progress / credit_unit |
+| CPA demo 密钥（未映射） | ✅ `/v1/models` 200；12 models（旁路站点组限制） |
+| openapi / aily / www | ✅ 200 / 302 / 307（未改进程） |
+| 恢复默认 groups | ✅ newcomer `model_ids=[]`，5h=1000000 |
 
 How to verify UI: login → https://openapi.juc114.cn/#/console （用户组卡片）；admin → https://openapi.juc114.cn/#/admin/groups 。
