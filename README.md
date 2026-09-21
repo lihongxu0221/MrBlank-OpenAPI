@@ -36,7 +36,8 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
 - **模型**：BFF `GET /api/token/options` ← CPA `GET /v1/models`（demo key）
 - **密钥**：登录用户创建时 BFF 调 CPA `PUT /v0/management/api-keys`，并在磁盘映射 `linux.do user → key`
 - **用量**：BFF `GET /api/log/self` ← CPAMP `GET /v0/management/usage`，按密钥 sha256 过滤
-- **签到 / 兑换 / 排行等**：仍为进程内 mock（未接 CPA 配额）
+- **社区排行 / 号池 / 调用实况 / 服务状态**：BFF 聚合 CPAMP usage + auth-files + CPA `/v1/models` 与 health（短缓存）；无数据时返回空列表
+- **签到 / 兑换**：仍为进程内逻辑（未接 CPA 配额）
 
 ## 环境变量（服务端，勿提交 git）
 
@@ -92,11 +93,29 @@ Nginx：
 |---|---|
 | `#/` | 首页 |
 | `#/guide` | 接入指南 |
-| `#/availability` | 服务状态（仍为示意数据） |
-| `#/community` | 社区动态（仍为示意数据） |
+| `#/availability` | 服务状态（CPA 探测 + CPAMP 延迟） |
+| `#/community` | 社区动态（排行/号池/调用实况来自 CPAMP） |
 | `#/about` | 关于 |
 | `#/console` 等 | 控制台（需 Linux.do 登录） |
+| `#/admin` 等 | 运营控制台（白名单管理员；CPAMP/CPA 子集） |
 
 ## 声明
 
 站名与布局参考了公开公益站前端；本仓库用于私人部署与学习。请勿冒充官方 Darkforger 服务。模型上游为本地 CPA，而非 Darkforger。
+
+
+## 管理员白名单（`#/admin`）
+
+OpenAPI 站内运营控制台是 **CPAMP 能力的兼容风格子集**（概览 / 上游账号 / CPA 密钥 / 用量 / 连接状态），**不会**嵌入或修改 `www.juc114.cn` 的完整 management UI。
+
+在 VPS `.env`（或 systemd 环境）中设置：
+
+```bash
+# 数字 ID（推荐）与/或用户名，逗号或空格分隔
+ADMIN_LINUXDO_IDS=123456
+ADMIN_LINUXDO_USERNAMES=your_linuxdo_name
+```
+
+- 未配置任一项时：**无人**可进入管理接口（403）
+- 浏览器只拿到脱敏数据；`CPAMP_ADMIN_KEY` / `CPA_MANAGEMENT_KEY` 仅服务端读取
+- 完整高级配置仍使用 www CPAMP 面板

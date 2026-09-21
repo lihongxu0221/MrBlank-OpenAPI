@@ -10,11 +10,29 @@ import {
   addCpaApiKey,
   removeCpaApiKey,
   fetchCpampUsage,
+  fetchCpampUsageCached,
+  fetchCpampAuthFilesCached,
   flattenUsageForHashes,
   hashApiKey,
   maskKey,
+  probeCpaModels,
+  probeServiceHealth,
+  aggregateLeaderboardFromUsage,
+  aggregateActivityFromUsage,
+  modelLatencyStatsFromUsage,
+  mapAuthFilesToPoolItems,
+  listCpaApiKeys,
+  probeUrl,
 } from './cpa.js'
 import { createUserKeyStore } from './userKeys.js'
+import {
+  loadAdminAllowlist,
+  isAdminUser,
+  sanitizeConfig,
+  summarizeUsage,
+  mapAdminAccounts,
+  maskSecretValue,
+} from './admin.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -46,6 +64,7 @@ const cpaCfg = loadCpaConfig(process.env)
 const userKeyStore = createUserKeyStore(
   process.env.USER_KEYS_PATH || path.join(__dirname, 'data', 'user-keys.json'),
 )
+const adminAllowlist = loadAdminAllowlist(process.env)
 
 const CLIENT_ID = process.env.LINUXDO_CLIENT_ID || ''
 const CLIENT_SECRET = process.env.LINUXDO_CLIENT_SECRET || ''
@@ -164,6 +183,21 @@ function requireAuth(req, res, next) {
   next()
 }
 
+function requireAdmin(req, res, next) {
+  const session = getSession(req)
+  if (!session) {
+    res.status(401).json(fail('请先使用 Linux.do 登录。'))
+    return
+  }
+  if (!isAdminUser(session.user, adminAllowlist)) {
+    res.status(403).json(fail('需要管理员权限'))
+    return
+  }
+  req.auth = session
+  req.store = getOrCreateUserStore(session.user)
+  next()
+}
+
 function setSessionCookie(res, sid) {
   res.cookie(COOKIE_NAME, sid, {
     httpOnly: true,
@@ -183,6 +217,233 @@ function clearSessionCookie(res) {
   })
 }
 
+const probeHistory = [] // { checked_at, overall, latency_ms, model_count }
+const PROBE_HISTORY_MAX = 48
+
+function rememberProbe(entry) {
+  probeHistory.unshift(entry)
+  while (probeHistory.length > PROBE_HISTORY_MAX) probeHistory.pop()
+}
+
+function overallFromHealth(modelsOk, health, modelCount) {
+  const cpaUp = !!(health?.cpa?.ok || health?.billing?.ok)
+  const cpampUp = !!health?.cpamp?.ok
+  if (!modelsOk && !cpaUp) return 'unavailable'
+  if (!modelsOk) return 'degraded'
+  if (modelCount === 0) return 'degraded'
+  if (!cpampUp) return 'degraded'
+  return 'operational'
+}
+
+async function buildAvailability() {
+  const now = new Date().toISOString()
+  const [health, modelsProbe, usage] = await Promise.all([
+    probeServiceHealth(cpaCfg).catch(() => ({
+      cpa: { ok: false, latency_ms: 0 },
+      billing: { ok: false, latency_ms: 0 },
+      cpamp: { ok: false, latency_ms: 0 },
+    })),
+    probeCpaModels(cpaCfg).catch((e) => ({
+      ok: false,
+      latency_ms: 0,
+      models: [],
+      error: e?.message || String(e),
+    })),
+    cpaCfg.adminKey
+      ? fetchCpampUsageCached(cpaCfg).catch(() => null)
+      : Promise.resolve(null),
+  ])
+
+  const modelStats = usage
+    ? modelLatencyStatsFromUsage(usage, { period: '7d', limit: 24 })
+    : new Map()
+  const overall = overallFromHealth(modelsProbe.ok, health, modelsProbe.models.length)
+  const probeLatency = modelsProbe.latency_ms || health?.billing?.latency_ms || health?.cpa?.latency_ms || null
+
+  rememberProbe({
+    checked_at: now,
+    overall,
+    latency_ms: probeLatency,
+    model_count: modelsProbe.models.length,
+  })
+
+  const historySeed = probeHistory.map((h) => ({
+    checked_at: h.checked_at,
+    status: h.overall === 'operational' ? 'operational' : h.overall === 'degraded' ? 'degraded' : 'down',
+    latency_ms: h.latency_ms,
+  }))
+
+  const models = (modelsProbe.models || []).map((m) => {
+    const stats = modelStats.get(m.id)
+    let status = modelsProbe.ok ? 'operational' : 'down'
+    if (stats?.status) status = stats.status
+    if (!modelsProbe.ok) status = 'down'
+    else if (overall === 'degraded' && status === 'operational') {
+      // keep operational per-model if CPA models list is up
+    }
+    const hist = (stats?.history && stats.history.length ? stats.history : historySeed).slice(0, 24)
+    const latency_ms =
+      stats?.latency_ms != null ? stats.latency_ms : modelsProbe.ok ? probeLatency : null
+    const availability =
+      stats?.availability != null
+        ? stats.availability
+        : modelsProbe.ok
+          ? 100
+          : 0
+    return {
+      id: m.id,
+      name: m.name || m.id,
+      status,
+      latency_ms,
+      availability,
+      history: hist,
+    }
+  })
+
+  // If models probe failed entirely, still surface a single unavailable card so UI is honest.
+  if (!models.length) {
+    models.push({
+      id: 'cpa',
+      name: 'CPA',
+      status: 'down',
+      latency_ms: probeLatency,
+      availability: 0,
+      history: historySeed,
+    })
+  }
+
+  const operational = models.filter((m) => m.status === 'operational').length
+  const latSamples = models.filter((m) => m.latency_ms != null).map((m) => m.latency_ms)
+  const avg_latency_ms = latSamples.length
+    ? Math.round(latSamples.reduce((a, b) => a + b, 0) / latSamples.length)
+    : null
+
+  const endpointStatus = modelsProbe.ok ? 'operational' : overall === 'degraded' ? 'degraded' : 'down'
+  const endpoints = [
+    '/v1/chat/completions',
+    '/v1/messages',
+    '/v1/responses',
+    '/v1/images/generations',
+    '/v1/videos',
+  ].map((path) => ({
+    path,
+    status: endpointStatus,
+    latency_ms: probeLatency,
+  }))
+
+  return ok({
+    checked_at: now,
+    overall,
+    source: 'cpa+cpamp',
+    cpa: health.cpa,
+    billing: health.billing,
+    cpamp: health.cpamp,
+    totals: {
+      models: modelsProbe.models.length,
+      operational,
+      avg_latency_ms,
+      total_tokens: usage?.total_tokens ?? 0,
+      total_requests: usage?.total_requests ?? 0,
+      success_count: usage?.success_count ?? 0,
+      failure_count: usage?.failure_count ?? 0,
+    },
+    endpoints,
+    groups: [
+      {
+        name: '默认分组',
+        checked_at: now,
+        models,
+      },
+    ],
+    note: modelsProbe.ok
+      ? undefined
+      : modelsProbe.error || '无法探测 CPA /v1/models',
+  })
+}
+
+async function buildLeaderboard(period = 'today', sort = 'credits', p = 1) {
+  if (!cpaCfg.adminKey) {
+    return ok({
+      items: [],
+      total: 0,
+      period,
+      sort,
+      page: p,
+      note: 'CPAMP Admin Key 未配置；排行榜暂不可用。',
+    })
+  }
+  try {
+    const usage = await fetchCpampUsageCached(cpaCfg)
+    // Merge disk profiles with live session display names.
+    const hashMap = userKeyStore.hashToUserMap()
+    for (const rec of sessions.values()) {
+      const uid = String(rec.user?.id || '')
+      if (!uid) continue
+      for (const [h, meta] of hashMap) {
+        if (meta.userId === uid) {
+          hashMap.set(h, {
+            ...meta,
+            display_name: rec.user.display_name || meta.display_name,
+            username: rec.user.username || meta.username,
+          })
+        }
+      }
+    }
+    const ranked = aggregateLeaderboardFromUsage(usage, hashMap, { period, sort })
+    return ok({
+      items: ranked,
+      total: ranked.length,
+      period,
+      sort,
+      page: p,
+      source: 'cpamp',
+    })
+  } catch (err) {
+    console.error('[welfare] leaderboard failed', err?.message || err)
+    return ok({
+      items: [],
+      total: 0,
+      period,
+      sort,
+      page: p,
+      note: `排行榜暂不可用：${err?.message || 'CPAMP 错误'}`,
+    })
+  }
+}
+
+async function buildActivity(period = 'today') {
+  if (!cpaCfg.adminKey) {
+    return ok({ period, items: [], note: 'CPAMP Admin Key 未配置；调用实况暂不可用。' })
+  }
+  try {
+    const usage = await fetchCpampUsageCached(cpaCfg)
+    const items = aggregateActivityFromUsage(usage, { period })
+    return ok({ period, items, source: 'cpamp' })
+  } catch (err) {
+    console.error('[welfare] activity failed', err?.message || err)
+    return ok({ period, items: [], note: `调用实况暂不可用：${err?.message || 'CPAMP 错误'}` })
+  }
+}
+
+async function buildPool() {
+  if (!cpaCfg.adminKey) {
+    return ok({ stale: true, items: [], note: 'CPAMP Admin Key 未配置；号池暂不可用。' })
+  }
+  try {
+    const auth = await fetchCpampAuthFilesCached(cpaCfg)
+    const items = mapAuthFilesToPoolItems(auth)
+    return ok({
+      stale: false,
+      items,
+      observed_at: auth?.observed_at || null,
+      source: 'cpamp:auth-files',
+    })
+  } catch (err) {
+    console.error('[welfare] pool failed', err?.message || err)
+    return ok({ stale: true, items: [], note: `号池暂不可用：${err?.message || 'CPAMP 错误'}` })
+  }
+}
+
 function publicHandlers() {
   return {
     status: () => ok({ quota_per_unit: Q }),
@@ -192,86 +453,10 @@ function publicHandlers() {
         turnstileSiteKey: '',
         linuxdoClientId: CLIENT_ID,
       }),
-    availability: () => {
-      const now = new Date().toISOString()
-      const hist = (rate) =>
-        Array.from({ length: 7 }, (_, i) => ({
-          checked_at: new Date(Date.now() - i * 86400000).toISOString(),
-          status: Math.random() < rate ? 'operational' : 'down',
-          latency_ms: 800 + Math.floor(Math.random() * 1200),
-        }))
-      const mk = (id, name, rate, latency, status = 'down') => ({
-        id,
-        name,
-        status,
-        latency_ms: latency,
-        availability: Math.round(rate * 1000) / 10,
-        history: hist(rate),
-      })
-      return ok({
-        checked_at: now,
-        groups: [
-          {
-            name: '默认分组',
-            checked_at: now,
-            models: [
-              mk('grok-4.5', 'Grok 4.5', 0.713, 1480),
-              mk('grok-4', 'Grok 4.0', 0.68, 1320),
-              mk('grok-chat-auto', 'Grok Auto', 0.74, 980),
-              mk('grok-chat-expert', 'Grok Expert', 0.71, 1510),
-              mk('grok-chat-fast', 'Grok Fast', 0.82, 640),
-              mk('grok-heavy', 'Grok Heavy', 0.55, 2400),
-              mk('grok-composer-2.5-fast', 'Grok Composer 2.5 Fast', 0.79, 720),
-              mk('grok-imagine-image', 'Grok Imagine', 0.66, 1800),
-              mk('grok-imagine-image-2.0', 'Grok Imagine Image 2.0', 0.61, 2100),
-              mk('grok-imagine-image-edit', 'Grok Imagine Image Edit', 0.58, 1950),
-              mk('grok-imagine-image-lite', 'Grok Imagine Image Lite', 0.7, 1100),
-              mk('grok-imagine-video', 'Grok Imagine Video', 0.42, 3200),
-              mk('grok-imagine-video-1.5', 'Grok Imagine Video 1.5', 0.38, 3600),
-            ],
-          },
-        ],
-      })
-    },
-    pool: () =>
-      ok({
-        stale: false,
-        items: Array.from({ length: 6 }, (_, i) => ({
-          name: `Heavy-${String(i + 1).padStart(2, '0')}`,
-          provider: 'xAI',
-          tier: 'heavy',
-          status: i % 5 === 0 ? 'exhausted' : 'available',
-          quotas: [
-            {
-              mode: 'weekly',
-              known: true,
-              used: 20 + i * 11,
-              limit: 100,
-              reset_at: new Date(Date.now() + (7 - i) * 86400000).toISOString(),
-            },
-          ],
-        })),
-      }),
-    leaderboard: (period = 'today', sort = 'credits', p = 1) => {
-      const names = ['a***7', 'm***x', '蓝***云', 'c***9', '探***者', 'g***k', '星***海', 'n***2']
-      const items = names.map((name, i) => ({
-        rank: i + 1,
-        name,
-        calls: 40 - i * 3 + (period === 'all' ? 200 : period === '7d' ? 80 : 0),
-        credits: 120 - i * 9 + (sort === 'calls' ? i : 0),
-      }))
-      return ok({ items, total: items.length, period, sort, page: p })
-    },
-    activity: (period = 'today') =>
-      ok({
-        period,
-        items: [
-          { model: 'grok-4.6', calls: 420, successful: 401, tokens: 1_200_000, credits: 86 },
-          { model: 'grok-4', calls: 210, successful: 205, tokens: 540_000, credits: 41 },
-          { model: 'grok-imagine-1.5', calls: 64, successful: 58, tokens: 0, credits: 22 },
-          { model: 'grok-imagine-video-1.5', calls: 12, successful: 9, tokens: 0, credits: 18 },
-        ],
-      }),
+    availability: () => buildAvailability(),
+    pool: () => buildPool(),
+    leaderboard: (period = 'today', sort = 'credits', p = 1) => buildLeaderboard(period, sort, p),
+    activity: (period = 'today') => buildActivity(period),
     notices: (size = 50) =>
       ok({
         items: [
@@ -314,20 +499,53 @@ app.use(express.urlencoded({ extended: false }))
 
 app.get('/api/status', (_req, res) => res.json(pub.status()))
 app.get('/api/welfare/config', (_req, res) => res.json(pub.config()))
-app.get('/api/welfare/availability', (_req, res) => res.json(pub.availability()))
-app.get('/api/welfare/pool', (_req, res) => res.json(pub.pool()))
-app.get('/api/welfare/leaderboard', (req, res) =>
-  res.json(
-    pub.leaderboard(
-      String(req.query.period || 'today'),
-      String(req.query.sort || 'credits'),
-      Number(req.query.p || 1),
-    ),
-  ),
-)
-app.get('/api/welfare/activity', (req, res) =>
-  res.json(pub.activity(String(req.query.period || 'today'))),
-)
+app.get('/api/welfare/availability', async (_req, res) => {
+  try {
+    res.json(await pub.availability())
+  } catch (err) {
+    console.error('[welfare] availability', err?.message || err)
+    res.status(502).json(fail(err?.message || '服务状态探测失败'))
+  }
+})
+app.get('/api/welfare/pool', async (_req, res) => {
+  try {
+    res.json(await pub.pool())
+  } catch (err) {
+    console.error('[welfare] pool', err?.message || err)
+    res.json(ok({ stale: true, items: [], note: err?.message || '号池不可用' }))
+  }
+})
+app.get('/api/welfare/leaderboard', async (req, res) => {
+  try {
+    res.json(
+      await pub.leaderboard(
+        String(req.query.period || 'today'),
+        String(req.query.sort || 'credits'),
+        Number(req.query.p || 1),
+      ),
+    )
+  } catch (err) {
+    console.error('[welfare] leaderboard', err?.message || err)
+    res.json(
+      ok({
+        items: [],
+        total: 0,
+        period: String(req.query.period || 'today'),
+        sort: String(req.query.sort || 'credits'),
+        page: Number(req.query.p || 1),
+        note: err?.message || '排行榜不可用',
+      }),
+    )
+  }
+})
+app.get('/api/welfare/activity', async (req, res) => {
+  try {
+    res.json(await pub.activity(String(req.query.period || 'today')))
+  } catch (err) {
+    console.error('[welfare] activity', err?.message || err)
+    res.json(ok({ period: String(req.query.period || 'today'), items: [], note: err?.message || '调用实况不可用' }))
+  }
+})
 app.get('/api/welfare/notices', (req, res) =>
   res.json(pub.notices(Number(req.query.size || 50))),
 )
@@ -422,6 +640,11 @@ app.get('/oauth/linuxdo', async (req, res) => {
 
     const user = { id, username, display_name }
     getOrCreateUserStore(user)
+    try {
+      userKeyStore.setProfile(id, { display_name, username })
+    } catch (e) {
+      console.error('[userKeys] setProfile failed', e?.message || e)
+    }
 
     const sid = randomToken(32)
     const access_token = randomToken(24)
@@ -733,6 +956,226 @@ app.get('/api/log/self', requireAuth, async (req, res) => {
   }
 })
 
+
+app.get('/api/admin/me', requireAuth, (req, res) => {
+  const admin = isAdminUser(req.auth.user, adminAllowlist)
+  res.json(
+    ok({
+      is_admin: admin,
+      user: {
+        id: req.auth.user.id,
+        username: req.auth.user.username,
+        display_name: req.auth.user.display_name,
+      },
+      allowlist_configured: adminAllowlist.ids.size > 0 || adminAllowlist.usernames.size > 0,
+    }),
+  )
+})
+
+app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
+  try {
+    const [health, modelsProbe, usage, authFiles, keys] = await Promise.all([
+      probeServiceHealth(cpaCfg).catch(() => null),
+      probeCpaModels(cpaCfg).catch(() => ({ ok: false, models: [], latency_ms: 0 })),
+      cpaCfg.adminKey ? fetchCpampUsageCached(cpaCfg).catch(() => null) : null,
+      cpaCfg.adminKey ? fetchCpampAuthFilesCached(cpaCfg).catch(() => null) : null,
+      cpaCfg.managementKey ? listCpaApiKeys(cpaCfg).catch(() => []) : [],
+    ])
+    const summary = usage ? summarizeUsage(usage) : null
+    const accounts = authFiles ? mapAdminAccounts(authFiles) : []
+    res.json(
+      ok({
+        checked_at: new Date().toISOString(),
+        health,
+        models: {
+          ok: !!modelsProbe?.ok,
+          count: modelsProbe?.models?.length || 0,
+          latency_ms: modelsProbe?.latency_ms || null,
+          error: modelsProbe?.error || null,
+        },
+        usage: summary
+          ? {
+              total_requests: summary.total_requests,
+              success_count: summary.success_count,
+              failure_count: summary.failure_count,
+              total_tokens: summary.total_tokens,
+            }
+          : null,
+        accounts: {
+          total: accounts.length,
+          active: accounts.filter((a) => !a.disabled && !a.unavailable).length,
+          unavailable: accounts.filter((a) => a.unavailable || a.disabled).length,
+        },
+        api_keys: { total: Array.isArray(keys) ? keys.length : 0 },
+        public_api_base: cpaCfg.publicApiBaseUrl,
+      }),
+    )
+  } catch (err) {
+    console.error('[admin] overview', err?.message || err)
+    res.status(502).json(fail(err?.message || 'admin overview failed'))
+  }
+})
+
+app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
+  try {
+    const health = await probeServiceHealth(cpaCfg)
+    const models = await probeCpaModels(cpaCfg)
+    res.json(
+      ok({
+        checked_at: new Date().toISOString(),
+        cpa_base: cpaCfg.cpaBaseUrl,
+        billing_base: cpaCfg.billingBaseUrl,
+        cpamp_base: cpaCfg.cpampBaseUrl,
+        public_api_base: cpaCfg.publicApiBaseUrl,
+        secrets: {
+          demo: !!cpaCfg.demoKey,
+          management: !!cpaCfg.managementKey,
+          admin: !!cpaCfg.adminKey,
+        },
+        health,
+        models: {
+          ok: models.ok,
+          count: models.models.length,
+          latency_ms: models.latency_ms,
+          base: models.base,
+          error: models.error,
+        },
+      }),
+    )
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'connection probe failed'))
+  }
+})
+
+app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.adminKey) {
+      res.status(503).json(fail('CPAMP Admin Key 未配置'))
+      return
+    }
+    const auth = await fetchCpampAuthFilesCached(cpaCfg, { force: true })
+    res.json(
+      ok({
+        observed_at: auth?.observed_at || null,
+        items: mapAdminAccounts(auth),
+        source: 'cpamp:auth-files',
+      }),
+    )
+  } catch (err) {
+    console.error('[admin] accounts', err?.message || err)
+    res.status(502).json(fail(err?.message || 'accounts failed'))
+  }
+})
+
+app.get('/api/admin/usage', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.adminKey) {
+      res.status(503).json(fail('CPAMP Admin Key 未配置'))
+      return
+    }
+    const usage = await fetchCpampUsageCached(cpaCfg, { force: true })
+    res.json(ok({ ...summarizeUsage(usage), source: 'cpamp' }))
+  } catch (err) {
+    console.error('[admin] usage', err?.message || err)
+    res.status(502).json(fail(err?.message || 'usage failed'))
+  }
+})
+
+app.get('/api/admin/keys', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const keys = await listCpaApiKeys(cpaCfg)
+    res.json(
+      ok({
+        items: keys.map((k, i) => ({
+          id: i + 1,
+          key: maskSecretValue(k),
+          length: String(k).length,
+        })),
+        total: keys.length,
+        note: '完整密钥不会返回到浏览器；增删通过服务端 Management Key 执行。',
+      }),
+    )
+  } catch (err) {
+    console.error('[admin] keys list', err?.message || err)
+    res.status(502).json(fail(err?.message || 'keys list failed'))
+  }
+})
+
+app.post('/api/admin/keys', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const key = String(req.body?.key || '').trim()
+    if (!key || key.length < 8) {
+      res.status(400).json(fail('请提供有效的 API Key'))
+      return
+    }
+    await addCpaApiKey(cpaCfg, key)
+    res.json(ok({ key: maskSecretValue(key), added: true }))
+  } catch (err) {
+    console.error('[admin] keys add', err?.message || err)
+    res.status(502).json(fail(err?.message || 'add key failed'))
+  }
+})
+
+app.delete('/api/admin/keys', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const key = String(req.body?.key || req.query?.key || '').trim()
+    const masked = String(req.body?.masked || req.query?.masked || '').trim()
+    const keys = await listCpaApiKeys(cpaCfg)
+    let target = null
+    if (key) {
+      target = keys.find((k) => k === key) || null
+    } else if (masked) {
+      const matches = keys.filter((k) => maskSecretValue(k) === masked)
+      if (matches.length === 1) target = matches[0]
+      else if (matches.length > 1) {
+        res.status(400).json(fail('匹配到多个密钥，请提供完整 key'))
+        return
+      }
+    }
+    if (!target) {
+      res.status(404).json(fail('未找到要删除的密钥'))
+      return
+    }
+    await removeCpaApiKey(cpaCfg, target)
+    res.json(ok({ removed: maskSecretValue(target) }))
+  } catch (err) {
+    console.error('[admin] keys delete', err?.message || err)
+    res.status(502).json(fail(err?.message || 'delete key failed'))
+  }
+})
+
+app.get('/api/admin/config', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.adminKey) {
+      res.status(503).json(fail('CPAMP Admin Key 未配置'))
+      return
+    }
+    // Reuse cpamp via auth-files path style: fetch config through probeUrl with admin key
+    const result = await probeUrl(`${cpaCfg.cpampBaseUrl}/v0/management/config`, {
+      headers: { Authorization: `Bearer ${cpaCfg.adminKey}`, Accept: 'application/json' },
+    })
+    if (!result.ok) {
+      res.status(502).json(fail(result.error || `config ${result.status}`))
+      return
+    }
+    res.json(ok({ config: sanitizeConfig(result.body || {}), source: 'cpamp' }))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'config failed'))
+  }
+})
+
 app.use((req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/oauth/')) {
     res.status(404).json(fail('接口不存在'))
@@ -749,5 +1192,8 @@ app.listen(PORT, HOST, () => {
   console.log(`[server] cpa=${cpaCfg.cpaBaseUrl} billing=${cpaCfg.billingBaseUrl} cpamp=${cpaCfg.cpampBaseUrl}`)
   console.log(
     `[server] secrets demo=${cpaCfg.demoKey ? 'yes' : 'no'} mgmt=${cpaCfg.managementKey ? 'yes' : 'no'} admin=${cpaCfg.adminKey ? 'yes' : 'no'}`,
+  )
+  console.log(
+    `[server] admin allowlist ids=${adminAllowlist.ids.size} usernames=${adminAllowlist.usernames.size}`,
   )
 })

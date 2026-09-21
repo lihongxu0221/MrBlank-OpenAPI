@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { ArrowRight, Languages, Menu, Moon, Palette, Sun, X } from 'lucide-react'
 import { getLanguage, P, setLanguage } from '../i18n'
 import { navigate } from '../router/hash'
@@ -24,7 +24,28 @@ export function NavShell({ path }: { path: string }) {
   const site = useSyncExternalStore(subscribeSiteConfig, getSiteConfig, getSiteConfig)
   const [expanded, setExpanded] = useState(false)
   const [prefsOpen, setPrefsOpen] = useState(false)
+  const [isAdmin, setIsAdmin] = useState(false)
   const consoleActive = ['/console', '/checkin', '/redeem', '/keys', '/usage', '/models', '/channels'].includes(path)
+  const adminActive = path === '/admin' || path.startsWith('/admin/')
+
+  useEffect(() => {
+    let cancelled = false
+    if (!session) {
+      setIsAdmin(false)
+      return
+    }
+    api
+      .get<{ is_admin: boolean }>('/api/admin/me')
+      .then((d) => {
+        if (!cancelled) setIsAdmin(!!d.is_admin)
+      })
+      .catch(() => {
+        if (!cancelled) setIsAdmin(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [session?.user?.id, session?.access_token])
 
   async function logout() {
     try {
@@ -73,6 +94,19 @@ export function NavShell({ path }: { path: string }) {
               </a>
             )
           })}
+          {isAdmin ? (
+            <a
+              href="#/admin"
+              className={adminActive ? 'is-active' : ''}
+              onClick={(e) => {
+                e.preventDefault()
+                setExpanded(false)
+                navigate('/admin')
+              }}
+            >
+              {P('管理')}
+            </a>
+          ) : null}
         </nav>
 
         <div className="nav-actions">

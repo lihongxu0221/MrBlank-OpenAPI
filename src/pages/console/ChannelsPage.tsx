@@ -14,8 +14,16 @@ type Model = {
   history?: { checked_at: string; status: string; latency_ms?: number }[]
 }
 type Group = { name?: string; checked_at?: string; models: Model[] }
+type Endpoint = { path: string; status: string; latency_ms?: number | null }
+type Totals = {
+  models?: number
+  operational?: number
+  avg_latency_ms?: number | null
+  total_tokens?: number
+  total_requests?: number
+}
 
-const ENDPOINTS = [
+const ENDPOINT_META: { title: string; path: string; desc: string }[] = [
   { title: 'OpenAI Chat', path: '/v1/chat/completions', desc: '兼容 Chat Completions，快速接入现有客户端。' },
   { title: 'Anthropic Messages', path: '/v1/messages', desc: 'Messages API 风格，适合 Claude 生态工具。' },
   { title: 'OpenAI Responses', path: '/v1/responses', desc: 'Responses 协议，统一多模态输出。' },
@@ -42,15 +50,27 @@ export function ChannelsPage({ path }: { path: string }) {
   const [checkedAt, setCheckedAt] = useState('')
   const [range, setRange] = useState<'24h' | '7d'>('7d')
   const [loading, setLoading] = useState(true)
+  const [totals, setTotals] = useState<Totals>({})
+  const [endpoints, setEndpoints] = useState<Endpoint[]>([])
+  const [overall, setOverall] = useState('unavailable')
 
   async function load() {
     setLoading(true)
     try {
-      const data = await api.get<{ checked_at: string; groups: Group[] }>('/api/welfare/availability', {
+      const data = await api.get<{
+        checked_at: string
+        groups: Group[]
+        totals?: Totals
+        endpoints?: Endpoint[]
+        overall?: string
+      }>('/api/welfare/availability', {
         auth: false,
       })
       setGroups(data.groups || [])
       setCheckedAt(data.checked_at || '')
+      setTotals(data.totals || {})
+      setEndpoints(data.endpoints || [])
+      setOverall(data.overall || 'unavailable')
     } catch {
       /* keep previous */
     } finally {
@@ -63,14 +83,24 @@ export function ChannelsPage({ path }: { path: string }) {
   }, [])
 
   const models = useMemo(() => groups.flatMap((g) => g.models || []), [groups])
-  const active = models.filter((m) => m.status === 'operational').length
+  const active = totals.operational ?? models.filter((m) => m.status === 'operational').length
+  const totalModels = totals.models ?? models.length
   const avgLatency =
-    models.filter((m) => m.latency_ms != null).reduce((s, m) => s + (m.latency_ms || 0), 0) /
-      Math.max(1, models.filter((m) => m.latency_ms != null).length) || 0
+    totals.avg_latency_ms ??
+    (models.filter((m) => m.latency_ms != null).reduce((s, m) => s + (m.latency_ms || 0), 0) /
+      Math.max(1, models.filter((m) => m.latency_ms != null).length) ||
+      0)
+  const tokenTotal = totals.total_tokens ?? 0
 
   const checkedLabel = checkedAt
     ? new Date(checkedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
     : '—'
+
+  const endpointByPath = useMemo(() => {
+    const m = new Map<string, Endpoint>()
+    for (const ep of endpoints) m.set(ep.path, ep)
+    return m
+  }, [endpoints])
 
   return (
     <ConsoleLayout path={path} bare>
@@ -86,7 +116,7 @@ export function ChannelsPage({ path }: { path: string }) {
             <Zap size={14} className="stat-icon" />
           </div>
           <div className="value">
-            {active} / {models.length || 13}
+            {active} / {totalModels}
           </div>
         </div>
         <div className="stat-card">
@@ -101,13 +131,14 @@ export function ChannelsPage({ path }: { path: string }) {
             <div className="label">{P('累计消耗额度')}</div>
             <Sparkles size={14} className="stat-icon" />
           </div>
-          <div className="value">4716</div>
+          <div className="value">{tokenTotal ? tokenTotal.toLocaleString('zh-CN') : '0'}</div>
         </div>
       </div>
 
       <div className="channels-toolbar">
         <span className="muted">
           {P('最后更新')}：{checkedLabel}
+          {overall ? ` · ${statusLabel(overall)}` : ''}
         </span>
         <div className="range-tabs">
           <button type="button" className={range === '24h' ? 'is-active' : ''} onClick={() => setRange('24h')}>
@@ -191,17 +222,28 @@ export function ChannelsPage({ path }: { path: string }) {
         </div>
       ))}
 
+      {!loading && !models.length ? <p className="empty-state">{P('尚无模型检测记录，请稍后回来。')}</p> : null}
+
       <div className="capability-section">
         <h2>{P('接口能力，一眼了解。')}</h2>
         <div className="capability-grid">
-          {ENDPOINTS.map((ep) => (
-            <article key={ep.path} className="panel capability-card">
-              <div className="health-badge ok">● {P('正常')}</div>
-              <h3>{ep.title}</h3>
-              <code>{ep.path}</code>
-              <p>{P(ep.desc)}</p>
-            </article>
-          ))}
+          {ENDPOINT_META.map((ep) => {
+            const live = endpointByPath.get(ep.path)
+            const st = live?.status || overall || 'down'
+            return (
+              <article key={ep.path} className="panel capability-card">
+                <div className={`health-badge ${statusClass(st)}`}>● {statusLabel(st)}</div>
+                <h3>{ep.title}</h3>
+                <code>{ep.path}</code>
+                <p>{P(ep.desc)}</p>
+                {live?.latency_ms != null ? (
+                  <p className="muted" style={{ fontSize: 13 }}>
+                    {live.latency_ms} ms
+                  </p>
+                ) : null}
+              </article>
+            )
+          })}
         </div>
       </div>
     </ConsoleLayout>

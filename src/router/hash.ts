@@ -36,6 +36,18 @@ export const GATED_ROUTES = [
   '/channels',
 ] as const
 
+export const ADMIN_ROUTES = [
+  '/admin',
+  '/admin/accounts',
+  '/admin/keys',
+  '/admin/usage',
+  '/admin/connection',
+] as const
+
 export function isGated(path: string) {
   return (GATED_ROUTES as readonly string[]).includes(path)
+}
+
+export function isAdminRoute(path: string) {
+  return (ADMIN_ROUTES as readonly string[]).includes(path) || path.startsWith('/admin/')
 }

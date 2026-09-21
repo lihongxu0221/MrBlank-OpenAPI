@@ -1,8 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 
 /**
- * Disk-backed map: linux.do user id -> { tokens: [...], nextId }
+ * Disk-backed map: linux.do user id -> { tokens: [...], nextId, profile? }
  * Token records keep fullKey server-side only.
  */
 export function createUserKeyStore(filePath) {
@@ -81,6 +82,42 @@ export function createUserKeyStore(filePath) {
         }
       }
       return keys
+    },
+    /** Persist Linux.do display fields for leaderboard names. */
+    setProfile(userId, profile = {}) {
+      const data = readAll()
+      const u = ensureUser(data, userId)
+      u.profile = {
+        ...(u.profile || {}),
+        display_name: profile.display_name || u.profile?.display_name || '',
+        username: profile.username || u.profile?.username || '',
+        updated_at: new Date().toISOString(),
+      }
+      writeAll(data)
+      return u.profile
+    },
+    getProfile(userId) {
+      const data = readAll()
+      const u = data.users?.[String(userId)]
+      return u?.profile || null
+    },
+    /**
+     * Map api_key sha256 -> { userId, display_name, username }.
+     */
+    hashToUserMap() {
+      const data = readAll()
+      /** @type {Map<string, { userId: string, display_name: string, username: string }>} */
+      const map = new Map()
+      for (const [userId, u] of Object.entries(data.users || {})) {
+        const display_name = u.profile?.display_name || ''
+        const username = u.profile?.username || ''
+        for (const t of u.tokens || []) {
+          if (!t.fullKey) continue
+          const h = crypto.createHash('sha256').update(String(t.fullKey)).digest('hex')
+          map.set(h, { userId, display_name, username })
+        }
+      }
+      return map
     },
   }
 }

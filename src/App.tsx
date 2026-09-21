@@ -17,6 +17,11 @@ import { KeysPage } from './pages/console/KeysPage'
 import { UsagePage } from './pages/console/UsagePage'
 import { ModelsPage } from './pages/console/ModelsPage'
 import { ChannelsPage } from './pages/console/ChannelsPage'
+import { AdminOverviewPage } from './pages/admin/AdminOverviewPage'
+import { AdminAccountsPage } from './pages/admin/AdminAccountsPage'
+import { AdminKeysPage } from './pages/admin/AdminKeysPage'
+import { AdminUsagePage } from './pages/admin/AdminUsagePage'
+import { AdminConnectionPage } from './pages/admin/AdminConnectionPage'
 import { useEffect, useSyncExternalStore } from 'react'
 import { getSiteConfig, subscribeSiteConfig } from './config/site'
 import { getLanguage } from './i18n'
@@ -68,6 +73,21 @@ export default function App() {
       break
     case '/channels':
       page = <ChannelsPage path={path} />
+      break
+    case '/admin':
+      page = <AdminOverviewPage path={path} />
+      break
+    case '/admin/accounts':
+      page = <AdminAccountsPage path={path} />
+      break
+    case '/admin/keys':
+      page = <AdminKeysPage path={path} />
+      break
+    case '/admin/usage':
+      page = <AdminUsagePage path={path} />
+      break
+    case '/admin/connection':
+      page = <AdminConnectionPage path={path} />
       break
     default:
       page = (
