@@ -58,6 +58,19 @@ Scope: Real check-in & redeem → site credit wallet; leaderboard display names;
 3. **排行榜**：https://openapi.juc114.cn/#/community → 探索者排行榜；已登录并建密钥的用户应显示昵称。
 4. **管理**：管理员 → https://openapi.juc114.cn/#/admin/credits 调整每日发放与兑换码。
 
-## Live smoke
+## Live smoke (2026-09-21 Asia/Shanghai)
 
-_(fill after deploy)_
+| Check | Result |
+|-------|--------|
+| Deploy `e65c40a` + `systemctl restart mrblank-openapi` | ✅ active；`site-credits checkin=true grant=1000000-1000000 codes=4` |
+| `GET /api/status` credit_unit | ✅ `quota_per_unit=500000` |
+| `GET /api/welfare/leaderboard` | ✅ items + `privacy_note` + `mapped` 字段；未映射显示 `k***` |
+| `GET /api/user/checkin` 未登录 | ✅ **401** |
+| 本站 admin 登录后签到 | ✅ 发放 1000000 raw（2 点）；余额入账；晋级 progress.checkins=1 |
+| 同日再签 | ✅ 「今日已签到」 |
+| `POST /api/user/topup` `DF-PHASEF-SMOKE` | ✅ +2500000；再兑「兑换码已使用」 |
+| `GET /api/admin/credits` | ✅ codes=4 users=1；磁盘 `site-credits.json` 持久化 |
+| `GET /api/admin/me` allowlist_hint | ✅ counts 可见（不泄露名单） |
+| openapi / aily / www | ✅ 200 / 302 / 307（未改进程） |
+
+How to verify UI: https://openapi.juc114.cn/#/checkin · `#/redeem` · `#/community` · `#/admin/credits`
