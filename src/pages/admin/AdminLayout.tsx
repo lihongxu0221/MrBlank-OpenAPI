@@ -129,11 +129,7 @@ export function AdminLayout({
           : null}
         <div className="console-aside-note">
           <div>{P('内核：CPA Management Key')}</div>
-          <div>{P('用量：本站 site-usage（非 CPAMP）')}</div>
-          <div>{P('CPAMP 可选，不再作为生产依赖')}</div>
-          <a href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">
-            {P('www CPAMP（可选）')} ↗
-          </a>
+          <div>{P('用量：本站 site-usage')}</div>
           <a
             href="/console"
             onClick={(e) => {

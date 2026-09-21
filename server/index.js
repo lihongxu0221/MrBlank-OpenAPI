@@ -507,7 +507,6 @@ function rememberProbe(entry) {
 
 function overallFromHealth(modelsOk, health, modelCount) {
   const cpaUp = !!(health?.cpa?.ok || health?.billing?.ok)
-  // CPAMP is optional — do not degrade community/admin when it is down.
   if (!modelsOk && !cpaUp) return 'unavailable'
   if (!modelsOk) return 'degraded'
   if (modelCount === 0) return 'degraded'
@@ -521,7 +520,6 @@ async function buildAvailability() {
     probeServiceHealth(cpaCfg).catch(() => ({
       cpa: { ok: false, latency_ms: 0 },
       billing: { ok: false, latency_ms: 0 },
-      cpamp: { ok: false, latency_ms: 0 },
     })),
     probeCpaModels(cpaCfg).catch((e) => ({
       ok: false,
@@ -618,7 +616,6 @@ async function buildAvailability() {
     source: 'cpa+billing',
     cpa: health.cpa,
     billing: health.billing,
-    cpamp: health.cpamp,
     totals: {
       models: modelsProbe.models.length,
       operational,
@@ -1559,7 +1556,7 @@ app.get('/api/admin/me', requireAuth, (req, res) => {
         role: req.auth.user.role || null,
       },
       ops_note:
-        'www CPAMP = full ops; openapi /admin = MrBlank-styled CPAMP capability subset (no embed).',
+        'openapi /admin = CPA-kernel operator console (site-usage + CPA management).',
       allowlist_configured:
         adminAllowlist.ids.size > 0 ||
         adminAllowlist.usernames.size > 0 ||
@@ -1572,7 +1569,7 @@ app.get('/api/admin/me', requireAuth, (req, res) => {
           'ADMIN_LINUXDO_EMAILS',
           'ADMIN_LOCAL_USERNAMES',
         ],
-        note: '多管理员：在服务端 .env 配置上述变量（逗号分隔），或将本站用户 role 设为 admin。完整运维仍用 www CPAMP。',
+        note: '多管理员：在服务端 .env 配置上述变量（逗号分隔），或将本站用户 role 设为 admin。',
         counts: {
           linuxdo_ids: adminAllowlist.ids.size,
           linuxdo_usernames: adminAllowlist.usernames.size,
@@ -1623,9 +1620,8 @@ app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
         pool: summarizeAccounts(accounts),
         collector,
         ops: {
-          www_cpamp: 'https://www.juc114.cn/management.html',
           openapi_admin: 'https://openapi.juc114.cn/admin',
-          note: 'CPA management key is primary. CPAMP is optional. Usage is site-scoped (BFF /v1).',
+          note: 'CPA management key is primary. Usage is site-scoped (BFF /v1).',
         },
       }),
     )
@@ -1653,7 +1649,6 @@ app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
         checked_at: new Date().toISOString(),
         cpa_base: cpaCfg.cpaBaseUrl,
         billing_base: cpaCfg.billingBaseUrl,
-        cpamp_base: cpaCfg.cpampBaseUrl,
         public_api_base: cpaCfg.publicApiBaseUrl,
         secrets: {
           demo: !!cpaCfg.demoKey,

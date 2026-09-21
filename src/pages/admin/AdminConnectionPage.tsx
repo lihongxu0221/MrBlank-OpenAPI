@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ExternalLink, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
 import { ConsoleHero } from '../../components/ConsoleHero'
@@ -10,7 +10,6 @@ type Conn = {
   checked_at?: string
   cpa_base?: string
   billing_base?: string
-  cpamp_base?: string
   public_api_base?: string
   secrets?: { demo: boolean; management: boolean; admin: boolean }
   health?: any
@@ -51,7 +50,7 @@ export function AdminConnectionPage({ path }: { path: string }) {
 
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
-      <ConsoleHero title={P('连接状态')} subtitle={P('本机 CPA / billing 可达性、collector 心跳与脱敏配置摘要。CPAMP 可选。')} />
+      <ConsoleHero title={P('连接状态')} subtitle={P('本机 CPA / billing 可达性、collector 心跳与脱敏配置摘要。')} />
       <div className="channels-toolbar">
         <span className="muted">
           {data?.checked_at
@@ -61,9 +60,6 @@ export function AdminConnectionPage({ path }: { path: string }) {
         <div style={{ display: 'flex', gap: 8 }}>
           <a className="button secondary compact" href="/admin/oauth">
             Aily
-          </a>
-          <a className="button secondary compact" href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">
-            <ExternalLink size={14} /> www CPAMP
           </a>
           <button type="button" className="button secondary compact" onClick={load} disabled={loading}>
             <RefreshCw size={14} /> {P('刷新')}
@@ -131,20 +127,6 @@ export function AdminConnectionPage({ path }: { path: string }) {
                 </td>
               </tr>
               <tr>
-                <td>CPAMP</td>
-                <td>
-                  <code>{data?.cpamp_base || '—'}</code>
-                </td>
-                <td>
-                  <span className={`health-badge ${data?.health?.cpamp?.ok ? 'ok' : 'down'}`}>
-                    ● {data?.health?.cpamp?.ok ? P('正常') : P('异常')}
-                  </span>
-                </td>
-                <td>
-                  {data?.health?.cpamp?.latency_ms != null ? `${data.health.cpamp.latency_ms} ms` : '—'}
-                </td>
-              </tr>
-              <tr>
                 <td>/v1/models</td>
                 <td>
                   <code>{data?.models?.base || data?.public_api_base || '—'}</code>
@@ -164,7 +146,7 @@ export function AdminConnectionPage({ path }: { path: string }) {
           admin={String(!!data?.secrets?.admin)}
         </p>
         <p className="muted">
-          {data?.note || P('CPA 为主；CPAMP 可选。配置请用「CPA 配置 / OpenAI 兼容 / 请求日志」页面。')}
+          {data?.note || P('CPA + billing 为主。配置请用「CPA 配置 / OpenAI 兼容 / 请求日志」页面。')}
         </p>
       </div>
 

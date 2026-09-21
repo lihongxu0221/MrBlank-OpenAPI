@@ -335,7 +335,7 @@ export async function probeCpaModels(cfg) {
   }
 }
 
-/** Prefer CPA /healthz (cli-proxy-api); CPAMP still exposes /health. Optional fallbacks. */
+/** Prefer CPA /healthz (cli-proxy-api); optional path fallbacks. */
 async function probeServiceRoot(baseUrl, candidates) {
   let last = { ok: false, status: 0, latency_ms: 0 }
   for (const path of candidates) {
@@ -347,16 +347,13 @@ async function probeServiceRoot(baseUrl, candidates) {
 }
 
 export async function probeServiceHealth(cfg) {
-  const [cpa, billing, cpamp] = await Promise.all([
+  const [cpa, billing] = await Promise.all([
     probeServiceRoot(cfg.cpaBaseUrl, ["/healthz", "/", "/health"]),
     probeServiceRoot(cfg.billingBaseUrl, ["/healthz", "/", "/health"]),
-    // CPAMP remains optional; do not treat it as required for site health.
-    probeServiceRoot(cfg.cpampBaseUrl, ["/health", "/healthz", "/"]),
   ])
   return {
     cpa: { ok: cpa.ok, latency_ms: cpa.latency_ms, status: cpa.status },
     billing: { ok: billing.ok, latency_ms: billing.latency_ms, status: billing.status },
-    cpamp: { ok: cpamp.ok, latency_ms: cpamp.latency_ms, status: cpamp.status },
   }
 }
 

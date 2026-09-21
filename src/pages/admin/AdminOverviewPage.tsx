@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   Activity,
   Cable,
-  ExternalLink,
   Gauge,
   KeyRound,
   RefreshCw,
@@ -25,7 +24,7 @@ type Overview = {
   api_keys?: { total: number }
   public_api_base?: string
   pool?: { total: number; active: number; unavailable: number; disabled: number; by_provider: { provider: string; count: number }[] }
-  ops?: { www_cpamp?: string; openapi_admin?: string; note?: string }
+  ops?: { openapi_admin?: string; note?: string }
   collector?: { ok?: boolean; lastSync?: string | null; error?: string | null; latency_ms?: number | null; account_count?: number }
 }
 
@@ -111,12 +110,9 @@ export function AdminOverviewPage({ path }: { path: string }) {
       <div className="panel" style={{ marginTop: 4, marginBottom: 12 }}>
         <h3 style={{ marginTop: 0 }}>{P('运维分工')}</h3>
         <p className="page-lead" style={{ marginBottom: 8 }}>
-          {P('CPA Management Key 为生产主路径。用量与排行榜走本站 site-usage。CPAMP 可选。')}
+          {P('CPA Management Key 为生产主路径。用量与排行榜走本站 site-usage。')}
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <a className="button secondary compact" href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">
-            <ExternalLink size={14} /> www CPAMP
-          </a>
           <button type="button" className="button secondary compact" onClick={() => navigate('/admin/monitoring')}>
             <Activity size={14} /> {P('请求监控')}
           </button>
@@ -274,7 +270,7 @@ export function AdminOverviewPage({ path }: { path: string }) {
                 </tr>
               </thead>
               <tbody>
-                {(['cpa', 'billing', 'cpamp'] as const).map((k) => {
+                {(['cpa', 'billing'] as const).map((k) => {
                   const row = data?.health?.[k]
                   return (
                     <tr key={k}>
