@@ -73,6 +73,17 @@ Site login: native local users + Linux.do only — NEVER aily /admin/auth
 - `src/pages/admin/AdminAilyPage.tsx` + layout / App routes  
 - `server/.env.example`, README, ROADMAP  
 
-## Live smoke
+## Live smoke (2026-09-21 Asia/Shanghai)
 
-_(filled after deploy)_
+| Check | Result |
+|-------|--------|
+| Deploy `1c1ae13` + env `AILY_ADAPTER_API_KEY` / auth file paths | ✅ |
+| Service log `aily_adapter=http://127.0.0.1:8088 aily_routes=0` | ✅ |
+| `GET /api/admin/aily/status` no auth | ✅ 401 |
+| Admin status | ✅ 200; `has_access_token`; `cpa_openai_compatibility=[]`; architecture CPA-first |
+| Admin `POST /api/admin/aily/test` | ✅ upstream `/auth/me` OK (yiyu); adapter `/v1/models` 5 models |
+| `POST /v1/chat/completions` CPA model | ✅ 200; `x-mrblank-route: cpa`; diagnosis `route_via=cpa` → `:8320` |
+| Temporary `AILY_MODEL_ROUTES=aily-*,glm-5.3` then `aily-fast` | ✅ 200; `route_via=aily` → `:8088`; then routes cleared back to 0 |
+| openapi / aily / www HTTP | ✅ 200 / 302 / 307 (untouched) |
+
+How to test UI: admin → https://openapi.juc114.cn/#/admin/aily → 连通测试 / 邮箱登录或粘贴 token。默认 `/v1` 仍走 CPA；旁路需在 VPS `.env` 设置 `AILY_MODEL_ROUTES`。
