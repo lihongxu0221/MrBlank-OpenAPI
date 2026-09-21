@@ -28,7 +28,7 @@ import { AdminGroupsPage } from './pages/admin/AdminGroupsPage'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage'
 import { AdminAilyPage } from './pages/admin/AdminAilyPage'
 import { AdminCreditsPage } from './pages/admin/AdminCreditsPage'
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { getSiteConfig, subscribeSiteConfig } from './config/site'
 import { getLanguage } from './i18n'
 
@@ -36,6 +36,13 @@ export default function App() {
   const path = useHashRoute()
   useLanguage() // re-render on language change
   const site = useSyncExternalStore(subscribeSiteConfig, getSiteConfig, getSiteConfig)
+
+  const [scrolled, setScrolled] = useState(() => typeof window !== 'undefined' && window.scrollY > 24)
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 24)
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
 
   useEffect(() => {
     const tag = getLanguage() === 'en' ? site.siteTaglineEn : site.siteTagline
@@ -117,7 +124,7 @@ export default function App() {
       page = (
         <div className="page">
           <h1>{P('这一页暂时没有内容')}</h1>
-          <a href="#/">{P('返回首页')}</a>
+          <a href="/">{P('返回首页')}</a>
         </div>
       )
   }
@@ -128,7 +135,7 @@ export default function App() {
         {P('跳到主要内容')}
       </a>
       <NavShell path={path} />
-      <CommunityNotice />
+      <CommunityNotice scrolled={scrolled} />
       <main id="main-content">{page}</main>
       <SiteFooter />
     </div>

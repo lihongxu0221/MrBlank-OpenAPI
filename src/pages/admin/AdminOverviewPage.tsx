@@ -53,7 +53,7 @@ export function AdminOverviewPage({ path }: { path: string }) {
       <div className="panel" style={{ marginTop: 4, marginBottom: 12 }}>
         <h3 style={{ marginTop: 0 }}>{P('运维分工')}</h3>
         <p className="page-lead" style={{ marginBottom: 8 }}>
-          {P('www CPAMP = 完整运维面板；本站 #/admin = MrBlank 风格的日常运营子集（连接 / 号池 / 密钥 / 用量），不嵌入 management.html。')}
+          {P('www CPAMP = 完整运维面板；本站 /admin = MrBlank 风格的日常运营子集（连接 / 号池 / 密钥 / 用量），不嵌入 management.html。')}
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <a className="button secondary compact" href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">

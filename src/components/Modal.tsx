@@ -7,22 +7,25 @@ export function Modal({
   children,
   onClose,
   wide,
+  className,
 }: {
   title: string
   children: ReactNode
   onClose: () => void
   wide?: boolean
+  className?: string
 }) {
+  const classes = ['modal', wide ? 'modal-wide' : '', className || ''].filter(Boolean).join(' ')
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className={`modal ${wide ? 'modal-wide' : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div className={classes} onClick={(e) => e.stopPropagation()}>
         <div className="modal-heading">
           <h2>{title}</h2>
           <button type="button" className="icon-button" onClick={onClose} aria-label={P('关闭对话框')}>
             <X size={18} />
           </button>
         </div>
-        {children}
+        <div className="modal-inner">{children}</div>
       </div>
     </div>
   )

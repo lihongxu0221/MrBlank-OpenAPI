@@ -73,7 +73,7 @@ export function ConsoleLayout({
           <div>{P('好奇心，是最好的起点。')}</div>
           <div>{P('社区共享 · 公平使用')}</div>
           <a
-            href="#/guide"
+            href="/guide"
             onClick={(e) => {
               e.preventDefault()
               navigate('/guide')

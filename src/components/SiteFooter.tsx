@@ -12,7 +12,7 @@ export function SiteFooter() {
         <div>
           <a
             className="brand"
-            href="#/"
+            href="/"
             onClick={(e) => {
               e.preventDefault()
               navigate('/')
@@ -34,7 +34,7 @@ export function SiteFooter() {
         </div>
         <div className="footer-links">
           <a
-            href="#/guide"
+            href="/guide"
             onClick={(e) => {
               e.preventDefault()
               navigate('/guide')
@@ -43,7 +43,7 @@ export function SiteFooter() {
             {P('接入指南')}
           </a>
           <a
-            href="#/about"
+            href="/about"
             onClick={(e) => {
               e.preventDefault()
               navigate('/about')
@@ -52,7 +52,7 @@ export function SiteFooter() {
             {P('公平使用与隐私')}
           </a>
           <a
-            href="#/availability"
+            href="/availability"
             onClick={(e) => {
               e.preventDefault()
               navigate('/availability')

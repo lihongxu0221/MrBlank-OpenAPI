@@ -337,7 +337,7 @@ function createUserSession(user) {
   return rec
 }
 
-function postLoginHash(user) {
+function postLoginPath(user) {
   return isAdminUser(user, adminAllowlist) ? '/admin' : '/console'
 }
 
@@ -644,27 +644,39 @@ function publicHandlers() {
     pool: () => buildPool(),
     leaderboard: (period = 'today', sort = 'credits', p = 1) => buildLeaderboard(period, sort, p),
     activity: (period = 'today') => buildActivity(period),
-    notices: (size = 50) =>
-      ok({
-        items: [
-          {
-            id: 'n1',
-            level: 'warning',
-            title: '提醒 | 通用公告 | 每日额度使用规则',
-            body: '请合理使用社区共享额度，勿自动签到或转售密钥。签到以北京时间为准。',
-            published_at: '2026-09-18T10:00:00+08:00',
-            ack_identity: 'n1-2026-09-18',
-          },
-          {
-            id: 'n2',
-            level: 'info',
-            title: '欢迎来到 MrBlank OpenAPI',
-            body: '模型调用 Base URL 为 https://openapi.juc114.cn/v1（本站 nginx → CPA billing）。请使用 Linux.do 登录。',
-            published_at: '2026-09-10T09:00:00+08:00',
-            ack_identity: 'n2-2026-09-10',
-          },
-        ].slice(0, size),
-      }),
+    notices: (size = 50, page = 1) => {
+      const all = [
+        {
+          id: 1,
+          level: 'warning',
+          title: '通用公告｜每日额度使用规则',
+          content:
+            '更新时间：以北京时间为准。\n\n每日签到领取额度，请尽快使用，不要囤积。\n\n额度仅用于本站模型调用，不可充值、提现，也不保证上游持续可用。\n\n请勿自动签到、批量账号、转售或共享密钥滥用资源。',
+          createdAt: '2026-09-18T10:00:00.000Z',
+          updatedAt: '2026-09-21T00:24:00.000Z',
+        },
+        {
+          id: 2,
+          level: 'info',
+          title: '欢迎来到 MrBlank OpenAPI',
+          content:
+            '模型调用 Base URL：https://openapi.juc114.cn/v1\n\n支持本站账号注册登录与 Linux.do 社区登录。\n\n控制台可管理密钥、查看真实用量，并参与签到与兑换。',
+          createdAt: '2026-09-10T01:00:00.000Z',
+          updatedAt: '2026-09-10T01:00:00.000Z',
+        },
+      ]
+      const pageSize = Math.min(Math.max(Number(size) || 10, 1), 50)
+      const p = Math.max(Number(page) || 1, 1)
+      const start = (p - 1) * pageSize
+      const items = all.slice(start, start + pageSize)
+      return ok({
+        items,
+        total: all.length,
+        page: p,
+        pageSize,
+        timezone: 'Asia/Shanghai',
+      })
+    },
     challenge: (purpose) =>
       ok({
         id: randomToken(32),
@@ -887,7 +899,7 @@ app.get('/api/welfare/activity', async (req, res) => {
   }
 })
 app.get('/api/welfare/notices', (req, res) =>
-  res.json(pub.notices(Number(req.query.size || 50))),
+  res.json(pub.notices(Number(req.query.size || 50), Number(req.query.p || 1))),
 )
 app.post('/api/welfare/challenge', (req, res) =>
   res.json(pub.challenge(String(req.body?.purpose || 'login'))),
@@ -921,8 +933,8 @@ app.get('/oauth/linuxdo', async (req, res) => {
 
   const failRedirect = (reason) => {
     const u = new URL(SITE_ORIGIN)
+    u.pathname = '/login'
     u.searchParams.set('oauth_error', reason)
-    u.hash = '/console'
     res.redirect(302, u.toString())
   }
 
@@ -988,7 +1000,7 @@ app.get('/oauth/linuxdo', async (req, res) => {
     }
     const rec = createUserSession(user)
     setSessionCookie(res, rec.sid)
-    res.redirect(302, `${SITE_ORIGIN}/#${postLoginHash(user)}`)
+    res.redirect(302, `${SITE_ORIGIN}${postLoginPath(user)}`)
   } catch (err) {
     console.error('[oauth] callback error', err?.message || err)
     return failRedirect('oauth_failed')
@@ -1382,7 +1394,7 @@ app.get('/api/admin/me', requireAuth, (req, res) => {
         role: req.auth.user.role || null,
       },
       ops_note:
-        'www CPAMP = full ops; openapi #/admin = MrBlank-styled CPAMP capability subset (no embed).',
+        'www CPAMP = full ops; openapi /admin = MrBlank-styled CPAMP capability subset (no embed).',
       allowlist_configured:
         adminAllowlist.ids.size > 0 ||
         adminAllowlist.usernames.size > 0 ||
@@ -1446,8 +1458,8 @@ app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
         pool: summarizeAccounts(accounts),
         ops: {
           www_cpamp: 'https://www.juc114.cn/management.html',
-          openapi_admin: 'https://openapi.juc114.cn/#/admin',
-          note: 'www CPAMP = full ops; openapi #/admin = styled subset (connection / accounts / keys / usage).',
+          openapi_admin: 'https://openapi.juc114.cn/admin',
+          note: 'www CPAMP = full ops; openapi /admin = styled subset (connection / accounts / keys / usage).',
         },
       }),
     )

@@ -105,12 +105,12 @@ export function AdminLayout({
           : null}
         <div className="console-aside-note">
           <div>{P('www CPAMP = 完整运维')}</div>
-          <div>{P('openapi #/admin = 同风格运营子集')}</div>
+          <div>{P('openapi /admin = 同风格运营子集')}</div>
           <a href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">
             {P('打开 www CPAMP')} ↗
           </a>
           <a
-            href="#/console"
+            href="/console"
             onClick={(e) => {
               e.preventDefault()
               navigate('/console')

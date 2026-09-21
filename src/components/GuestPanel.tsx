@@ -28,7 +28,7 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
       )
       params.delete('oauth_error')
       const qs = params.toString()
-      history.replaceState(null, '', `${location.pathname}${qs ? `?${qs}` : ''}${location.hash}`)
+      history.replaceState(null, '', `${location.pathname}${qs ? `?${qs}` : ''}`)
     }
     void onLoggedIn
   }, [onLoggedIn])

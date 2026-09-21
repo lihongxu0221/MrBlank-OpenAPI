@@ -286,33 +286,28 @@ export const handlers = {
         { model: 'grok-imagine-video-1.5', calls: 12, successful: 9, tokens: 0, credits: 18 },
       ],
     }),
-  notices: (size = 50) =>
-    ok({
-      items: [
-        {
-          id: 'n3',
-          level: 'danger',
-          title: '重要 | 演示环境说明',
-          body: '当前为前端克隆 + Mock API，并非官方 Darkforger 服务。请勿提交真实密钥。',
-          published_at: '2026-09-20T20:00:00+08:00',
-          ack_identity: 'n3-2026-09-20',
-        },
-        {
-          id: 'n1',
-          level: 'warning',
-          title: '提醒 | 通用公告 | 每日额度使用规则',
-          body: '请合理使用社区共享额度，勿自动签到或转售密钥。签到以北京时间为准。',
-          published_at: '2026-09-18T10:00:00+08:00',
-          ack_identity: 'n1-2026-09-18',
-        },
-        {
-          id: 'n2',
-          level: 'info',
-          title: '欢迎来到 Darkforger 公益站',
-          body: '从 Grok 起步，逐步拓展更多模型。本站演示克隆仅供本地预览。',
-          published_at: '2026-09-10T09:00:00+08:00',
-          ack_identity: 'n2-2026-09-10',
-        },
-      ].slice(0, size),
-    }),
+  notices: (size = 50, page = 1) => {
+    const all = [
+      {
+        id: 1,
+        level: 'warning',
+        title: '通用公告｜每日额度使用规则',
+        content: '请合理使用社区共享额度，勿自动签到或转售密钥。签到以北京时间为准。',
+        createdAt: '2026-09-18T02:00:00.000Z',
+        updatedAt: '2026-09-18T02:00:00.000Z',
+      },
+      {
+        id: 2,
+        level: 'info',
+        title: '欢迎来到 MrBlank OpenAPI',
+        content: '当前为前端克隆环境。模型 Base URL 见站点配置。',
+        createdAt: '2026-09-10T01:00:00.000Z',
+        updatedAt: '2026-09-10T01:00:00.000Z',
+      },
+    ]
+    const pageSize = Math.min(Math.max(Number(size) || 10, 1), 50)
+    const pnum = Math.max(Number(page) || 1, 1)
+    const start = (pnum - 1) * pageSize
+    return ok({ items: all.slice(start, start + pageSize), total: all.length, page: pnum, pageSize })
+  },
 }

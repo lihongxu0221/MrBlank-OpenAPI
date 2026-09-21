@@ -62,7 +62,7 @@ export function NavShell({ path }: { path: string }) {
       <div className={`nav-shell ${expanded ? 'is-expanded' : ''}`}>
         <a
           className="brand"
-          href="#/"
+          href="/"
           onClick={(e) => {
             e.preventDefault()
             navigate('/')
@@ -96,7 +96,7 @@ export function NavShell({ path }: { path: string }) {
           })}
           {isAdmin ? (
             <a
-              href="#/admin"
+              href="/admin"
               className={adminActive ? 'is-active' : ''}
               onClick={(e) => {
                 e.preventDefault()
