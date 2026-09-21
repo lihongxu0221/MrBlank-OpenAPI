@@ -161,12 +161,24 @@ export function publicModelList(catalogList, routing) {
     const publicId = toPublicAilyId(bare)
     if (!bare || seen.has(publicId)) return
     seen.add(publicId)
-    const rec = byId.get(bare) || byId.get(raw) || byId.get(publicId)
-    const base = rec ? { ...rec } : { id: publicId, object: 'model', owned_by: 'aily' }
+    // Prefer catalog row whose id matches this bare name; do not reuse another
+    // preset's display_name that was incorrectly keyed under the same bare id.
+    const rec =
+      byId.get(bare) ||
+      byId.get(raw) ||
+      byId.get(publicId) ||
+      null
+    const exact =
+      rec && (String(rec.id) === bare || stripAilyPrefix(String(rec.id || '')) === bare)
+        ? rec
+        : null
+    const display =
+      (exact && exact.name && String(exact.name).trim()) || bare
+    const base = exact ? { ...exact } : { id: publicId, object: 'model', owned_by: 'aily' }
     out.push({
       ...base,
       id: publicId,
-      name: base.name || bare,
+      name: display,
       owned_by: base.owned_by || 'aily',
     })
   }

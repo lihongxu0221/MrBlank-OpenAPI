@@ -44,8 +44,10 @@ export function mapCatalogToModels(payload) {
     if (!table || typeof table !== 'object') continue
     for (const [id, entry] of Object.entries(table)) {
       const name = typeof entry?.display_name === 'string' ? entry.display_name : undefined
+      // Display name belongs to the preset id only — never copy onto entry.model
+      // (e.g. auto-max "Aily Max" must not label glm-5.3).
       addModel(ids, id, name ? { name } : {})
-      addModel(ids, entry?.model, name ? { name } : {})
+      addModel(ids, entry?.model)
       if (Array.isArray(entry?.aliases)) for (const alias of entry.aliases) addModel(ids, alias)
     }
   }
