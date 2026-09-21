@@ -10,6 +10,18 @@ import {
   redactHeaders,
 } from './diagnosis.js'
 
+
+/** Pure CPA vs Aily route selection (testable). */
+export function selectUpstreamRoute({ requestedModel, cpaBase, ailyBase, ailyApiKey, match }) {
+  const cpa = String(cpaBase || '').replace(/\/$/, '')
+  const aily = String(ailyBase || '').replace(/\/$/, '')
+  if (aily && ailyApiKey && typeof match === 'function' && match(requestedModel)) {
+    return { routeVia: 'aily', upstreamBase: aily, authOverride: ailyApiKey }
+  }
+  return { routeVia: 'cpa', upstreamBase: cpa, authOverride: null }
+}
+
+
 const HOP = new Set([
   'connection',
   'keep-alive',
@@ -188,22 +200,27 @@ export function createV1Proxy({
         }
       } catch (err) {
         console.error('[v1] governance enforce failed', err?.message || err)
+        res.status(503).json({
+          error: {
+            message: 'governance temporarily unavailable',
+            type: 'server_error',
+            code: 'governance_error',
+          },
+        })
+        return
       }
     }
 
-    let routeVia = 'cpa'
-    let upstreamBase = cpaBase
-    let authOverride = null
-    if (
-      ailyBase &&
-      ailyRoute?.apiKey &&
-      typeof ailyRoute.match === 'function' &&
-      ailyRoute.match(requestedModel)
-    ) {
-      routeVia = 'aily'
-      upstreamBase = ailyBase
-      authOverride = ailyRoute.apiKey
-    }
+    const selected = selectUpstreamRoute({
+      requestedModel,
+      cpaBase,
+      ailyBase,
+      ailyApiKey: ailyRoute?.apiKey,
+      match: ailyRoute?.match,
+    })
+    let routeVia = selected.routeVia
+    let upstreamBase = selected.upstreamBase
+    let authOverride = selected.authOverride
 
     const pathPart = endpoint.startsWith('/v1') ? endpoint : `/v1${endpoint}`
     const upstreamUrl = `${upstreamBase}${pathPart}`

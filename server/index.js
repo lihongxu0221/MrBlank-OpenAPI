@@ -701,6 +701,7 @@ app.use(
         const userId = owner.userId
         const metrics = metricsForUserId(userId)
         const groupInfo = groupStore.resolveUserGroup(userId, metrics)
+        let useSiteCredits = false
 
         if (isConsuming) {
           const quotaCheck = groupStore.assertQuotaAvailable(userId, metrics)
@@ -737,7 +738,32 @@ app.use(
                 },
               }
             }
+            useSiteCredits = true
             // allow via site credits; still enforce model allowlist below
+          }
+          // When group has a model allowlist, require an explicit model on consuming calls
+          const allowlist = groupInfo.group?.model_ids || []
+          if (allowlist.length && !String(model || '').trim()) {
+            return {
+              allow: false,
+              status: 403,
+              code: 'model_required',
+              group_id: groupInfo.group?.id,
+              headers: {
+                'x-mrblank-governance': 'model_required',
+                'x-mrblank-group': groupInfo.group?.id || '',
+              },
+              body: {
+                error: {
+                  message: '当前用户组限制了可用模型，请在请求中指定 model。',
+                  type: 'forbidden',
+                  code: 'model_required',
+                  param: 'model',
+                },
+                group_id: groupInfo.group?.id,
+                model_allowlist: allowlist,
+              },
+            }
           }
           if (model) {
             const modelCheck = groupStore.assertModelAllowed(groupInfo.group, model)
@@ -765,12 +791,12 @@ app.use(
             }
           }
         }
-        return { allow: true, userId, groupInfo }
+        return { allow: true, userId, groupInfo, useSiteCredits }
       },
       filterModelsBody(ctx, bodyText) {
         return groupStore.filterModelsResponseBody(bodyText, ctx.groupInfo?.group)
       },
-      onComplete({ userId, status, usage, isConsuming }) {
+      onComplete({ userId, status, usage, isConsuming, useSiteCredits }) {
         if (!userId || !isConsuming || !(status >= 200 && status < 300)) return
         const tokens =
           (Number(usage?.prompt_tokens) || 0) + (Number(usage?.completion_tokens) || 0)
@@ -780,11 +806,13 @@ app.use(
         } catch (e) {
           console.error('[groups] recordUsage failed', e?.message || e)
         }
-        // Phase F: deduct site credit wallet (check-in / redeem grants)
-        try {
-          creditStore.consume(userId, quota)
-        } catch (e) {
-          console.error('[credits] consume failed', e?.message || e)
+        // Phase F: only deduct site credits when this call used overflow capacity
+        if (useSiteCredits) {
+          try {
+            creditStore.consume(userId, quota)
+          } catch (e) {
+            console.error('[credits] consume failed', e?.message || e)
+          }
         }
         const store = userStores.get(String(userId))
         if (store?.user) {

@@ -16,7 +16,7 @@ function ensureDir(filePath) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
 }
 
-function hashPassword(password, saltBuf) {
+export function hashPassword(password, saltBuf) {
   const salt = saltBuf || crypto.randomBytes(16)
   const derived = crypto.scryptSync(String(password), salt, KEYLEN, {
     N: SCRYPT_N,
@@ -26,7 +26,7 @@ function hashPassword(password, saltBuf) {
   return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString('base64')}$${derived.toString('base64')}`
 }
 
-function verifyPassword(password, encoded) {
+export function verifyPassword(password, encoded) {
   const parts = String(encoded || '').split('$')
   if (parts.length !== 6 || parts[0] !== 'scrypt') return false
   const N = Number(parts[1])

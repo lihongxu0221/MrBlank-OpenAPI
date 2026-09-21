@@ -358,24 +358,9 @@ export function createCreditStore(filePath, { quotaUnit = Q } = {}) {
       if (!code) return { ok: false, message: '请输入兑换码' }
       const doc = read()
       const u = ensureUser(doc, userId)
-      if (u.redeemed[code]) return { ok: false, message: '兑换码已使用' }
 
-      // Prefix DF-* still supported as ad-hoc one-time per user if no admin code
-      let entry = doc.codes.find((c) => c.code === code)
-      if (!entry && code.startsWith('DF-')) {
-        entry = {
-          code,
-          quota: 5 * Q,
-          max_uses: 0,
-          used_count: 0,
-          once_per_user: true,
-          enabled: true,
-          note: 'DF 前缀临时代码',
-          created_at: nowIso(),
-          expires_at: null,
-          _ephemeral: true,
-        }
-      }
+      // Codes must be admin-registered (no ad-hoc DF-* minting — that allowed unlimited free grants).
+      const entry = doc.codes.find((c) => c.code === code)
       if (!entry || !entry.enabled) return { ok: false, message: '兑换码无效' }
       if (entry.expires_at) {
         const exp = Date.parse(entry.expires_at)
@@ -383,15 +368,23 @@ export function createCreditStore(filePath, { quotaUnit = Q } = {}) {
           return { ok: false, message: '兑换码已过期' }
         }
       }
+      if (entry.once_per_user && u.redeemed[code]) {
+        return { ok: false, message: '兑换码已使用' }
+      }
       if (entry.max_uses > 0 && entry.used_count >= entry.max_uses) {
         return { ok: false, message: '兑换码已兑完' }
       }
 
       const awarded = entry.quota
-      u.redeemed[code] = { at: nowIso(), quota: awarded }
-      if (!entry._ephemeral) {
-        entry.used_count = (Number(entry.used_count) || 0) + 1
+      if (entry.once_per_user) {
+        u.redeemed[code] = { at: nowIso(), quota: awarded }
+      } else {
+        // Track redemptions without blocking repeats when once_per_user=false
+        const prev = u.redeemed[code]
+        const times = (prev && Number(prev.times)) || 0
+        u.redeemed[code] = { at: nowIso(), quota: awarded, times: times + 1 }
       }
+      entry.used_count = (Number(entry.used_count) || 0) + 1
       grant(doc, userId, awarded)
       write(doc)
       return { ok: true, awarded, balance: u.balance, code }
