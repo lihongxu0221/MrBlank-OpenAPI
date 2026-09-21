@@ -24,6 +24,10 @@ type AilyStatus = {
   has_refresh_token?: boolean
   access_preview?: string
   refresh_preview?: string
+  full_access_token?: string
+  full_refresh_token?: string
+  fullAccessToken?: string
+  fullRefreshToken?: string
   updated_at?: string | null
   model_routes?: string[]
   bridge?: string
@@ -109,6 +113,8 @@ export function AdminOauthPage({ path }: { path: string }) {
     try {
       const d = await api.get<AilyStatus>('/api/admin/aily/status')
       setAilyStatus(d)
+      setAccess(d.full_access_token || d.fullAccessToken || '')
+      setRefresh(d.full_refresh_token || d.fullRefreshToken || '')
       if (d.aily_base_from_env || d.upstream_from_env) {
         setBaseUrl(d.upstream || '')
       } else {
@@ -255,8 +261,6 @@ export function AdminOauthPage({ path }: { path: string }) {
         aily_base_url: baseUrl.trim() || undefined,
       })
       setAilyMsg(P('Token 已保存'))
-      setAccess('')
-      setRefresh('')
       await loadAily()
     } catch (e) {
       setAilyErr((e as Error).message)
@@ -557,14 +561,33 @@ export function AdminOauthPage({ path }: { path: string }) {
 
         <div style={{ marginBottom: 16 }}>
           <h4 style={{ marginTop: 0 }}>{P('粘贴 Token')}</h4>
+          <p className="muted" style={{ margin: '0 0 12px', fontSize: 13 }}>
+            {ailyStatus?.has_access_token
+              ? `${P('已授权')} · ${ailyStatus.access_preview || '****'}${
+                  ailyStatus.updated_at ? ` · ${P('更新时间')} ${ailyStatus.updated_at}` : ''
+                }`
+              : P('未配置')}
+          </p>
           <form className="guest-login-form" onSubmit={saveTokens}>
             <div className="field">
-              <label>access_token</label>
-              <textarea value={access} onChange={(e) => setAccess(e.target.value)} rows={3} />
+              <label>{P('Access Token')}</label>
+              <textarea
+                value={access}
+                onChange={(e) => setAccess(e.target.value)}
+                rows={3}
+                placeholder={P('当前可用的 Access Token（可编辑后保存）')}
+                style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}
+              />
             </div>
             <div className="field">
-              <label>refresh_token</label>
-              <textarea value={refresh} onChange={(e) => setRefresh(e.target.value)} rows={3} />
+              <label>{P('Refresh Token（可选）')}</label>
+              <textarea
+                value={refresh}
+                onChange={(e) => setRefresh(e.target.value)}
+                rows={3}
+                placeholder={P('可选；有则可用于刷新 Access Token')}
+                style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }}
+              />
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button type="submit" className="button">

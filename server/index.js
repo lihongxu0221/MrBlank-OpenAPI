@@ -2042,7 +2042,7 @@ app.get('/api/admin/aily/status', requireAdmin, async (_req, res) => {
     }
     res.json(
       ok({
-        ...ailyManager.publicStatus(),
+        ...ailyManager.adminStatus(),
         cpa_openai_compatibility: openaiCompat,
         architecture: {
           primary: 'client → openapi /v1 → BFF → CPA billing :8320 → CPA',

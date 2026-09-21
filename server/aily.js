@@ -237,6 +237,19 @@ export function createAilyManager(cfg = loadAilyConfig()) {
     }
   }
 
+  /** Admin-only status: includes full tokens for paste/edit UI. Never call from non-admin routes. */
+  function adminStatus() {
+    const auth = readAuth()
+    return {
+      ...publicStatus(),
+      full_access_token: auth.access_token || '',
+      full_refresh_token: auth.refresh_token || '',
+      // camelCase aliases (mirror aily-openai-adapter)
+      fullAccessToken: auth.access_token || '',
+      fullRefreshToken: auth.refresh_token || '',
+    }
+  }
+
   async function testUpstreamMe() {
     const auth = readAuth()
     const token = normalizeAilyToken(auth.access_token)
@@ -419,6 +432,7 @@ export function createAilyManager(cfg = loadAilyConfig()) {
   return {
     cfg,
     publicStatus,
+    adminStatus,
     testUpstreamMe,
     testAdapterModels,
     testEmbeddedModels,
