@@ -2,7 +2,7 @@
 
 Date: 2026-09-21 (Asia/Shanghai)  
 Deploy: `openapi.juc114.cn` · service `mrblank-openapi.service`  
-Commits: `8253b97` (roadmap) · `98873ff` (native local login)
+Commits: `8253b97` (roadmap) · `98873ff` (native local login) · `b58c3b3` (checklist) · see HEAD for `/login` page
 
 ## Result summary
 
@@ -10,7 +10,7 @@ Commits: `8253b97` (roadmap) · `98873ff` (native local login)
 |------|--------|-------|
 | ROADMAP committed/pushed | PASS | `docs/ROADMAP.md` |
 | VPS full sync + restart | PASS | `groups.js` + `siteContent.js` + `localUsers.js` live |
-| Dual login UI | PASS | 账号登录 first, Linux.do below divider; MrBlank styles |
+| Dual login UI | PASS | 账号登录 first, Linux.do below divider; `#/login?next=` page; MrBlank styles |
 | Local password auth | PASS | `POST /api/auth/login` → local JSON + scrypt; **not** Aily adapter |
 | Post-login redirect | PASS | local `role=admin` → `#/admin`; else `#/console` (Linux.do allowlist unchanged) |
 | Constellation | PASS | public `/api/welfare/constellation` + admin editor routes |
