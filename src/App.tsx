@@ -17,15 +17,19 @@ import { KeysPage } from './pages/console/KeysPage'
 import { UsagePage } from './pages/console/UsagePage'
 import { ModelsPage } from './pages/console/ModelsPage'
 import { ChannelsPage } from './pages/console/ChannelsPage'
-import { useEffect } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
+import { getSiteConfig, subscribeSiteConfig } from './config/site'
+import { getLanguage } from './i18n'
 
 export default function App() {
   const path = useHashRoute()
   useLanguage() // re-render on language change
+  const site = useSyncExternalStore(subscribeSiteConfig, getSiteConfig, getSiteConfig)
 
   useEffect(() => {
-    document.title = P('Darkforger · 为每一种好奇，打开可能', 'Darkforger · More room for every idea')
-  })
+    const tag = getLanguage() === 'en' ? site.siteTaglineEn : site.siteTagline
+    document.title = `${site.siteName} · ${tag}`
+  }, [site, path])
 
   let page: ReactNode
   switch (path) {

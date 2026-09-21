@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { ArrowRight, Languages, Menu, Moon, Palette, Sun, X } from 'lucide-react'
 import { getLanguage, P, setLanguage } from '../i18n'
 import { navigate } from '../router/hash'
@@ -6,6 +6,8 @@ import { toggleTheme } from '../lib/prefs'
 import { useLanguage, usePrefs, useSession } from '../hooks/useStore'
 import { PreferencePanel } from './PreferencePanel'
 import { setSession } from '../lib/session'
+import { api } from '../lib/api'
+import { getSiteConfig, subscribeSiteConfig } from '../config/site'
 
 const NAV = [
   { path: '/', label: '首页' },
@@ -19,9 +21,20 @@ export function NavShell({ path }: { path: string }) {
   const session = useSession()
   const lang = useLanguage()
   const { theme } = usePrefs()
+  const site = useSyncExternalStore(subscribeSiteConfig, getSiteConfig, getSiteConfig)
   const [expanded, setExpanded] = useState(false)
   const [prefsOpen, setPrefsOpen] = useState(false)
   const consoleActive = ['/console', '/checkin', '/redeem', '/keys', '/usage', '/models', '/channels'].includes(path)
+
+  async function logout() {
+    try {
+      await api.post('/api/user/auth/logout', undefined, { auth: false })
+    } catch {
+      /* still clear local */
+    }
+    setSession(null)
+    navigate('/')
+  }
 
   return (
     <header className="site-header">
@@ -33,12 +46,12 @@ export function NavShell({ path }: { path: string }) {
             e.preventDefault()
             navigate('/')
           }}
-          aria-label={P('Darkforger 首页')}
+          aria-label={P(`${site.siteName} 首页`, `${site.siteName} home`)}
         >
           <img src="/mark.svg" alt="" />
           <span>
-            Darkforger
-            <small>{P('公益站')}</small>
+            {site.siteName}
+            <small>{P(site.brandShort)}</small>
           </span>
         </a>
 
@@ -92,14 +105,7 @@ export function NavShell({ path }: { path: string }) {
             <Palette size={16} />
           </button>
           {session ? (
-            <button
-              type="button"
-              className="button secondary"
-              onClick={() => {
-                setSession(null)
-                navigate('/')
-              }}
-            >
+            <button type="button" className="button secondary" onClick={() => void logout()}>
               {P('退出登录')}
             </button>
           ) : (

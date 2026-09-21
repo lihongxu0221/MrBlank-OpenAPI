@@ -1,13 +1,28 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { KeyRound } from 'lucide-react'
 import { P } from '../i18n'
-import { mockDevLogin } from '../lib/session'
-import { navigate } from '../router/hash'
 import { api } from '../lib/api'
 
 export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const err = params.get('oauth_error')
+    if (err) {
+      setMsg(
+        P(
+          `Linux.do 登录失败（${err}）。请重试。`,
+          `Linux.do login failed (${err}). Please try again.`,
+        ),
+      )
+      params.delete('oauth_error')
+      const qs = params.toString()
+      history.replaceState(null, '', `${location.pathname}${qs ? `?${qs}` : ''}${location.hash}`)
+    }
+    void onLoggedIn
+  }, [onLoggedIn])
 
   async function tryLinuxDo() {
     setBusy(true)
@@ -16,29 +31,18 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
       const data = await api.post<{ flow_token: string; authorization_url: string | null }>(
         '/api/oauth/state',
         { provider: 'linuxdo', intent: 'login' },
-        { auth: false, proof: 'mock-grant' },
+        { auth: false },
       )
       if (data.authorization_url) {
         location.href = data.authorization_url
         return
       }
-      setMsg(
-        P(
-          '演示环境未连接真实 Linux.do OAuth。请使用下方「开发者模拟登录」。',
-          'Demo mode has no real Linux.do OAuth. Use Developer mock login below.',
-        ),
-      )
+      setMsg(P('暂时无法启动 Linux.do 登录，请稍后重试。', 'Unable to start Linux.do login. Try again later.'))
     } catch (e) {
       setMsg((e as Error).message)
     } finally {
       setBusy(false)
     }
-  }
-
-  function devLogin() {
-    mockDevLogin()
-    onLoggedIn?.()
-    navigate('/console')
   }
 
   return (
@@ -53,10 +57,7 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
       </p>
       <button type="button" className="button block" disabled={busy} onClick={tryLinuxDo}>
         <span className="linuxdo-mark" />
-        {P('使用 Linux.do 登录')} →
-      </button>
-      <button type="button" className="button secondary block dev-login" onClick={devLogin}>
-        {P('开发者模拟登录', 'Developer mock login')}
+        {busy ? P('正在跳转…', 'Redirecting…') : P('使用 Linux.do 登录')} →
       </button>
       <div className="field-note">{P('只申请必要的社区身份信息')}</div>
       {msg ? <p style={{ color: 'var(--error)', marginTop: 14 }}>{msg}</p> : null}

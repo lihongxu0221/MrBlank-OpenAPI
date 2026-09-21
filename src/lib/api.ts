@@ -34,7 +34,7 @@ async function request<T>(
     const res = await fetch(path, {
       ...init,
       headers,
-      credentials: 'same-origin',
+      credentials: 'include',
       cache: 'no-store',
       signal: ctrl.signal,
     })

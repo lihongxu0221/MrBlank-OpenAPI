@@ -22,7 +22,9 @@
   position: sticky;
   top: 0;
   z-index: 40;
-  padding: 16px 20px 0;
+  padding: 16px 24px 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .nav-shell {
@@ -34,11 +36,13 @@
   justify-content: space-between;
   align-items: center;
   gap: 16px;
+  width: 100%;
   max-width: 1240px;
   min-height: 72px;
-  margin: auto;
+  margin: 0 auto;
   padding: 10px 16px 10px 24px;
   display: flex;
+  box-sizing: border-box;
 }
 
 .brand {
@@ -51,6 +55,10 @@
 .brand img {
   width: 28px;
   height: 28px;
+}
+.brand span {
+  line-height: 1.15;
+  white-space: nowrap;
 }
 .brand small {
   display: block;
@@ -188,7 +196,9 @@
 .community-notice {
   max-width: 1240px;
   margin: 14px auto 0;
-  padding: 0 20px;
+  padding: 0 24px;
+  width: 100%;
+  box-sizing: border-box;
 }
 .community-notice-inner {
   display: flex;
@@ -328,6 +338,33 @@ main#main-content {
 .section-heading p {
   color: var(--muted);
   line-height: 1.65;
+}
+
+.steps-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .steps-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.step-card .step-index {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.step-card h3 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+.step-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
 }
 
 .model-catalog {

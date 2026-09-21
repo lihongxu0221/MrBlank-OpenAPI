@@ -1,64 +1,78 @@
-# MrBlank-OpenAPI
+# MrBlank OpenAPI
 
-Darkforger 公益站（https://welfare.darkforger.com/）的**前端演示克隆**，使用 Vite + React + TypeScript 重建 UI，并通过 Vite 中间件提供 Mock `/api/*`。
+Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn)。支持 **真实 Linux.do OAuth**、会话 Cookie，以及签到 / 兑换 / 密钥等控制台 API（服务端进程内存储）。
 
-> 本项目**不是**官方 Darkforger 服务，也未接入真实 Linux.do OAuth / Turnstile / 上游模型。仅供学习与本地预览。
+> 本站是独立部署的 OpenAPI **控制台 UI**。模型调用请使用配置的 Base URL（默认 `https://welfare.darkforger.com/v1`）。**本域名默认不代理 `/v1`**，请勿把本站当成已托管的上游模型服务。
 
-## 快速开始
+## 站名与 Base URL（可配置）
+
+编辑 `public/site-config.json`（生产可直接改该文件后刷新，无需重新打包前端逻辑以外的文案依赖构建内默认值）：
+
+```json
+{
+  "siteName": "MrBlank OpenAPI",
+  "brandShort": "公益站",
+  "siteTagline": "为每一种好奇，打开可能",
+  "siteTaglineEn": "More room for every idea",
+  "apiBaseUrl": "https://welfare.darkforger.com/v1",
+  "footerLine": "Built for curiosity, shared with care."
+}
+```
+
+源码默认值见 `src/config/site.ts`。
+
+## 环境变量（服务端，勿提交 git）
+
+| 变量 | 说明 |
+|---|---|
+| `LINUXDO_CLIENT_ID` | Linux.do OAuth Client ID |
+| `LINUXDO_CLIENT_SECRET` | Client Secret |
+| `LINUXDO_REDIRECT_URI` | 回调，如 `https://openapi.juc114.cn/oauth/linuxdo` |
+| `SESSION_SECRET` | 会话签名密钥（随机长串） |
+| `PORT` | 默认 `8787` |
+| `HOST` | 默认 `127.0.0.1` |
+| `SITE_ORIGIN` | 默认 `https://openapi.juc114.cn` |
+
+示例见 `server/.env.example`。本地可在仓库根目录放 `.env`（已 gitignore）。
+
+## 本地开发
 
 ```bash
+# 终端 1：OAuth + API
+cp server/.env.example .env   # 填入真实密钥；生产 redirect 用于线上测试
+npm install --prefix server
+npm run server
+
+# 终端 2：前端（代理 /api 与 /oauth → :8787）
 npm install
 npm run dev
 ```
 
-浏览器打开终端提示的本地地址（默认 `http://localhost:5173`）。
+Linux.do 登录需使用已登记的 Redirect URI。当前生产回调为 `https://openapi.juc114.cn/oauth/linuxdo`，因此 **OAuth 请在该域名上验证**；本地主要联调 API。
+
+已移除「开发者模拟登录」。
+
+## 生产
 
 ```bash
-npm run build    # 产出 dist/
-npm run preview  # 预览构建结果（同样挂载 Mock API）
+npm run build                 # 产出 dist/
+npm install --omit=dev --prefix server
+npm start                     # node server/index.js （建议 systemd）
 ```
 
-## 已实现路由
+Nginx：静态根目录指向 `dist/`，并将 `/api/`、`/oauth/` 反代到 `http://127.0.0.1:8787`（`/oauth/linuxdo` 必须先于 SPA `try_files`）。
 
-| Hash 路由 | 说明 |
+## 路由
+
+| Hash | 说明 |
 |---|---|
-| `#/` | 首页（英雄区、模型星座、三步、FAQ、艺术展台） |
-| `#/guide` | 接入指南与代码示例 |
-| `#/availability` | 服务状态 / 模型健康 |
-| `#/community` | 排行榜、号池、模型调用实况 |
-| `#/about` | 关于公益 / 公平使用 / 隐私 / 许可 |
-| `#/console` | 控制台概览（需登录） |
-| `#/checkin` | 每日签到 |
-| `#/redeem` | 兑换码 |
-| `#/keys` | API 密钥 CRUD |
-| `#/usage` | 用量记录 |
-| `#/models` | 模型广场 |
-| `#/channels` | 控制台内服务状态 |
-
-## 登录说明
-
-- 保留「使用 Linux.do 登录」按钮（演示环境会提示未接真实 OAuth）。
-- 额外提供 **「开发者模拟登录」**，写入内存/sessionStorage mock session，即可使用签到、兑换、密钥、用量等页面。
-
-## Mock API
-
-开发/预览服务器拦截 `/api/*`，返回 `{ success, data, message }` 信封，覆盖状态、配置、公告、可用性、排行榜、签到、兑换、Token、日志等。
-
-演示兑换码：`WELCOME` / `GROK2026` / `COMMUNITY` / `DARKFORGER`（或任意 `DF-` 前缀）。
-
-## 主题
-
-- `localStorage`：`welfare.theme` / `welfare.accent` / `welfare.language`
-- 明暗 + 极昼蓝 / 香槟金 / 蔷薇 / 石墨
-- 控制台区域使用中性色覆盖（忽略 accent）
-
-## 与原站差距
-
-- 无真实 Linux.do OAuth / Cloudflare Turnstile / PoW worker 校验
-- 艺术展台为静态 hero 图轮播，非粒子 canvas
-- 部分动效、公告「今日不再提示」细节、密钥高级字段未完全对齐
-- `/v1/*` 上游代理未实现（仅文档与示例）
+| `#/` | 首页 |
+| `#/guide` | 接入指南 |
+| `#/availability` | 服务状态 |
+| `#/community` | 社区动态 |
+| `#/about` | 关于 |
+| `#/console` 等 | 控制台（需 Linux.do 登录） |
 
 ## 声明
 
-品牌、文案与设计参考自 Darkforger 公益站公开前端；本仓库为私人学习用途的重建，请勿用于冒充官方服务。
+站名、文案与布局参考了公开公益站前端；本仓库用于私人部署与学习。请勿冒充官方 Darkforger 服务。

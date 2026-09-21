@@ -1,6 +1,9 @@
+import { useSyncExternalStore } from 'react'
+import { getSiteConfig, subscribeSiteConfig } from '../config/site'
 import { P } from '../i18n'
 
 export function AboutPage() {
+  const site = useSyncExternalStore(subscribeSiteConfig, getSiteConfig, getSiteConfig)
   return (
     <div className="page">
       <div className="eyebrow">{P('关于公益')}</div>
@@ -12,7 +15,7 @@ export function AboutPage() {
       <div className="about-grid" style={{ marginTop: 28 }}>
         <article className="panel">
           <h3>{P('关于公益')}</h3>
-          <p>{P('Darkforger 是一个由社区共享模型额度的公益站。')}</p>
+          <p>{P(`${site.siteName} 是一个由社区共享模型额度的公益站控制台。`, `${site.siteName} is a community welfare console for shared model credits.`)}</p>
           <p>
             {P(
               '本站不提供充值。额度通过每日签到和社区兑换码发放，仅用于本站模型调用，不具有现金价值。',
@@ -66,7 +69,7 @@ export function AboutPage() {
             )}
           </p>
           <p style={{ color: 'var(--muted)' }}>
-            {P('本仓库为前端演示克隆，并非官方 Darkforger 服务。', 'This repo is a front-end demo clone, not the official Darkforger service.')}
+            {P('本站为独立部署的 OpenAPI 控制台；模型调用走配置的 Base URL，默认指向 Darkforger welfare，并非宣称自建上游。', 'This is a self-hosted OpenAPI console; model calls use the configured Base URL (default Darkforger welfare), not a claim of hosting upstream models.')}
           </p>
         </article>
       </div>

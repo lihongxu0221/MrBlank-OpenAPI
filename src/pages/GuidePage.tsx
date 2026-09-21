@@ -1,35 +1,46 @@
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { P } from '../i18n'
+import { getSiteConfig, subscribeSiteConfig } from '../config/site'
 
-const SAMPLES: Record<string, string> = {
-  curl: `curl https://welfare.darkforger.com/v1/chat/completions \\
+function samples(base: string): Record<string, string> {
+  return {
+    curl: `curl ${base}/chat/completions \\
   -H "Authorization: Bearer $WELFARE_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"model":"grok-4.6","messages":[{"role":"user","content":"Hello"}]}'`,
-  python: `from openai import OpenAI
-client = OpenAI(base_url="https://welfare.darkforger.com/v1", api_key="YOUR_KEY")
+    python: `from openai import OpenAI
+client = OpenAI(base_url="${base}", api_key="YOUR_KEY")
 print(client.chat.completions.create(
   model="grok-4.6",
   messages=[{"role":"user","content":"Hello"}],
 ))`,
-  javascript: `import OpenAI from "openai";
+    javascript: `import OpenAI from "openai";
 const client = new OpenAI({
-  baseURL: "https://welfare.darkforger.com/v1",
+  baseURL: "${base}",
   apiKey: process.env.WELFARE_API_KEY,
 });
 const res = await client.chat.completions.create({
   model: "grok-4.6",
   messages: [{ role: "user", content: "Hello" }],
 });`,
+  }
 }
 
 export function GuidePage() {
+  const site = useSyncExternalStore(subscribeSiteConfig, getSiteConfig, getSiteConfig)
+  const base = site.apiBaseUrl
+  const SAMPLES = samples(base)
   const [lang, setLang] = useState('curl')
   return (
     <div className="page">
       <div className="eyebrow">{P('接入指南')}</div>
       <h1>{P('三步，把灵感接上线')}</h1>
-      <p className="page-lead">{P('使用 OpenAI 兼容客户端，连接你的公益额度。')}</p>
+      <p className="page-lead">
+        {P(
+          '使用 OpenAI 兼容客户端连接上游公益 API。本控制台负责登录与密钥管理，默认不在本域名提供 /v1 代理。',
+          'Use an OpenAI-compatible client against the upstream welfare API. This console handles login and keys; it does not host /v1 on this domain by default.',
+        )}
+      </p>
 
       <div className="steps-grid" style={{ marginTop: 28 }}>
         {[
@@ -47,7 +58,7 @@ export function GuidePage() {
 
       <div className="panel" style={{ marginTop: 28 }}>
         <div className="eyebrow">{P('Base URL')}</div>
-        <div className="endpoint-row">https://welfare.darkforger.com/v1</div>
+        <div className="endpoint-row">{base}</div>
         <div className="code-toolbar">
           {Object.keys(SAMPLES).map((k) => (
             <button type="button" key={k} className={lang === k ? 'is-active' : ''} onClick={() => setLang(k)}>

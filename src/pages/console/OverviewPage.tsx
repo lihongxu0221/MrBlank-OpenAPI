@@ -1,15 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { CalendarCheck2, Copy, Gift, Settings2, Shield, Wand2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { formatCredits, setQuotaPerUnit } from '../../lib/format'
 import { P, qt } from '../../i18n'
 import { navigate } from '../../router/hash'
+import { getSiteConfig, subscribeSiteConfig } from '../../config/site'
 import { useSession, useToast } from '../../hooks/useStore'
 import { ConsoleLayout } from './ConsoleLayout'
 import { ConsoleHero } from '../../components/ConsoleHero'
 
 export function OverviewPage({ path }: { path: string }) {
   const session = useSession()
+  const site = useSyncExternalStore(subscribeSiteConfig, getSiteConfig, getSiteConfig)
   const name = session?.user?.display_name || session?.user?.username || P('探索者')
   const [self, setSelf] = useState<any>(null)
   const [days, setDays] = useState<{ date: string; requests: number }[]>([])
@@ -58,7 +60,7 @@ export function OverviewPage({ path }: { path: string }) {
   }
 
   function copyBase() {
-    navigator.clipboard?.writeText('https://welfare.darkforger.com/v1')
+    navigator.clipboard?.writeText(site.apiBaseUrl)
     showToast(P('已复制'))
   }
 
@@ -209,7 +211,7 @@ export function OverviewPage({ path }: { path: string }) {
           <h3>{P('连接你的下一个好想法')}</h3>
           <p>{P('创建密钥，再把这个地址填入客户端的 Base URL。')}</p>
           <div className="endpoint-row">
-            <code>https://welfare.darkforger.com/v1</code>
+            <code>{site.apiBaseUrl}</code>
             <button type="button" className="button ghost compact" onClick={copyBase}>
               <Copy size={14} /> {P('复制')}
             </button>
