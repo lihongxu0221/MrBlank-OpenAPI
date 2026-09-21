@@ -122,6 +122,21 @@ export function modelMatchesAilyRoute(model, patterns) {
   return false
 }
 
+
+function nextRefreshFromToken(token) {
+  try {
+    const part = String(token || '').split('.')[1]
+    if (!part) return null
+    const json = JSON.parse(Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'))
+    const exp = Number(json?.exp)
+    if (!Number.isFinite(exp) || exp <= 0) return null
+    // refresh 5 minutes before expiry
+    return new Date((exp - 300) * 1000).toISOString()
+  } catch {
+    return null
+  }
+}
+
 export function createAilyManager(cfg = loadAilyConfig()) {
   let adminCookie = ''
   let adminCookieAt = 0
@@ -226,6 +241,7 @@ export function createAilyManager(cfg = loadAilyConfig()) {
       access_preview: maskToken(auth.access_token),
       refresh_preview: maskToken(auth.refresh_token),
       updated_at: auth.updated_at || null,
+      next_refresh_at: nextRefreshFromToken(auth.access_token),
       model_routes: cfg.modelRoutes.slice(),
       bridge: 'embedded',
       // legacy fields kept for older UI (soft no-op)

@@ -82,6 +82,7 @@ import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy } from './v1Proxy.js'
 import { createAilyManager, loadAilyConfig } from './aily.js'
 import { createAilyUpstream } from './ailyUpstream.js'
+import { createAilyModelRoutingStore, publicModelList, normalizeModelRouting } from './ailyModelRouting.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -196,12 +197,16 @@ const HOST = process.env.HOST || '127.0.0.1'
 const SESSION_SECRET = process.env.SESSION_SECRET || ''
 const SITE_ORIGIN = process.env.SITE_ORIGIN || 'https://openapi.juc114.cn'
 const ailyManager = createAilyManager(loadAilyConfig(process.env))
+const ailyModelRouting = createAilyModelRoutingStore(
+  process.env.AILY_MODEL_ROUTING_PATH || path.join(__dirname, 'data', 'aily-model-routing.json'),
+)
 const ailyUpstream = createAilyUpstream({
   getAccessToken: () => ailyManager.getAccessToken(),
   getRefreshToken: () => ailyManager.getRefreshToken(),
   getUpstreamBase: () => ailyManager.getUpstreamBase(),
   saveAuth: (patch) => ailyManager.saveAuth(patch),
   refreshToken: () => ailyManager.refreshToken(),
+  getModelRouting: () => ailyModelRouting.get(),
 })
 ailyManager.attachUpstream(ailyUpstream)
 
@@ -2124,12 +2129,76 @@ app.get('/api/admin/aily/adapter-models', requireAdmin, async (_req, res) => {
   }
 })
 
-app.get('/api/admin/aily/models', requireAdmin, async (_req, res) => {
+app.get('/api/admin/aily/models', requireAdmin, async (req, res) => {
   try {
-    const result = await ailyManager.testEmbeddedModels(true)
-    res.status(result.ok ? 200 : 502).json(result.ok ? ok(result) : fail(result.message))
+    const refresh = String(req.query.refresh || '') === '1'
+    const result = await ailyManager.testEmbeddedModels(refresh)
+    const catalog = (result.data || (result.models || []).map((id) => ({ id, object: 'model', owned_by: 'aily' }))).map(
+      (m) => ({ id: m.id || m, name: m.name || m.id || m }),
+    )
+    const routing = ailyModelRouting.get()
+    const pub = publicModelList(
+      catalog.map((m) => ({ id: m.id, object: 'model', owned_by: 'aily', name: m.name })),
+      routing,
+    ).map((m) => ({ id: m.id, name: m.name || m.id }))
+    res.status(result.ok || catalog.length ? 200 : 502).json(
+      result.ok || catalog.length
+        ? ok({
+            catalog,
+            whitelist: routing.whitelist,
+            mappings: routing.mappings,
+            public: pub,
+            embedded: true,
+            message: result.message,
+            latency_ms: result.latency_ms,
+            upstream: result.upstream,
+          })
+        : fail(result.message || 'aily models failed'),
+    )
   } catch (err) {
     res.status(502).json(fail(err?.message || 'aily models failed'))
+  }
+})
+
+app.put('/api/admin/aily/models', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const refresh = body.refresh === true
+    const result = await ailyManager.testEmbeddedModels(refresh)
+    const catalogList = result.data || (result.models || []).map((id) => ({ id, object: 'model', owned_by: 'aily' }))
+    let routing = ailyModelRouting.get()
+    if (body.sync === 'latest' || body.sync === 'upstream' || body.sync === 'clear') {
+      routing = ailyModelRouting.sync(catalogList, body.sync)
+      // preserve mappings from request if provided alongside sync
+      if (body.mappings != null) {
+        routing = ailyModelRouting.update({ mappings: body.mappings })
+      }
+    } else if (body.whitelist != null || body.mappings != null || body.model_routing) {
+      routing = ailyModelRouting.update({
+        whitelist:
+          body.whitelist != null
+            ? body.whitelist
+            : (body.model_routing && body.model_routing.whitelist) || routing.whitelist,
+        mappings:
+          body.mappings != null
+            ? body.mappings
+            : (body.model_routing && body.model_routing.mappings) || routing.mappings,
+      })
+    }
+    routing = normalizeModelRouting(routing)
+    const catalog = catalogList.map((m) => ({ id: m.id, name: m.name || m.id }))
+    const pub = publicModelList(catalogList, routing).map((m) => ({ id: m.id, name: m.name || m.id }))
+    res.json(
+      ok({
+        catalog,
+        whitelist: routing.whitelist,
+        mappings: routing.mappings,
+        public: pub,
+        embedded: true,
+      }),
+    )
+  } catch (err) {
+    res.status(502).json(fail(err?.message || '保存模型配置失败'))
   }
 })
 

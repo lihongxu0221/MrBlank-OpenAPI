@@ -4,12 +4,12 @@
  * Uses shared .aily tokens via ailyManager — no separate :8088 process.
  */
 import { normalizeAilyToken } from './aily.js'
-
-const MODEL_ALIASES = {
-  'aily-auto': 'auto',
-  'aily-max': 'auto-max',
-  'aily-fast': 'auto-fast',
-}
+import {
+  MODEL_ALIASES,
+  applyModelRouting,
+  publicModelList,
+  normalizeModelRouting,
+} from './ailyModelRouting.js'
 
 const CATALOG_TTL_MS = 5 * 60 * 1000
 const toolReasoningCache = new Map()
@@ -63,7 +63,7 @@ export function catalogIndex(payload) {
   return { presets, models, list: mapCatalogToModels(payload) }
 }
 
-function resolveAilyModel(model, index = { presets: new Set(), models: new Set() }) {
+export function resolveAilyModel(model, index = { presets: new Set(), models: new Set() }) {
   const requested = String(model || '').trim() || 'aily-auto'
   if (MODEL_ALIASES[requested]) return { requested, presetId: MODEL_ALIASES[requested] }
   if (index.presets?.has(requested)) return { requested, presetId: requested }
@@ -111,8 +111,8 @@ function convertMessages(msgs) {
   })
 }
 
-function buildAilyBody(openaiBody, index) {
-  const info = resolveAilyModel(openaiBody.model, index)
+function buildAilyBody(openaiBody, index, routing) {
+  const info = applyModelRouting(openaiBody.model, index, routing, resolveAilyModel)
   const body = {
     messages: convertMessages(openaiBody.messages),
     max_tokens: openaiBody.max_tokens || openaiBody.max_completion_tokens || 16384,
@@ -255,9 +255,17 @@ function FALLBACK_MODELS() {
  *   getUpstreamBase: () => string,
  *   saveAuth: (patch: object) => void,
  *   refreshToken: () => Promise<{ok:boolean,message?:string}>,
+ *   getModelRouting?: () => { whitelist: string[], mappings: {from:string,to:string}[] },
  * }} deps
  */
 export function createAilyUpstream(deps) {
+  function currentRouting() {
+    try {
+      return normalizeModelRouting(deps.getModelRouting?.() || {})
+    } catch {
+      return normalizeModelRouting({})
+    }
+  }
   let catalogState = { at: 0, payload: null, index: catalogIndex(null), list: FALLBACK_MODELS() }
 
   async function fetchUpstream(url, { method = 'GET', headers = {}, body, timeoutMs = 120000 } = {}) {
@@ -357,7 +365,20 @@ export function createAilyUpstream(deps) {
   async function runAilyTurn(openaiBody, hooks = {}) {
     const cat = await loadCatalog()
     const base = deps.getUpstreamBase()
-    const upstream_req_body = buildAilyBody(openaiBody, cat.index)
+    const routingCfg = currentRouting()
+    const routeInfo = applyModelRouting(openaiBody.model, cat.index, routingCfg, resolveAilyModel)
+    if (!routeInfo.allowed) {
+      return {
+        error: `模型未在白名单中: ${routeInfo.requested}`,
+        status: 403,
+        upstream_url: '',
+        upstream_req_body: null,
+        upstream_req_headers: {},
+        rejected: true,
+      }
+    }
+    const bodyForUpstream = { ...openaiBody, model: routeInfo.mapped }
+    const upstream_req_body = buildAilyBody(bodyForUpstream, cat.index, routingCfg)
     const upstreamUrl = `${base}/api/v2/chat_stateless`
     const makeUpstreamHeaders = (token) => ({
       'Content-Type': 'application/json',
@@ -660,7 +681,8 @@ export function createAilyUpstream(deps) {
 
   async function handleModelsList(res) {
     const result = await listModels()
-    const data = result.data || (result.models || []).map((id) => ({ id, object: 'model', owned_by: 'aily' }))
+    const catalog = result.data || (result.models || []).map((id) => ({ id, object: 'model', owned_by: 'aily' }))
+    const data = publicModelList(catalog, currentRouting())
     const body = { object: 'list', data }
     const bodyText = JSON.stringify(body)
     if (!res.headersSent) {
@@ -752,5 +774,6 @@ export function createAilyUpstream(deps) {
     handleV1,
     handleChatCompletions,
     MODEL_ALIASES,
+    getModelRouting: currentRouting,
   }
 }

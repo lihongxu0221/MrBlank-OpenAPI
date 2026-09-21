@@ -29,6 +29,7 @@ type AilyStatus = {
   fullAccessToken?: string
   fullRefreshToken?: string
   updated_at?: string | null
+  next_refresh_at?: string | null
   model_routes?: string[]
   bridge?: string
   cpa_note?: string
@@ -86,6 +87,17 @@ export function AdminOauthPage({ path }: { path: string }) {
   const [baseUrl, setBaseUrl] = useState('')
   const [access, setAccess] = useState('')
   const [refresh, setRefresh] = useState('')
+  const [ailyManageOpen, setAilyManageOpen] = useState(true)
+  const [modelTab, setModelTab] = useState<'list' | 'map'>('list')
+  const [modelMsg, setModelMsg] = useState<string | null>(null)
+  const [modelErr, setModelErr] = useState<string | null>(null)
+  const [models, setModels] = useState<{
+    catalog: { id: string; name?: string }[]
+    whitelist: string[]
+    mappings: { from: string; to: string }[]
+    public?: { id: string; name?: string }[]
+  }>({ catalog: [], whitelist: [], mappings: [] })
+
 
   useEffect(() => {
     if (!gate.allowed) return
@@ -115,6 +127,7 @@ export function AdminOauthPage({ path }: { path: string }) {
       setAilyStatus(d)
       setAccess(d.full_access_token || d.fullAccessToken || '')
       setRefresh(d.full_refresh_token || d.fullRefreshToken || '')
+      await loadModels()
       if (d.aily_base_from_env || d.upstream_from_env) {
         setBaseUrl(d.upstream || '')
       } else {
@@ -202,6 +215,99 @@ export function AdminOauthPage({ path }: { path: string }) {
       showToast(P('已保存排除模型'))
     } catch (e) {
       showToast((e as Error).message)
+    }
+  }
+
+
+  async function loadModels(refresh = false) {
+    try {
+      const q = refresh ? '?refresh=1' : ''
+      const d = await api.get<{
+        catalog?: { id: string; name?: string }[]
+        whitelist?: string[]
+        mappings?: { from: string; to: string }[]
+        public?: { id: string; name?: string }[]
+      }>('/api/admin/aily/models' + q)
+      setModels({
+        catalog: d.catalog || [],
+        whitelist: d.whitelist || [],
+        mappings: (d.mappings || []).map((x) => ({ from: x.from || '', to: x.to || '' })),
+        public: d.public || [],
+      })
+    } catch (e) {
+      setModelErr((e as Error).message)
+    }
+  }
+
+  function toggleWhite(id: string) {
+    setModels((m) => {
+      const on = m.whitelist.includes(id)
+      return { ...m, whitelist: on ? m.whitelist.filter((x) => x !== id) : m.whitelist.concat(id) }
+    })
+  }
+
+  function setMap(i: number, key: 'from' | 'to', value: string) {
+    setModels((m) => {
+      const n = m.mappings.slice()
+      n[i] = { ...n[i], [key]: value }
+      return { ...m, mappings: n }
+    })
+  }
+
+  async function syncModels(kind: 'latest' | 'upstream' | 'clear') {
+    setModelMsg(P('同步中...'))
+    setModelErr(null)
+    try {
+      const d = await api.put<{
+        catalog?: { id: string; name?: string }[]
+        whitelist?: string[]
+        mappings?: { from: string; to: string }[]
+        public?: { id: string; name?: string }[]
+      }>('/api/admin/aily/models', {
+        sync: kind,
+        refresh: true,
+        mappings: models.mappings,
+      })
+      setModels({
+        catalog: d.catalog || [],
+        whitelist: d.whitelist || [],
+        mappings: (d.mappings || []).map((x) => ({ from: x.from || '', to: x.to || '' })),
+        public: d.public || [],
+      })
+      setModelMsg(
+        kind === 'clear'
+          ? P('已清空白名单')
+          : `${P('已同步')} ${(d.whitelist || []).length} ${P('个模型')}`,
+      )
+    } catch (e) {
+      setModelErr((e as Error).message)
+      setModelMsg(null)
+    }
+  }
+
+  async function saveModels() {
+    setModelMsg(P('保存中...'))
+    setModelErr(null)
+    try {
+      const d = await api.put<{
+        whitelist?: string[]
+        mappings?: { from: string; to: string }[]
+        public?: { id: string; name?: string }[]
+      }>('/api/admin/aily/models', {
+        whitelist: models.whitelist,
+        mappings: models.mappings.filter((x) => x.from && x.to),
+      })
+      setModels((m) => ({
+        ...m,
+        whitelist: d.whitelist || m.whitelist,
+        mappings: d.mappings || m.mappings,
+        public: d.public || m.public,
+      }))
+      setModelMsg(`${P('已保存')} · ${P('对外')} ${(d.public && d.public.length) || 0} ${P('个模型')}`)
+      showToast(P('已保存模型配置'))
+    } catch (e) {
+      setModelErr((e as Error).message)
+      setModelMsg(null)
     }
   }
 
@@ -602,6 +708,157 @@ export function AdminOauthPage({ path }: { path: string }) {
             </div>
           </form>
         </div>
+
+
+        {/* ── Aily.Local 模型限制（内嵌桥接，不影响 CPA 内核） ── */}
+        <div style={{ marginBottom: 16, padding: 14, border: '1px solid var(--border, #e5e7eb)', borderRadius: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <h4 style={{ margin: 0 }}>{P('Aily.Local')}</h4>
+            <button
+              type="button"
+              className="button secondary compact"
+              onClick={() => setAilyManageOpen((v) => !v)}
+            >
+              {ailyManageOpen ? P('收起') : P('管理授权')}
+            </button>
+          </div>
+          <p className="muted" style={{ margin: '8px 0 0', fontSize: 13 }}>
+            {ailyStatus?.has_access_token
+              ? `${P('已授权')} · ${ailyStatus.access_preview || '****'}`
+              : P('未配置 Aily token')}
+            {ailyStatus?.auth_file ? ` · ${P('凭证文件')} ${ailyStatus.auth_file}` : ''}
+            {ailyStatus?.next_refresh_at
+              ? ` · ${P('下次刷新')} ${new Date(ailyStatus.next_refresh_at).toLocaleString('zh-CN', {
+                  timeZone: 'Asia/Shanghai',
+                  hour12: false,
+                })}`
+              : ''}
+          </p>
+        </div>
+
+        {ailyManageOpen ? (
+          <div style={{ marginBottom: 16, padding: 14, border: '1px solid var(--border, #e5e7eb)', borderRadius: 10 }}>
+            <h4 style={{ marginTop: 0 }}>{P('模型限制（可选）')}</h4>
+            <p className="muted" style={{ margin: '0 0 12px', fontSize: 13 }}>
+              {P('/v1/models（命中 Aily 路由时）只返回白名单勾选的名称，以及映射左侧的请求名。两者都空才不限制。不影响未命中路由的 CPA 流量。')}
+            </p>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <button
+                type="button"
+                className={modelTab === 'list' ? 'button compact' : 'button secondary compact'}
+                onClick={() => setModelTab('list')}
+                style={{ flex: 1 }}
+              >
+                {P('模型白名单')}
+              </button>
+              <button
+                type="button"
+                className={modelTab === 'map' ? 'button compact' : 'button secondary compact'}
+                onClick={() => setModelTab('map')}
+                style={{ flex: 1 }}
+              >
+                {P('模型映射')}
+              </button>
+            </div>
+            {modelTab === 'list' ? (
+              <>
+                <details open>
+                  <summary style={{ cursor: 'pointer' }}>
+                    {models.whitelist.length} {P('个模型')}
+                  </summary>
+                  <div
+                    style={{
+                      maxHeight: 220,
+                      overflow: 'auto',
+                      marginTop: 8,
+                      padding: 8,
+                      background: 'var(--surface-2, rgba(0,0,0,0.03))',
+                      borderRadius: 8,
+                    }}
+                  >
+                    {(models.catalog || []).length ? (
+                      models.catalog.map((m) => (
+                        <label key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0' }}>
+                          <input
+                            type="checkbox"
+                            checked={models.whitelist.includes(m.id)}
+                            onChange={() => toggleWhite(m.id)}
+                          />
+                          <code style={{ fontSize: 12 }}>{m.id}</code>
+                        </label>
+                      ))
+                    ) : (
+                      <div className="muted">{P('未拉到上游模型，请先配置 Aily 授权')}</div>
+                    )}
+                  </div>
+                </details>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+                  <button type="button" className="button secondary compact" onClick={() => syncModels('latest')}>
+                    {P('同步最新支持模型')}
+                  </button>
+                  <button type="button" className="button secondary compact" onClick={() => syncModels('upstream')}>
+                    {P('同步上游支持的模型')}
+                  </button>
+                  <button type="button" className="button secondary compact" onClick={() => syncModels('clear')}>
+                    {P('清除所有模型')}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="muted" style={{ fontSize: 13 }}>
+                  {P('将请求模型映射到实际模型。左边是请求的模型，右边是发送到 API 的实际模型。')}
+                </p>
+                {(models.mappings || []).map((row, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                    <input
+                      placeholder={P('请求模型')}
+                      value={row.from}
+                      onChange={(e) => setMap(i, 'from', e.target.value)}
+                      style={{ flex: 1 }}
+                    />
+                    <span>→</span>
+                    <input
+                      placeholder={P('实际上游模型')}
+                      list="aily-model-to-list"
+                      value={row.to}
+                      onChange={(e) => setMap(i, 'to', e.target.value)}
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="button secondary compact"
+                      onClick={() =>
+                        setModels((m) => ({ ...m, mappings: m.mappings.filter((_, j) => j !== i) }))
+                      }
+                    >
+                      {P('删')}
+                    </button>
+                  </div>
+                ))}
+                <datalist id="aily-model-to-list">
+                  {(models.catalog || []).map((m) => (
+                    <option key={m.id} value={m.id} />
+                  ))}
+                </datalist>
+                <button
+                  type="button"
+                  className="button secondary compact"
+                  onClick={() => setModels((m) => ({ ...m, mappings: m.mappings.concat({ from: '', to: '' }) }))}
+                >
+                  + {P('添加映射')}
+                </button>
+              </>
+            )}
+            <div style={{ marginTop: 12 }}>
+              <button type="button" className="button" onClick={saveModels}>
+                {P('保存模型配置')}
+              </button>
+            </div>
+            {modelMsg ? <p style={{ color: 'var(--success, #16a34a)', marginTop: 8 }}>{modelMsg}</p> : null}
+            {modelErr ? <p style={{ color: 'var(--error)', marginTop: 8 }}>{modelErr}</p> : null}
+          </div>
+        ) : null}
 
         <div>
           <h4 style={{ marginTop: 0 }}>{P('CPA openai-compatibility（只读）')}</h4>
