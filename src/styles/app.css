@@ -1817,3 +1817,23 @@ table.data tr:last-child td {
   .diag-up-side { border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 8px; }
   .diag-modal { height: calc(100dvh - 16px); }
 }
+
+.guest-switch {
+  display: block;
+  margin: 14px auto 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.guest-switch:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.guest-login-form .field label {
+  display: none;
+}

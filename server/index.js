@@ -1103,6 +1103,41 @@ app.post('/api/auth/login', handleLocalPasswordLogin)
 // Legacy path alias (no longer proxies to Aily adapter)
 app.post('/api/auth/aily', handleLocalPasswordLogin)
 
+app.post('/api/auth/register', (req, res) => {
+  const username = String(req.body?.username || '').trim()
+  const password = String(req.body?.password || '')
+  const displayName = String(req.body?.display_name || '').trim()
+  if (!username || !password) {
+    res.status(400).json(fail('请输入用户名和密码'))
+    return
+  }
+  try {
+    // Public self-registration is always role=user (never admin).
+    const pub = localUserStore.createUser({
+      username,
+      password,
+      role: 'user',
+      display_name: displayName || username,
+    })
+    const user = localUserStore.toSessionUser(pub)
+    if (pub.group_id) {
+      try {
+        groupStore.assignMember(user.id, { group_id: pub.group_id, override: true })
+      } catch (e) {
+        console.error('[local-auth] group assign', e?.message || e)
+      }
+    }
+    // createUserSession already ensures profile + group promotion metrics
+    const rec = createUserSession(user)
+    setSessionCookie(res, rec.sid)
+    res.status(201).json(ok(sessionPayload(rec)))
+  } catch (err) {
+    const status = Number(err?.status) || 400
+    res.status(status).json(fail(err?.message || '注册失败'))
+  }
+})
+
+
 app.post('/api/user/auth/logout', (req, res) => {
   const sid = readSid(req)
   if (sid) sessions.delete(sid)
