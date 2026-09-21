@@ -88,15 +88,6 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
         {P('登录后可以领取每日额度、兑换社区礼物、')}
         {P('管理密钥并查看真实用量。')}
       </p>
-      <button type="button" className="button block" disabled={anyBusy} onClick={tryLinuxDo}>
-        <span className="linuxdo-mark" />
-        {busy ? P('正在跳转…', 'Redirecting…') : P('使用 Linux.do 登录')} →
-      </button>
-      <div className="field-note">{P('只申请必要的社区身份信息')}</div>
-
-      <div className="guest-divider" role="separator">
-        <span>{P('或', 'or')}</span>
-      </div>
 
       <form className="guest-aily-form" onSubmit={tryAily}>
         <div className="field">
@@ -108,7 +99,7 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
             value={username}
             disabled={anyBusy}
             onChange={(ev) => setUsername(ev.target.value)}
-            placeholder={P('Aily 账号用户名', 'Aily username')}
+            placeholder={P('账号用户名', 'Username')}
           />
         </div>
         <div className="field">
@@ -124,11 +115,21 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
             placeholder={P('密码', 'Password')}
           />
         </div>
-        <button type="submit" className="button secondary block" disabled={anyBusy}>
-          {ailyBusy ? P('正在登录…', 'Signing in…') : P('使用 Aily 账号登录', 'Sign in with Aily')} →
+        <button type="submit" className="button block" disabled={anyBusy}>
+          {ailyBusy ? P('正在登录…', 'Signing in…') : P('账号登录', 'Sign in')} →
         </button>
         <div className="field-note">{P('由本站校验 Aily 账号，不会把上游会话写入浏览器')}</div>
       </form>
+
+      <div className="guest-divider" role="separator">
+        <span>{P('或', 'or')}</span>
+      </div>
+
+      <button type="button" className="button secondary block" disabled={anyBusy} onClick={tryLinuxDo}>
+        <span className="linuxdo-mark" />
+        {busy ? P('正在跳转…', 'Redirecting…') : P('使用 Linux.do 登录')} →
+      </button>
+      <div className="field-note">{P('只申请必要的社区身份信息')}</div>
 
       {msg ? <p style={{ color: 'var(--error)', marginTop: 14 }}>{msg}</p> : null}
     </div>
