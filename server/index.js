@@ -23,6 +23,7 @@ import {
   mapAuthFilesToPoolItems,
   listCpaApiKeys,
   probeUrl,
+  fetchOpenaiCompatibility,
 } from './cpa.js'
 import { createUserKeyStore } from './userKeys.js'
 import {
@@ -39,6 +40,7 @@ import { createGroupStore } from './groups.js'
 import { createLocalUserStore } from './localUsers.js'
 import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy } from './v1Proxy.js'
+import { createAilyManager, loadAilyConfig } from './aily.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -86,8 +88,7 @@ const PORT = Number(process.env.PORT || 8787)
 const HOST = process.env.HOST || '127.0.0.1'
 const SESSION_SECRET = process.env.SESSION_SECRET || ''
 const SITE_ORIGIN = process.env.SITE_ORIGIN || 'https://openapi.juc114.cn'
-const AILY_ADAPTER_URL = (process.env.AILY_ADAPTER_URL || 'http://127.0.0.1:8088').replace(/\/$/, '') // Phase D only; not used for login
-void AILY_ADAPTER_URL
+const ailyManager = createAilyManager(loadAilyConfig(process.env))
 const COOKIE_NAME = 'mrblank_sid'
 const STATE_TTL_MS = 10 * 60 * 1000
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000
@@ -623,6 +624,11 @@ app.use(
     billingBaseUrl: cpaCfg.billingBaseUrl,
     store: diagnosisStore,
     enabled: v1ProxyEnabled,
+    ailyRoute: {
+      adapterUrl: ailyManager.cfg.adapterUrl,
+      apiKey: ailyManager.cfg.adapterApiKey,
+      match: (model) => ailyManager.modelMatches(model),
+    },
   }),
 )
 
@@ -1220,6 +1226,11 @@ app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
   try {
     const health = await probeServiceHealth(cpaCfg)
     const models = await probeCpaModels(cpaCfg)
+    const ailyAdapter = await ailyManager.testAdapterModels().catch((e) => ({
+      ok: false,
+      message: e?.message || String(e),
+    }))
+    const ailyStatus = ailyManager.publicStatus()
     res.json(
       ok({
         checked_at: new Date().toISOString(),
@@ -1227,10 +1238,12 @@ app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
         billing_base: cpaCfg.billingBaseUrl,
         cpamp_base: cpaCfg.cpampBaseUrl,
         public_api_base: cpaCfg.publicApiBaseUrl,
+        aily_adapter_url: ailyStatus.adapter_url,
         secrets: {
           demo: !!cpaCfg.demoKey,
           management: !!cpaCfg.managementKey,
           admin: !!cpaCfg.adminKey,
+          aily_adapter_key: !!ailyStatus.adapter_api_key_configured,
         },
         health,
         models: {
@@ -1239,6 +1252,14 @@ app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
           latency_ms: models.latency_ms,
           base: models.base,
           error: models.error,
+        },
+        aily: {
+          ok: !!ailyAdapter.ok,
+          message: ailyAdapter.message || null,
+          model_count: Array.isArray(ailyAdapter.models) ? ailyAdapter.models.length : 0,
+          latency_ms: ailyAdapter.latency_ms || null,
+          model_routes: ailyStatus.model_routes,
+          has_access_token: ailyStatus.has_access_token,
         },
       }),
     )
@@ -1516,6 +1537,104 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
   }
 })
 
+
+app.get('/api/admin/aily/status', requireAdmin, async (_req, res) => {
+  try {
+    let openaiCompat = []
+    try {
+      if (cpaCfg.managementKey) openaiCompat = await fetchOpenaiCompatibility(cpaCfg)
+    } catch (e) {
+      openaiCompat = { error: e?.message || String(e) }
+    }
+    res.json(
+      ok({
+        ...ailyManager.publicStatus(),
+        cpa_openai_compatibility: openaiCompat,
+        architecture: {
+          primary: 'client → openapi /v1 → BFF → CPA billing :8320 → CPA',
+          aily_credentials: 'shared .aily auth file + upstream APIs (not site login)',
+          selective_route: 'AILY_MODEL_ROUTES → BFF → aily :8088 (optional)',
+          cpa_aily_catalog:
+            'CPA openai-compatibility can point at host aily only if Docker can reach :8088 (currently blocked on 172.17.0.1)',
+        },
+      }),
+    )
+  } catch (err) {
+    console.error('[admin] aily status', err?.message || err)
+    res.status(500).json(fail(err?.message || 'aily status failed'))
+  }
+})
+
+app.post('/api/admin/aily/test', requireAdmin, async (_req, res) => {
+  try {
+    const [upstream, adapter] = await Promise.all([
+      ailyManager.testUpstreamMe().catch((e) => ({ ok: false, message: e?.message || String(e) })),
+      ailyManager.testAdapterModels().catch((e) => ({ ok: false, message: e?.message || String(e) })),
+    ])
+    res.json(ok({ upstream, adapter }))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'aily test failed'))
+  }
+})
+
+app.post('/api/admin/aily/send-code', requireAdmin, async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim()
+    if (!email) return res.status(400).json(fail('email required'))
+    const result = await ailyManager.sendEmailCode(email, req.body?.aily_base_url)
+    res.status(result.ok ? 200 : result.status || 400).json(result.ok ? ok(result) : fail(result.message))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'send-code failed'))
+  }
+})
+
+app.post('/api/admin/aily/login', requireAdmin, async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim()
+    const code = String(req.body?.code || '').trim()
+    if (!email || !code) return res.status(400).json(fail('email and code required'))
+    const result = await ailyManager.emailCodeLogin(email, code, req.body?.aily_base_url)
+    res.status(result.ok ? 200 : 401).json(result.ok ? ok(result) : fail(result.message))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'aily login failed'))
+  }
+})
+
+app.post('/api/admin/aily/tokens', requireAdmin, (req, res) => {
+  try {
+    const result = ailyManager.saveTokens(req.body || {})
+    res.status(result.ok ? 200 : 400).json(result.ok ? ok(result) : fail(result.message))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'save tokens failed'))
+  }
+})
+
+app.post('/api/admin/aily/refresh', requireAdmin, async (_req, res) => {
+  try {
+    const result = await ailyManager.refreshToken()
+    res.status(result.ok ? 200 : 400).json(result.ok ? ok(result) : fail(result.message))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'refresh failed'))
+  }
+})
+
+app.post('/api/admin/aily/logout', requireAdmin, (_req, res) => {
+  try {
+    res.json(ok(ailyManager.clearTokens()))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'clear failed'))
+  }
+})
+
+app.get('/api/admin/aily/adapter-models', requireAdmin, async (_req, res) => {
+  try {
+    const result = await ailyManager.testAdapterModels()
+    res.status(result.ok ? 200 : 502).json(result.ok ? ok(result) : fail(result.message))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'adapter models failed'))
+  }
+})
+
 app.get('/api/admin/constellation', requireAdmin, (_req, res) => {
   res.json(ok(siteContent.getAdminConstellation()))
 })
@@ -1600,5 +1719,5 @@ app.listen(PORT, HOST, () => {
   console.log(
     `[server] admin allowlist ids=${adminAllowlist.ids.size} usernames=${adminAllowlist.usernames.size} emails=${adminAllowlist.emails.size} local=${adminAllowlist.localUsernames?.size || 0}`,
   )
-  console.log(`[server] local_users=${localUserStore.listUsers().length} (AILY_ADAPTER_URL reserved for Phase D)`)
+  console.log(`[server] local_users=${localUserStore.listUsers().length} aily_adapter=${ailyManager.cfg.adapterUrl} aily_routes=${ailyManager.cfg.modelRoutes.length}`)
 })

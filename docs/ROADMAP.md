@@ -39,7 +39,7 @@
 | 管理员后台能力对齐 CPAMP | ✅ B | 日常子集完成；完整运维仍用 www |
 | UI 风格一致 | P0 | 登录表单、管理页、诊断弹窗均用现站 token |
 | 请求响应诊断（aily 完整移植） | ✅ C | 管理员 `#/admin/usage`；BFF `/v1` 落盘；见 PHASE_C_CHECKLIST |
-| Aily 上游转发 + 请求响应基于 CPA | P0 | 站登录已本站化；阶段 D 只做上游转发/诊断对接 CPA |
+| Aily 上游转发 + 请求响应基于 CPA | ✅ D | 凭证管理 + CPA-first `/v1`；见 PHASE_D_CHECKLIST |
 | 用户分组晋升规则可配 | P1 | 仿 Linux.do TL；5h/周/月额度；模型白名单强制生效 |
 | 签到/兑换发额度 | P2 | CPA 无此能力时需自建额度层 |
 | 排行榜用户名映射 | P2 | 现有 hash 脱敏，映射登录用户展示名 |
@@ -79,13 +79,14 @@
 **完成标准**：管理员对一次真实 `/v1` 调用可打开完整诊断；普通用户双击无效。  
 **验收清单**：[`docs/PHASE_C_CHECKLIST.md`](./PHASE_C_CHECKLIST.md)（含与 aily 文档的差距说明；CPAMP 无 body）。
 
-### 阶段 D — Aily ↔ CPA 转发整合
-1. 明确架构：客户端 → openapi `/v1` → CPA；（Aily 上游账号由 CPA/管理侧维护或 BFF 配置）  
-2. Aily 凭证管理入口（管理员）：测试连通、刷新 token（若仍需直连 Aily 管理能力则 BFF 代理 8088，不暴露密钥）  
-3. 转发日志足以支撑阶段 C 诊断  
-4. 不改坏 www / aily 独立站，除非必要且单独评审  
+### 阶段 D — Aily ↔ CPA 转发整合 ✅
+1. 架构（CPA-first）：客户端 → openapi `/v1` → BFF → CPA billing；可选 `AILY_MODEL_ROUTES` 旁路 aily `:8088`  
+2. 管理员 `#/admin/aily`：共享 `.aily` 凭证、邮箱登录/粘贴 token、刷新、连通测试；CPA `openai-compatibility` 只读  
+3. 诊断落盘含 `route_via=cpa|aily`（阶段 C 弹窗可用）  
+4. 未改 www / aily 进程；诚实缺口：CPA Docker 暂无法直连宿主机 `:8088`，完整 aily 目录需手工 openai-compatibility + 网络  
 
-**完成标准**：经 openapi 的调用走 CPA；Aily 相关鉴权可被管理员配置；诊断可看到上下游。
+**完成标准**：经 openapi 的默认调用走 CPA；Aily 鉴权可配置；诊断可见上下游。  
+**验收清单**：[`docs/PHASE_D_CHECKLIST.md`](./PHASE_D_CHECKLIST.md)
 
 ### 阶段 E — 分组治理深化
 1. 晋升规则引擎（可配阈值：注册天数、调用次数、token 等）  

@@ -56,6 +56,9 @@ export function AdminConnectionPage({ path }: { path: string }) {
             : ''}
         </span>
         <div style={{ display: 'flex', gap: 8 }}>
+          <a className="button secondary compact" href="#/admin/aily">
+            Aily
+          </a>
           <a className="button secondary compact" href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">
             <ExternalLink size={14} /> www CPAMP
           </a>

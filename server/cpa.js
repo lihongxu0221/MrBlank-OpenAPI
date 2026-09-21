@@ -613,3 +613,31 @@ export function mapAuthFilesToPoolItems(authFilesPayload) {
     }
   })
 }
+
+export async function fetchOpenaiCompatibility(cfg) {
+  if (!cfg.managementKey) throw new Error('CPA management key not configured')
+  const data = await cpaFetch(cfg, '/v0/management/openai-compatibility')
+  const items = Array.isArray(data?.['openai-compatibility'])
+    ? data['openai-compatibility']
+    : Array.isArray(data)
+      ? data
+      : []
+  return items.map((it) => ({
+    name: it?.name || '',
+    base_url: it?.['base-url'] || it?.base_url || '',
+    prefix: it?.prefix || '',
+    disabled: !!it?.disabled,
+    models: Array.isArray(it?.models)
+      ? it.models.map((m) => ({
+          name: m?.name || '',
+          alias: m?.alias || m?.name || '',
+          display_name: m?.['display-name'] || m?.display_name || '',
+        }))
+      : [],
+    api_key_count: Array.isArray(it?.['api-key-entries'])
+      ? it['api-key-entries'].length
+      : Array.isArray(it?.api_key_entries)
+        ? it.api_key_entries.length
+        : 0,
+  }))
+}

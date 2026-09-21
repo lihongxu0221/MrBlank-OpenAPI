@@ -9,6 +9,7 @@ import {
   UserCog,
   UserRound,
   Users,
+  Cloud,
 } from 'lucide-react'
 import { P } from '../../i18n'
 import { navigate, navigateWithQuery } from '../../router/hash'
@@ -17,6 +18,7 @@ import { useSession } from '../../hooks/useStore'
 const ITEMS = [
   { path: '/admin', label: '管理概览', icon: LayoutDashboard },
   { path: '/admin/accounts', label: '上游账号', icon: Users },
+  { path: '/admin/aily', label: 'Aily 上游', icon: Cloud },
   { path: '/admin/keys', label: 'CPA 密钥', icon: KeyRound },
   { path: '/admin/usage', label: '用量监控', icon: Activity },
   { path: '/admin/connection', label: '连接状态', icon: Cable },

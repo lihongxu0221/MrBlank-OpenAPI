@@ -1,5 +1,6 @@
 /**
- * Phase C — BFF /v1 → CPA billing reverse-proxy with diagnosis capture.
+ * Phase C/D — BFF /v1 reverse-proxy with diagnosis capture.
+ * Default upstream: CPA billing. Optional Aily adapter route by model allowlist.
  */
 import {
   extractModelFromReqBody,
@@ -46,7 +47,7 @@ function readRawBody(req, limit = 32 * 1024 * 1024) {
   })
 }
 
-function forwardHeaders(req) {
+function forwardHeaders(req, { authOverride } = {}) {
   const out = {}
   for (const [k, v] of Object.entries(req.headers)) {
     if (HOP.has(k.toLowerCase())) continue
@@ -54,18 +55,27 @@ function forwardHeaders(req) {
     out[k] = Array.isArray(v) ? v.join(', ') : String(v)
   }
   delete out['accept-encoding']
+  if (authOverride) out.authorization = `Bearer ${authOverride}`
   return out
 }
 
-export function createV1Proxy({ billingBaseUrl, store, enabled = true }) {
-  const base = String(billingBaseUrl || '').replace(/\/$/, '')
+/**
+ * @param {object} opts
+ * @param {string} opts.billingBaseUrl CPA billing shim
+ * @param {object} opts.store diagnosis store
+ * @param {boolean} [opts.enabled]
+ * @param {{ adapterUrl?: string, apiKey?: string, match?: (model:string)=>boolean }} [opts.ailyRoute]
+ */
+export function createV1Proxy({ billingBaseUrl, store, enabled = true, ailyRoute = null }) {
+  const cpaBase = String(billingBaseUrl || '').replace(/\/$/, '')
+  const ailyBase = String(ailyRoute?.adapterUrl || '').replace(/\/$/, '')
 
   return async function v1Proxy(req, res) {
     if (!enabled) {
       res.status(503).json({ error: { message: 'BFF /v1 proxy disabled' } })
       return
     }
-    if (!base) {
+    if (!cpaBase) {
       res.status(503).json({ error: { message: 'CPA billing URL not configured' } })
       return
     }
@@ -73,7 +83,6 @@ export function createV1Proxy({ billingBaseUrl, store, enabled = true }) {
     const started = Date.now()
     let ttft_ms = null
     const endpoint = req.originalUrl || req.url || '/v1'
-    const upstreamUrl = `${base}${endpoint.startsWith('/v1') ? endpoint : `/v1${endpoint}`}`
 
     let reqBuf = Buffer.alloc(0)
     try {
@@ -85,7 +94,24 @@ export function createV1Proxy({ billingBaseUrl, store, enabled = true }) {
 
     const reqBodyText = reqBuf.length ? reqBuf.toString('utf8') : ''
     const requestedModel = extractModelFromReqBody(reqBodyText)
-    const fwd = forwardHeaders(req)
+
+    let routeVia = 'cpa'
+    let upstreamBase = cpaBase
+    let authOverride = null
+    if (
+      ailyBase &&
+      ailyRoute?.apiKey &&
+      typeof ailyRoute.match === 'function' &&
+      ailyRoute.match(requestedModel)
+    ) {
+      routeVia = 'aily'
+      upstreamBase = ailyBase
+      authOverride = ailyRoute.apiKey
+    }
+
+    const pathPart = endpoint.startsWith('/v1') ? endpoint : `/v1${endpoint}`
+    const upstreamUrl = `${upstreamBase}${pathPart}`
+    const fwd = forwardHeaders(req, { authOverride })
 
     let upstream
     try {
@@ -112,11 +138,12 @@ export function createV1Proxy({ billingBaseUrl, store, enabled = true }) {
         res_body: String(err?.message || err),
         upstream_req_headers: redactHeaders(fwd),
         upstream_req_body: reqBodyText,
-        content: `upstream fetch failed: ${err?.message || err}`,
+        content: `upstream fetch failed (${routeVia}): ${err?.message || err}`,
         type: 5,
         is_stream: false,
+        route_via: routeVia,
       })
-      res.status(502).json({ error: { message: 'upstream unavailable', diagnosis_id: slim.id } })
+      res.status(502).json({ error: { message: 'upstream unavailable', diagnosis_id: slim.id, route_via: routeVia } })
       return
     }
 
@@ -131,6 +158,11 @@ export function createV1Proxy({ billingBaseUrl, store, enabled = true }) {
         /* ignore */
       }
     })
+    try {
+      res.setHeader('x-mrblank-route', routeVia)
+    } catch {
+      /* ignore */
+    }
 
     const capture = []
     let captured = 0
@@ -198,6 +230,7 @@ export function createV1Proxy({ billingBaseUrl, store, enabled = true }) {
         is_stream,
         type: upstream.status >= 400 ? 5 : 2,
         content: upstream.status >= 400 ? resBodyText.slice(0, 300) : '',
+        route_via: routeVia,
       })
     } catch (err) {
       console.error('[diagnosis] record failed', err?.message || err)

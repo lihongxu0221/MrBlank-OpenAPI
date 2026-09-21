@@ -24,18 +24,32 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
 
 ## 架构
 
+客户端调用始终经 **CPA 内核**（非并行 aily 网关）：
+
+```
+浏览器 / SDK
+  → https://openapi.juc114.cn/v1
+  → nginx → BFF :8787
+       ├─ 默认 → CPA billing :8320 → cli-proxy-api :8317
+       └─ 可选（AILY_MODEL_ROUTES 命中）→ aily-openai-adapter :8088
+BFF 落盘诊断（含 route_via）；站登录 = 本站本地用户 + Linux.do（不用 aily）
+Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/aily
+```
+
 | 组件 | 地址 | 用途 |
 |---|---|---|
-| 本站静态 + BFF | openapi.juc114.cn → `:8787` | Linux.do / 本站账号登录、控制台 `/api` |
-| `/v1` | openapi.juc114.cn/v1 → BFF `:8787` → `:8320` | 对外 OpenAI 兼容调用；BFF 捕获诊断 dump |
+| 本站静态 + BFF | openapi.juc114.cn → `:8787` | Linux.do / 本站账号登录、控制台 `/api`、诊断捕获 |
+| `/v1` | openapi.juc114.cn/v1 → BFF `:8787` → `:8320`（默认） | 对外 OpenAI 兼容；CPA 为模型源 |
 | CPA | `127.0.0.1:8317` | cli-proxy-api；Management Key 管 api-keys |
 | CPAMP | `127.0.0.1:18317`（www） | 用量汇总；Admin Key **仅服务端**；勿改 www UI |
+| Aily adapter | `127.0.0.1:8088` / aily.juc114.cn | 上游 Aily token 与 OpenAI 适配；**不是** openapi 对外主入口 |
 
 控制台能力：
 
 - **模型**：BFF `GET /api/token/options` ← CPA `GET /v1/models`（demo key）
 - **密钥**：登录用户创建时 BFF 调 CPA `PUT /v0/management/api-keys`，并在磁盘映射 `linux.do user → key`
 - **请求诊断（管理员）**：`#/admin/usage` 双击行打开「请求诊断详情」；正文来自 BFF `/v1` 落盘（CPAMP 汇总无 body）
+- **Aily 上游（管理员）**：`#/admin/aily` 管理共享凭证 / 连通测试；可选 `AILY_MODEL_ROUTES` 旁路；见 `docs/PHASE_D_CHECKLIST.md`
 - **用量**：BFF `GET /api/log/self` ← CPAMP `GET /v0/management/usage`，按密钥 sha256 过滤
 - **社区排行 / 号池 / 调用实况 / 服务状态**：BFF 聚合 CPAMP usage + auth-files + CPA `/v1/models` 与 health（短缓存）；无数据时返回空列表
 - **签到 / 兑换**：仍为进程内逻辑（未接 CPA 配额）

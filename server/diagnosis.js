@@ -137,6 +137,7 @@ export function createDiagnosisStore(rootDir) {
       group: entry.group || '',
       content: entry.content || '',
       source: entry.source || 'bff-v1',
+      route_via: entry.route_via || 'cpa',
       has_detail,
       req_headers,
       req_body,
@@ -172,6 +173,7 @@ export function createDiagnosisStore(rootDir) {
       group: full.group,
       content: full.content ? String(full.content).slice(0, 200) : '',
       source: full.source,
+      route_via: full.route_via,
       has_detail,
     }
     const rows = readIndex()
