@@ -172,6 +172,8 @@ export function mapAdminAccounts(authFilesPayload) {
         : []
     return {
       id: f.id || f.name || f.auth_index,
+      name: f.name || f.id || null,
+      auth_index: f.auth_index || null,
       label: f.label || f.email || f.account || f.name,
       email: f.email || f.account || null,
       provider: f.provider || f.type || null,
@@ -184,6 +186,8 @@ export function mapAdminAccounts(authFilesPayload) {
       last_refresh: f.last_refresh || f.last_refresh || null,
       updated_at: f.updated_at || f.modtime || null,
       status_message: f.status_message || f.status_message || '',
+      note: f.note ?? f.attributes?.note ?? null,
+      priority: f.priority ?? f.attributes?.priority ?? null,
       recent_requests: recent.slice(-12),
     }
   })

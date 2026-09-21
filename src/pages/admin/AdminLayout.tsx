@@ -14,6 +14,11 @@ import {
   Settings,
   Blocks,
   ScrollText,
+  SlidersHorizontal,
+  KeySquare,
+  LogIn,
+  Puzzle,
+  FileText,
 } from 'lucide-react'
 import { P } from '../../i18n'
 import { navigate, navigateWithQuery } from '../../router/hash'
@@ -22,6 +27,11 @@ import { useSession } from '../../hooks/useStore'
 const ITEMS = [
   { path: '/admin', label: '管理概览', icon: LayoutDashboard },
   { path: '/admin/accounts', label: '上游账号', icon: Users },
+  { path: '/admin/settings', label: '基础设置', icon: SlidersHorizontal },
+  { path: '/admin/providers', label: 'AI 提供商', icon: KeySquare },
+  { path: '/admin/oauth', label: 'OAuth 登录', icon: LogIn },
+  { path: '/admin/plugins', label: '插件管理', icon: Puzzle },
+  { path: '/admin/logs', label: '日志查看', icon: FileText },
   { path: '/admin/aily', label: 'Aily 上游', icon: Cloud },
   { path: '/admin/keys', label: 'CPA 密钥', icon: KeyRound },
   { path: '/admin/usage', label: '用量监控', icon: Activity },

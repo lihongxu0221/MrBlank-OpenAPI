@@ -720,3 +720,421 @@ export async function fetchOpenaiCompatibility(cfg) {
         : 0,
   }))
 }
+
+/* ─── Wave A: CPA-native field settings / providers / auth / oauth / plugins / logs ─── */
+
+export const CPA_SETTING_FIELDS = [
+  'debug',
+  'proxy-url',
+  'logging-to-file',
+  'logs-max-total-size-mb',
+  'force-model-prefix',
+  'ws-auth',
+  'usage-statistics-enabled',
+  'request-log',
+]
+
+export const CPA_PROVIDER_KEY_TYPES = [
+  'gemini-api-key',
+  'claude-api-key',
+  'codex-api-key',
+  'vertex-api-key',
+  'xai-api-key',
+  'interactions-api-key',
+]
+
+export const CPA_OAUTH_AUTH_URLS = [
+  'anthropic-auth-url',
+  'codex-auth-url',
+  'antigravity-auth-url',
+  'kimi-auth-url',
+  'xai-auth-url',
+  'devin-auth-url',
+  'qwen-auth-url',
+  'iflow-auth-url',
+  'gemini-cli-auth-url',
+]
+
+function requireMgmt(cfg) {
+  if (!cfg.managementKey) throw Object.assign(new Error('CPA management key not configured'), { status: 503 })
+}
+
+function unwrapField(data, field) {
+  if (data == null) return null
+  if (Object.prototype.hasOwnProperty.call(data, field)) return data[field]
+  if (Object.prototype.hasOwnProperty.call(data, 'value')) return data.value
+  if (Object.prototype.hasOwnProperty.call(data, 'enabled')) return data.enabled
+  return data
+}
+
+/** GET a CPA management field endpoint → normalized { field, value }. */
+export async function fetchCpaSetting(cfg, field) {
+  requireMgmt(cfg)
+  if (!CPA_SETTING_FIELDS.includes(field)) {
+    throw Object.assign(new Error(`unsupported setting: ${field}`), { status: 400 })
+  }
+  const data = await cpaFetch(cfg, `/v0/management/${field}`)
+  return { field, value: unwrapField(data, field) }
+}
+
+/** PUT { value } to a CPA field endpoint. */
+export async function setCpaSetting(cfg, field, value) {
+  requireMgmt(cfg)
+  if (!CPA_SETTING_FIELDS.includes(field)) {
+    throw Object.assign(new Error(`unsupported setting: ${field}`), { status: 400 })
+  }
+  await cpaFetch(cfg, `/v0/management/${field}`, {
+    method: 'PUT',
+    body: { value },
+  })
+  return fetchCpaSetting(cfg, field)
+}
+
+/** Aggregate all basic settings (best-effort per field). */
+export async function fetchCpaSettingsAll(cfg) {
+  requireMgmt(cfg)
+  const settings = {}
+  const errors = {}
+  await Promise.all(
+    CPA_SETTING_FIELDS.map(async (field) => {
+      try {
+        const row = await fetchCpaSetting(cfg, field)
+        settings[field] = row.value
+      } catch (err) {
+        errors[field] = err?.message || String(err)
+      }
+    }),
+  )
+  return { settings, errors }
+}
+
+function sanitizeProviderEntries(entries) {
+  return (Array.isArray(entries) ? entries : []).map((it, i) => {
+    if (typeof it === 'string') {
+      return { id: i + 1, 'api-key': maskKey(it), length: it.length, auth_index: null, raw_type: 'string' }
+    }
+    const key = it?.['api-key'] || it?.api_key || it?.key || ''
+    return {
+      id: i + 1,
+      'api-key': typeof key === 'string' && key ? maskKey(key) : '****',
+      length: typeof key === 'string' ? key.length : 0,
+      auth_index: it?.['auth-index'] || it?.auth_index || null,
+      'base-url': it?.['base-url'] || it?.base_url || '',
+      'proxy-url': it?.['proxy-url'] || it?.proxy_url || '',
+      models: it?.models ?? null,
+    }
+  })
+}
+
+export async function listCpaProviderKeys(cfg, type) {
+  requireMgmt(cfg)
+  if (!CPA_PROVIDER_KEY_TYPES.includes(type)) {
+    throw Object.assign(new Error(`unsupported provider key type: ${type}`), { status: 400 })
+  }
+  const data = await cpaFetch(cfg, `/v0/management/${type}`)
+  const entries = Array.isArray(data?.[type]) ? data[type] : Array.isArray(data) ? data : []
+  return { type, items: sanitizeProviderEntries(entries), count: entries.length, _raw: entries }
+}
+
+/** Add one provider key. CPA PUT body is an array of { "api-key": "..." }. */
+export async function addCpaProviderKey(cfg, type, apiKey, extra = {}) {
+  requireMgmt(cfg)
+  if (!CPA_PROVIDER_KEY_TYPES.includes(type)) {
+    throw Object.assign(new Error(`unsupported provider key type: ${type}`), { status: 400 })
+  }
+  const key = String(apiKey || '').trim()
+  if (!key) throw Object.assign(new Error('api-key required'), { status: 400 })
+  const listed = await listCpaProviderKeys(cfg, type)
+  const raw = listed._raw || []
+  const exists = raw.some((it) => {
+    const k = typeof it === 'string' ? it : it?.['api-key'] || it?.api_key || ''
+    return k === key
+  })
+  if (exists) return listCpaProviderKeys(cfg, type)
+  const entry = { 'api-key': key, ...extra }
+  const next = [
+    ...raw.map((it) => (typeof it === 'string' ? { 'api-key': it } : it)),
+    entry,
+  ]
+  await cpaFetch(cfg, `/v0/management/${type}`, { method: 'PUT', body: next })
+  return listCpaProviderKeys(cfg, type)
+}
+
+/** Delete by exact api-key query param. */
+export async function removeCpaProviderKey(cfg, type, apiKey) {
+  requireMgmt(cfg)
+  if (!CPA_PROVIDER_KEY_TYPES.includes(type)) {
+    throw Object.assign(new Error(`unsupported provider key type: ${type}`), { status: 400 })
+  }
+  const key = String(apiKey || '').trim()
+  if (!key) throw Object.assign(new Error('api-key required'), { status: 400 })
+  const url = `${cfg.cpaBaseUrl}/v0/management/${type}?api-key=${encodeURIComponent(key)}`
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${cfg.managementKey}`, Accept: 'application/json' },
+  })
+  const text = await res.text()
+  let json = null
+  try {
+    json = text ? JSON.parse(text) : null
+  } catch {
+    json = { raw: text }
+  }
+  if (!res.ok) {
+    const err = new Error(json?.error || json?.message || `CPA DELETE ${type} failed (${res.status})`)
+    err.status = res.status
+    err.payload = json
+    throw err
+  }
+  return listCpaProviderKeys(cfg, type)
+}
+
+/** Match masked key against raw list (same pattern as api-keys). */
+export function matchMaskedProviderKey(rawEntries, masked) {
+  const m = String(masked || '')
+  for (const it of rawEntries || []) {
+    const k = typeof it === 'string' ? it : it?.['api-key'] || it?.api_key || ''
+    if (!k) continue
+    if (maskKey(k) === m || maskSecretLike(k) === m) return k
+  }
+  return null
+}
+
+function maskSecretLike(fullKey) {
+  const s = String(fullKey || '')
+  if (!s) return ''
+  if (s.length <= 8) return '****'
+  return `${s.slice(0, 6)}****${s.slice(-4)}`
+}
+
+export async function setAuthFileDisabled(cfg, name, disabled) {
+  requireMgmt(cfg)
+  const n = String(name || '').trim()
+  if (!n) throw Object.assign(new Error('name required'), { status: 400 })
+  return cpaFetch(cfg, '/v0/management/auth-files/status', {
+    method: 'PATCH',
+    body: { name: n, disabled: !!disabled },
+  })
+}
+
+export async function patchAuthFileFields(cfg, name, fields = {}) {
+  requireMgmt(cfg)
+  const n = String(name || '').trim()
+  if (!n) throw Object.assign(new Error('name required'), { status: 400 })
+  const body = { name: n, ...fields }
+  return cpaFetch(cfg, '/v0/management/auth-files/fields', {
+    method: 'PATCH',
+    body,
+  })
+}
+
+export async function refreshAuthFile(cfg, name) {
+  requireMgmt(cfg)
+  const n = String(name || '').trim()
+  if (!n) throw Object.assign(new Error('name required'), { status: 400 })
+  return cpaFetch(cfg, '/v0/management/auth-files/refresh', {
+    method: 'POST',
+    body: { name: n },
+  })
+}
+
+export async function deleteAuthFile(cfg, name) {
+  requireMgmt(cfg)
+  const n = String(name || '').trim()
+  if (!n) throw Object.assign(new Error('name required'), { status: 400 })
+  const url = `${cfg.cpaBaseUrl}/v0/management/auth-files?name=${encodeURIComponent(n)}`
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${cfg.managementKey}`, Accept: 'application/json' },
+  })
+  const text = await res.text()
+  let json = null
+  try {
+    json = text ? JSON.parse(text) : null
+  } catch {
+    json = { raw: text }
+  }
+  if (!res.ok) {
+    const err = new Error(json?.error || json?.message || `CPA DELETE auth-files failed (${res.status})`)
+    err.status = res.status
+    err.payload = json
+    throw err
+  }
+  cpaAuthFilesCache.clear()
+  return json
+}
+
+/** Download auth file JSON (contains secrets — admin only). */
+export async function downloadAuthFile(cfg, name) {
+  requireMgmt(cfg)
+  const n = String(name || '').trim()
+  if (!n) throw Object.assign(new Error('name required'), { status: 400 })
+  if (!n.endsWith('.json')) {
+    throw Object.assign(new Error('name must end with .json'), { status: 400 })
+  }
+  return cpaFetch(cfg, `/v0/management/auth-files/download?name=${encodeURIComponent(n)}`)
+}
+
+/**
+ * Upload auth file via multipart. `file` is { filename, content } where content is string/Buffer.
+ * Never POST JSON bodies to /auth-files?name= — that overwrites the credential file.
+ */
+export async function uploadAuthFile(cfg, { filename, content }) {
+  requireMgmt(cfg)
+  const name = String(filename || '').trim()
+  if (!name || !name.endsWith('.json')) {
+    throw Object.assign(new Error('filename must end with .json'), { status: 400 })
+  }
+  const blob = typeof content === 'string' ? content : Buffer.from(content).toString('utf8')
+  // Validate JSON before upload
+  try {
+    JSON.parse(blob)
+  } catch {
+    throw Object.assign(new Error('content must be valid JSON'), { status: 400 })
+  }
+  const form = new FormData()
+  form.append('file', new Blob([blob], { type: 'application/json' }), name)
+  const res = await fetch(`${cfg.cpaBaseUrl}/v0/management/auth-files`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${cfg.managementKey}`, Accept: 'application/json' },
+    body: form,
+  })
+  const text = await res.text()
+  let json = null
+  try {
+    json = text ? JSON.parse(text) : null
+  } catch {
+    json = { raw: text }
+  }
+  if (!res.ok) {
+    const err = new Error(json?.error || json?.message || `CPA upload auth-files failed (${res.status})`)
+    err.status = res.status
+    err.payload = json
+    throw err
+  }
+  cpaAuthFilesCache.clear()
+  return json
+}
+
+export async function startCpaOAuth(cfg, authUrlPath) {
+  requireMgmt(cfg)
+  const path = String(authUrlPath || '').replace(/^\//, '')
+  if (!CPA_OAUTH_AUTH_URLS.includes(path)) {
+    throw Object.assign(new Error(`unsupported oauth start: ${path}`), { status: 400 })
+  }
+  try {
+    return await cpaFetch(cfg, `/v0/management/${path}`)
+  } catch (err) {
+    if (err?.status === 404) {
+      const e = new Error(`${path} not available on this CPA build`)
+      e.status = 404
+      e.unavailable = true
+      throw e
+    }
+    throw err
+  }
+}
+
+export async function getCpaAuthStatus(cfg, state) {
+  requireMgmt(cfg)
+  const qs = state ? `?state=${encodeURIComponent(state)}` : ''
+  return cpaFetch(cfg, `/v0/management/get-auth-status${qs}`)
+}
+
+/** Submit remote browser callback. Body: { state, redirect_url }. */
+export async function submitCpaOAuthCallback(cfg, { state, redirect_url }) {
+  requireMgmt(cfg)
+  const st = String(state || '').trim()
+  const url = String(redirect_url || '').trim()
+  if (!st) throw Object.assign(new Error('state is required'), { status: 400 })
+  if (!url) throw Object.assign(new Error('redirect_url is required'), { status: 400 })
+  return cpaFetch(cfg, '/v0/management/oauth-callback', {
+    method: 'POST',
+    body: { state: st, redirect_url: url },
+  })
+}
+
+export async function fetchOauthModelAlias(cfg) {
+  requireMgmt(cfg)
+  return cpaFetch(cfg, '/v0/management/oauth-model-alias')
+}
+
+export async function setOauthModelAlias(cfg, value) {
+  requireMgmt(cfg)
+  await cpaFetch(cfg, '/v0/management/oauth-model-alias', {
+    method: 'PUT',
+    body: value && typeof value === 'object' && !Array.isArray(value) && 'oauth-model-alias' in value
+      ? value
+      : { 'oauth-model-alias': value ?? {} },
+  })
+  return fetchOauthModelAlias(cfg)
+}
+
+export async function fetchOauthExcludedModels(cfg) {
+  requireMgmt(cfg)
+  return cpaFetch(cfg, '/v0/management/oauth-excluded-models')
+}
+
+export async function setOauthExcludedModels(cfg, value) {
+  requireMgmt(cfg)
+  const body =
+    value && typeof value === 'object' && !Array.isArray(value) && 'oauth-excluded-models' in value
+      ? value
+      : { 'oauth-excluded-models': value ?? [] }
+  await cpaFetch(cfg, '/v0/management/oauth-excluded-models', { method: 'PUT', body })
+  return fetchOauthExcludedModels(cfg)
+}
+
+export async function fetchCpaPlugins(cfg) {
+  requireMgmt(cfg)
+  const data = await cpaFetch(cfg, '/v0/management/plugins')
+  return {
+    plugins_enabled: !!(data?.plugins_enabled ?? data?.enabled),
+    plugins_dir: data?.plugins_dir || data?.dir || 'plugins',
+    plugins: Array.isArray(data?.plugins) ? data.plugins : [],
+    raw: data,
+  }
+}
+
+/**
+ * Attempt plugins PUT. Returns { ok, unavailable } — CPA v7.3.10 returns 404 for PUT.
+ */
+export async function setCpaPlugins(cfg, { plugins_enabled, plugins_dir } = {}) {
+  requireMgmt(cfg)
+  const body = {}
+  if (plugins_enabled !== undefined) body.plugins_enabled = !!plugins_enabled
+  if (plugins_dir !== undefined) body.plugins_dir = String(plugins_dir)
+  try {
+    await cpaFetch(cfg, '/v0/management/plugins', { method: 'PUT', body })
+    return { ...(await fetchCpaPlugins(cfg)), writable: true }
+  } catch (err) {
+    if (err?.status === 404) {
+      return { ...(await fetchCpaPlugins(cfg)), writable: false, unavailable: true }
+    }
+    throw err
+  }
+}
+
+export async function fetchCpaLogs(cfg, { limit } = {}) {
+  requireMgmt(cfg)
+  const qs = limit ? `?limit=${encodeURIComponent(limit)}` : ''
+  try {
+    return await cpaFetch(cfg, `/v0/management/logs${qs}`)
+  } catch (err) {
+    if (err?.status === 400) {
+      const msg =
+        err?.payload?.error ||
+        err?.message ||
+        'logging to file disabled'
+      const e = new Error(
+        String(msg).includes('logging')
+          ? 'CPA 文件日志未开启：请先在「基础设置」打开 logging-to-file。'
+          : String(msg),
+      )
+      e.status = 400
+      e.code = 'logging_to_file_disabled'
+      throw e
+    }
+    throw err
+  }
+}

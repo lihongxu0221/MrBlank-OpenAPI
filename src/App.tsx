@@ -31,6 +31,11 @@ import { AdminCreditsPage } from './pages/admin/AdminCreditsPage'
 import { AdminConfigPage } from './pages/admin/AdminConfigPage'
 import { AdminCompatPage } from './pages/admin/AdminCompatPage'
 import { AdminRequestLogPage } from './pages/admin/AdminRequestLogPage'
+import { AdminSettingsPage } from './pages/admin/AdminSettingsPage'
+import { AdminProvidersPage } from './pages/admin/AdminProvidersPage'
+import { AdminOauthPage } from './pages/admin/AdminOauthPage'
+import { AdminPluginsPage } from './pages/admin/AdminPluginsPage'
+import { AdminLogsPage } from './pages/admin/AdminLogsPage'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { getSiteConfig, subscribeSiteConfig } from './config/site'
 import { getLanguage } from './i18n'
@@ -116,6 +121,21 @@ export default function App() {
       break
     case '/admin/request-log':
       page = <AdminRequestLogPage path={path} />
+      break
+    case '/admin/settings':
+      page = <AdminSettingsPage path={path} />
+      break
+    case '/admin/providers':
+      page = <AdminProvidersPage path={path} />
+      break
+    case '/admin/oauth':
+      page = <AdminOauthPage path={path} />
+      break
+    case '/admin/plugins':
+      page = <AdminPluginsPage path={path} />
+      break
+    case '/admin/logs':
+      page = <AdminLogsPage path={path} />
       break
     case '/admin/constellation':
       page = <AdminConstellationPage path={path} />

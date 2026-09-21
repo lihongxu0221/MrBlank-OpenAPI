@@ -30,6 +30,32 @@ import {
   listCpaApiKeys,
   probeUrl,
   fetchOpenaiCompatibility,
+  CPA_SETTING_FIELDS,
+  CPA_PROVIDER_KEY_TYPES,
+  CPA_OAUTH_AUTH_URLS,
+  fetchCpaSetting,
+  setCpaSetting,
+  fetchCpaSettingsAll,
+  listCpaProviderKeys,
+  addCpaProviderKey,
+  removeCpaProviderKey,
+  matchMaskedProviderKey,
+  setAuthFileDisabled,
+  patchAuthFileFields,
+  refreshAuthFile,
+  deleteAuthFile,
+  downloadAuthFile,
+  uploadAuthFile,
+  startCpaOAuth,
+  getCpaAuthStatus,
+  submitCpaOAuthCallback,
+  fetchOauthModelAlias,
+  setOauthModelAlias,
+  fetchOauthExcludedModels,
+  setOauthExcludedModels,
+  fetchCpaPlugins,
+  setCpaPlugins,
+  fetchCpaLogs,
 } from './cpa.js'
 import { createSiteUsageStore } from './siteUsage.js'
 import { createCpaCollector } from './cpaCollector.js'
@@ -2090,7 +2116,7 @@ app.get('/api/admin/config', requireAdmin, async (_req, res) => {
         writable: {
           request_log: true,
           openai_compatibility: true,
-          note: 'Full config PUT is not exposed; use request-log + openai-compatibility endpoints.',
+          note: 'Full config PUT / config.yaml write is not exposed; use /api/admin/settings field endpoints + providers + openai-compatibility.',
         },
       }),
     )
@@ -2165,6 +2191,504 @@ app.put('/api/admin/openai-compatibility', requireAdmin, async (req, res) => {
     res.status(502).json(fail(err?.message || 'openai-compatibility update failed'))
   }
 })
+
+
+/* ═══════════════ Wave A — CPA-native settings / providers / accounts mutate / oauth / plugins / logs ═══════════════ */
+
+app.get('/api/admin/settings', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const data = await fetchCpaSettingsAll(cpaCfg)
+    res.json(ok({ ...data, fields: CPA_SETTING_FIELDS, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'settings failed'))
+  }
+})
+
+app.get('/api/admin/settings/:field', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const field = String(req.params.field || '')
+    const row = await fetchCpaSetting(cpaCfg, field)
+    res.json(ok({ ...row, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'setting get failed'))
+  }
+})
+
+app.put('/api/admin/settings/:field', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const field = String(req.params.field || '')
+    if (!CPA_SETTING_FIELDS.includes(field)) {
+      res.status(400).json(fail(`unsupported setting: ${field}`))
+      return
+    }
+    let value = req.body?.value
+    if (value === undefined) value = req.body?.[field]
+    if (value === undefined) value = req.body?.enabled
+    if (field === 'proxy-url') {
+      value = value == null ? '' : String(value)
+    } else if (field === 'logs-max-total-size-mb') {
+      value = Number(value)
+      if (!Number.isFinite(value) || value < 0) {
+        res.status(400).json(fail('logs-max-total-size-mb must be a non-negative number'))
+        return
+      }
+    } else {
+      value = !!value
+    }
+    const row = await setCpaSetting(cpaCfg, field, value)
+    // Keep legacy request-log shape in sync
+    if (field === 'request-log') {
+      res.json(ok({ ...row, enabled: !!row.value, source: 'cpa' }))
+      return
+    }
+    res.json(ok({ ...row, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'setting update failed'))
+  }
+})
+
+app.get('/api/admin/providers', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const types = {}
+    for (const type of CPA_PROVIDER_KEY_TYPES) {
+      try {
+        const listed = await listCpaProviderKeys(cpaCfg, type)
+        types[type] = { items: listed.items, count: listed.count }
+      } catch (err) {
+        types[type] = { items: [], count: 0, error: err?.message || String(err) }
+      }
+    }
+    res.json(ok({ types, type_list: CPA_PROVIDER_KEY_TYPES, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'providers failed'))
+  }
+})
+
+app.get('/api/admin/providers/:type', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const type = String(req.params.type || '')
+    const listed = await listCpaProviderKeys(cpaCfg, type)
+    res.json(ok({ type, items: listed.items, count: listed.count, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'provider list failed'))
+  }
+})
+
+app.post('/api/admin/providers/:type', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const type = String(req.params.type || '')
+    const apiKey = String(req.body?.['api-key'] || req.body?.api_key || req.body?.key || '').trim()
+    if (!apiKey) {
+      res.status(400).json(fail('api-key required'))
+      return
+    }
+    const extra = {}
+    if (req.body?.['base-url'] || req.body?.base_url) extra['base-url'] = req.body['base-url'] || req.body.base_url
+    if (req.body?.['proxy-url'] || req.body?.proxy_url) extra['proxy-url'] = req.body['proxy-url'] || req.body.proxy_url
+    const listed = await addCpaProviderKey(cpaCfg, type, apiKey, extra)
+    res.json(
+      ok({
+        type,
+        items: listed.items,
+        count: listed.count,
+        added: maskSecretValue(apiKey),
+        source: 'cpa',
+      }),
+    )
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'provider add failed'))
+  }
+})
+
+app.delete('/api/admin/providers/:type', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const type = String(req.params.type || '')
+    const exact = String(req.body?.['api-key'] || req.body?.api_key || req.body?.key || '').trim()
+    const masked = String(req.body?.masked || req.query?.masked || '').trim()
+    let target = exact
+    if (!target && masked) {
+      const listed = await listCpaProviderKeys(cpaCfg, type)
+      target = matchMaskedProviderKey(listed._raw, masked)
+      if (!target) {
+        res.status(404).json(fail('未找到匹配的密钥（脱敏匹配失败，请用完整 api-key 删除）'))
+        return
+      }
+    }
+    if (!target) {
+      res.status(400).json(fail('api-key or masked required'))
+      return
+    }
+    const listed = await removeCpaProviderKey(cpaCfg, type, target)
+    res.json(ok({ type, items: listed.items, count: listed.count, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'provider delete failed'))
+  }
+})
+
+app.patch('/api/admin/accounts/status', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const name = String(req.body?.name || '').trim()
+    if (!name) {
+      res.status(400).json(fail('name required'))
+      return
+    }
+    const disabled = !!(req.body?.disabled ?? req.body?.value)
+    const result = await setAuthFileDisabled(cpaCfg, name, disabled)
+    try {
+      await cpaCollector.refresh({ force: true })
+    } catch {
+      /* ignore */
+    }
+    res.json(ok({ name, disabled, result, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'account status update failed'))
+  }
+})
+
+app.patch('/api/admin/accounts/fields', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const name = String(req.body?.name || '').trim()
+    if (!name) {
+      res.status(400).json(fail('name required'))
+      return
+    }
+    const fields = {}
+    if (req.body?.note !== undefined) fields.note = String(req.body.note)
+    if (req.body?.priority !== undefined) fields.priority = Number(req.body.priority)
+    if (req.body?.disabled !== undefined) fields.disabled = !!req.body.disabled
+    const result = await patchAuthFileFields(cpaCfg, name, fields)
+    try {
+      await cpaCollector.refresh({ force: true })
+    } catch {
+      /* ignore */
+    }
+    res.json(ok({ name, fields, result, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'account fields update failed'))
+  }
+})
+
+app.post('/api/admin/accounts/refresh', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const name = String(req.body?.name || '').trim()
+    if (!name) {
+      res.status(400).json(fail('name required'))
+      return
+    }
+    const result = await refreshAuthFile(cpaCfg, name)
+    try {
+      await cpaCollector.refresh({ force: true })
+    } catch {
+      /* ignore */
+    }
+    res.json(ok({ name, result, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'account refresh failed'))
+  }
+})
+
+app.get('/api/admin/accounts/download', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const name = String(req.query?.name || '').trim()
+    if (!name) {
+      res.status(400).json(fail('name required'))
+      return
+    }
+    const data = await downloadAuthFile(cpaCfg, name)
+    // Return full content to admin only; never cache.
+    res.setHeader('Cache-Control', 'no-store')
+    res.json(ok({ name, content: data, source: 'cpa', warning: 'Contains secrets — do not share.' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'account download failed'))
+  }
+})
+
+app.post('/api/admin/accounts/upload', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const filename = String(req.body?.filename || req.body?.name || '').trim()
+    let content = req.body?.content
+    if (content && typeof content === 'object') content = JSON.stringify(content)
+    content = String(content || '')
+    if (!filename || !content) {
+      res.status(400).json(fail('filename and content required'))
+      return
+    }
+    const result = await uploadAuthFile(cpaCfg, { filename, content })
+    try {
+      await cpaCollector.refresh({ force: true })
+    } catch {
+      /* ignore */
+    }
+    res.json(ok({ filename, result, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'account upload failed'))
+  }
+})
+
+app.delete('/api/admin/accounts', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const name = String(req.body?.name || req.query?.name || '').trim()
+    if (!name) {
+      res.status(400).json(fail('name required'))
+      return
+    }
+    const result = await deleteAuthFile(cpaCfg, name)
+    try {
+      await cpaCollector.refresh({ force: true })
+    } catch {
+      /* ignore */
+    }
+    res.json(ok({ name, result, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'account delete failed'))
+  }
+})
+
+app.get('/api/admin/oauth/providers', requireAdmin, (_req, res) => {
+  res.json(
+    ok({
+      providers: CPA_OAUTH_AUTH_URLS.map((p) => ({
+        id: p.replace(/-auth-url$/, ''),
+        path: p,
+      })),
+      source: 'cpa',
+    }),
+  )
+})
+
+app.post('/api/admin/oauth/start/:provider', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    let provider = String(req.params.provider || '').trim()
+    if (!provider.endsWith('-auth-url')) provider = `${provider}-auth-url`
+    const data = await startCpaOAuth(cpaCfg, provider)
+    res.json(ok({ provider, ...data, source: 'cpa' }))
+  } catch (err) {
+    const status = err?.status || 502
+    res.status(status).json(
+      fail(err?.message || 'oauth start failed', err?.unavailable ? 'oauth_unavailable' : undefined),
+    )
+  }
+})
+
+app.get('/api/admin/oauth/status', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const state = String(req.query?.state || '').trim()
+    const data = await getCpaAuthStatus(cpaCfg, state || undefined)
+    res.json(ok({ ...data, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'oauth status failed'))
+  }
+})
+
+app.post('/api/admin/oauth/callback', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const state = String(req.body?.state || '').trim()
+    const redirect_url = String(
+      req.body?.redirect_url || req.body?.url || req.body?.callback_url || '',
+    ).trim()
+    const data = await submitCpaOAuthCallback(cpaCfg, { state, redirect_url })
+    try {
+      await cpaCollector.refresh({ force: true })
+    } catch {
+      /* ignore */
+    }
+    res.json(ok({ ...data, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'oauth callback failed'))
+  }
+})
+
+app.get('/api/admin/oauth/model-alias', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const data = await fetchOauthModelAlias(cpaCfg)
+    res.json(ok({ alias: data?.['oauth-model-alias'] ?? data, raw: sanitizeConfig(data || {}), source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'oauth-model-alias failed'))
+  }
+})
+
+app.put('/api/admin/oauth/model-alias', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const value = req.body?.alias ?? req.body?.['oauth-model-alias'] ?? req.body
+    const data = await setOauthModelAlias(cpaCfg, value)
+    res.json(ok({ alias: data?.['oauth-model-alias'] ?? data, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'oauth-model-alias update failed'))
+  }
+})
+
+app.get('/api/admin/oauth/excluded-models', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const data = await fetchOauthExcludedModels(cpaCfg)
+    res.json(
+      ok({
+        excluded: data?.['oauth-excluded-models'] ?? data,
+        raw: sanitizeConfig(data || {}),
+        source: 'cpa',
+      }),
+    )
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'oauth-excluded-models failed'))
+  }
+})
+
+app.put('/api/admin/oauth/excluded-models', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const value = req.body?.excluded ?? req.body?.['oauth-excluded-models'] ?? req.body
+    const data = await setOauthExcludedModels(cpaCfg, value)
+    res.json(ok({ excluded: data?.['oauth-excluded-models'] ?? data, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'oauth-excluded-models update failed'))
+  }
+})
+
+app.get('/api/admin/plugins', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const data = await fetchCpaPlugins(cpaCfg)
+    res.json(
+      ok({
+        plugins_enabled: data.plugins_enabled,
+        plugins_dir: data.plugins_dir,
+        plugins: data.plugins,
+        writable: false, // probed below on PUT
+        note: 'CPA v7.3.10 exposes GET /plugins; PUT returns 404 on this build.',
+        source: 'cpa',
+      }),
+    )
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'plugins failed'))
+  }
+})
+
+app.put('/api/admin/plugins', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const data = await setCpaPlugins(cpaCfg, {
+      plugins_enabled: req.body?.plugins_enabled ?? req.body?.enabled,
+      plugins_dir: req.body?.plugins_dir ?? req.body?.dir,
+    })
+    if (data.unavailable) {
+      res.status(501).json(
+        fail('CPA 此版本不支持 PUT /plugins（404）。请升级 CPA 或通过配置文件修改。', 'plugins_put_unavailable'),
+      )
+      return
+    }
+    res.json(
+      ok({
+        plugins_enabled: data.plugins_enabled,
+        plugins_dir: data.plugins_dir,
+        plugins: data.plugins,
+        writable: true,
+        source: 'cpa',
+      }),
+    )
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'plugins update failed'))
+  }
+})
+
+app.get('/api/admin/logs', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const limit = req.query?.limit ? Number(req.query.limit) : undefined
+    const data = await fetchCpaLogs(cpaCfg, { limit })
+    res.json(ok({ ...data, source: 'cpa' }))
+  } catch (err) {
+    const status = err?.status || 502
+    res.status(status).json(fail(err?.message || 'logs failed', err?.code))
+  }
+})
+
 
 app.use((req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/oauth/')) {

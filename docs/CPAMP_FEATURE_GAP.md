@@ -1,6 +1,6 @@
 # CPAMP Feature Gap Inventory (MrBlank-OpenAPI)
 
-Updated: 2026-09-21 (Asia/Shanghai)  
+Updated: 2026-09-21 (Asia/Shanghai) — Wave A implemented  
 Sources: `https://www.juc114.cn/management.html` (SPA bundle), VPS `seakee/cpa-manager-plus:v1.13.1` on `:18317`, CPA `eceasy/cli-proxy-api:v7.3.10` on `:8317`, local `src/pages/admin/*` + `server/index.js`.
 
 **Scope:** inventory + gap only — no feature implementation in this change.
@@ -149,7 +149,12 @@ Compose env: `USAGE_COLLECTOR_MODE=auto`, `USAGE_POLL_INTERVAL_MS=500`, `USAGE_B
 | `/admin/connection` | CPA / billing / optional CPAMP health + collector heartbeat |
 | `/admin/config` | Sanitized CPA config (read-only) |
 | `/admin/compat` | openai-compatibility JSON edit |
-| `/admin/request-log` | request-log toggle |
+| `/admin/request-log` | request-log toggle (also under settings) |
+| `/admin/settings` | Basic settings field writers (Wave A) |
+| `/admin/providers` | AI provider keys CRUD (Wave A) |
+| `/admin/oauth` | OAuth start/callback/status + aliases (Wave A) |
+| `/admin/plugins` | Plugins list (+ PUT if CPA supports) (Wave A) |
+| `/admin/logs` | CPA file logs viewer (Wave A) |
 | `/admin/constellation` | Homepage constellation (site-specific) |
 | `/admin/groups` | User groups (site-specific) |
 | `/admin/credits` | Check-in / redeem (site-specific) |
@@ -159,7 +164,7 @@ Compose env: `USAGE_COLLECTOR_MODE=auto`, `USAGE_POLL_INTERVAL_MS=500`, `USAGE_B
 
 Present: `me`, `overview`, `connection`, `accounts`, `usage` (site-usage), `keys` CRUD, `config` (GET sanitized), `request-log` GET/PUT, `openai-compatibility` GET/PUT, `diagnosis/logs`, plus site-only users/groups/credits/aily/constellation.
 
-Absent relative to CPAMP: provider key CRUD, OAuth start/poll, plugins, logs viewer, dashboard summary, monitoring analytics, model-prices, account-actions, api-key-aliases, auth-file mutate/download, usage import/export, codex-inspection, quota snapshots, raw config.yaml write, basic-settings field writers beyond request-log.
+Wave A done: settings writers, provider CRUD, auth-file mutate/download/upload, OAuth console, plugins GET, logs viewer. Still absent (Wave B/C): dashboard summary, monitoring analytics, model-prices, account-actions, api-key-aliases, usage import/export, codex-inspection, quota snapshots, raw config.yaml write.
 
 Architecture intent (`docs/CPA_KERNEL.md`): CPA Management Key is production kernel; **site-usage** replaces CPAMP global usage for leaderboard/admin; CPAMP optional.
 
@@ -201,15 +206,15 @@ Legend — **Native:** implement via CPA Management API. **Rebuild:** needs site
 
 Parity definition for MrBlank: **every CPAMP ops capability needed to run the gateway without opening www**, in MrBlank visual style, preferring CPA kernel + site collector; CPAMP remains optional.
 
-### Phase G1 — CPA-native settings & providers (high value, no collector)
+### Phase G1 — CPA-native settings & providers (high value, no collector) ✅ DONE (Wave A)
 
-1. Basic settings writers: `debug`, `proxy-url`, `logging-to-file`, `logs-max-total-size-mb`, `force-model-prefix`, `ws-auth`, `usage-statistics-enabled`, `disable-image-generation` (mirror `/admin/request-log` pattern).
-2. AI provider key pages: gemini / claude / codex / vertex / xai / interactions CRUD via CPA endpoints.
-3. Auth-files mutations: disable/enable, note, priority, download; delete with confirm.
-4. OAuth panel: start `*-auth-url`, poll `get-auth-status`, `oauth-callback` paste; list new auth-files.
-5. OAuth model alias + excluded models editors.
-6. Plugins list/toggle (skip plugin-store initially).
-7. Logs viewer gated on `logging-to-file`.
+1. ✅ Basic settings writers: `debug`, `proxy-url`, `logging-to-file`, `logs-max-total-size-mb`, `force-model-prefix`, `ws-auth`, `usage-statistics-enabled`, `request-log` via `/api/admin/settings` (+ per-field GET/PUT). UI: `/admin/settings`.
+2. ✅ AI provider key pages: gemini / claude / codex / vertex / xai / interactions CRUD. UI: `/admin/providers`. CPA shape: PUT `[{ "api-key" }]` / DELETE `?api-key=`.
+3. ✅ Auth-files mutations: disable/enable (`PATCH .../auth-files/status`), fields/note (`PATCH .../fields`), force refresh (`POST .../refresh`), download, upload (multipart), delete (`DELETE ?name=`). UI: `/admin/accounts`. **Never POST JSON to `/auth-files?name=`** (overwrites credential file).
+4. ✅ OAuth panel: start `*-auth-url`, poll `get-auth-status`, `oauth-callback` paste. UI: `/admin/oauth`. `qwen`/`iflow`/`gemini-cli` 404 on v7.3.10 — skipped gracefully.
+5. ✅ OAuth model alias + excluded models editors (GET/PUT).
+6. ✅ Plugins list (GET). PUT `/plugins` returns **404 on CPA v7.3.10** — UI shows 501/note.
+7. ✅ Logs viewer gated on `logging-to-file` (`/api/admin/logs` + `/admin/logs`).
 
 ### Phase G2 — Site usage depth (rebuild; replaces CPAMP usage.sqlite for openapi)
 
@@ -276,3 +281,12 @@ MrBlank already chose a partial rebuild path via `server/siteUsage.js` + `cpaCol
 6. Account-action triage + header snapshots  
 7. Plugins / logs viewer  
 8. Explicit non-goals for 100% www clone: plugin-store, codex-inspection, raw config.yaml PUT, full usage.sqlite clone (unless product insists)
+
+---
+
+## Wave A implementation notes (2026-09-21 CST)
+
+- BFF proxies CPA Management with server-side key under `/api/admin/*` + `requireAdmin`.
+- **Safety:** no `config.yaml` PUT; field endpoints only.
+- **Probe incident:** exploratory `DELETE auth-files?name=` and `POST auth-files?name=` with JSON corrupted/removed probe credentials (`262879651@qq.com` deleted; `lihongxu0330@gmail.com` antigravity file overwritten then removed). Remaining: `antigravity-lihongxu0331@gmail.com.json`, `xai-lihongxu0330@hotmail.com.json`. Re-auth via `/admin/oauth` as needed.
+- CPA endpoints **404 on this build:** `qwen-auth-url`, `iflow-auth-url`, `gemini-cli-auth-url`, `PUT /plugins`.
