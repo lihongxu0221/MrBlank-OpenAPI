@@ -34,6 +34,7 @@ import {
   maskSecretValue,
 } from './admin.js'
 import { createSiteContentStore } from './siteContent.js'
+import { createGroupStore } from './groups.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -83,6 +84,10 @@ const COOKIE_NAME = 'mrblank_sid'
 const STATE_TTL_MS = 10 * 60 * 1000
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000
 const Q = 500_000
+const groupStore = createGroupStore(
+  process.env.USER_GROUPS_PATH || path.join(__dirname, 'data', 'user-groups.json'),
+  { quotaUnit: Q },
+)
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
   console.error('[server] LINUXDO_CLIENT_ID and LINUXDO_CLIENT_SECRET are required')
@@ -256,10 +261,14 @@ function createUserSession(user) {
   sessions.set(sid, rec)
   getOrCreateUserStore(user)
   try {
-    userKeyStore.setProfile(user.id, {
+    const existing = userKeyStore.getProfile(user.id)
+    const profile = userKeyStore.setProfile(user.id, {
       display_name: user.display_name,
       username: user.username,
       email: user.email,
+    })
+    groupStore.ensureUser(user.id, {
+      joinedAt: existing?.created_at || profile?.created_at || new Date().toISOString(),
     })
   } catch (e) {
     console.error('[userKeys] setProfile failed', e?.message || e)
@@ -270,6 +279,28 @@ function createUserSession(user) {
 function postLoginHash(user) {
   return isAdminUser(user, adminAllowlist) ? '/admin' : '/console'
 }
+
+function userGroupMetrics(userId, store) {
+  const profile = userKeyStore.getProfile(userId)
+  const joined = profile?.created_at || profile?.updated_at
+  let account_days = 0
+  if (joined) {
+    account_days = Math.max(0, Math.floor((Date.now() - new Date(joined).getTime()) / 86400000))
+  }
+  return {
+    account_days,
+    request_count: Number(store?.user?.request_count || 0) || 0,
+    used_quota: Number(store?.user?.used_quota || 0) || 0,
+    checkins: Array.isArray(store?.checkins) ? store.checkins.length : 0,
+  }
+}
+
+function resolveAuthGroup(req) {
+  const store = req.store || getOrCreateUserStore(req.auth.user)
+  const metrics = userGroupMetrics(req.auth.user.id, store)
+  return groupStore.resolveUserGroup(req.auth.user.id, metrics)
+}
+
 
 function extractAilySessionCookie(setCookieHeader) {
   if (!setCookieHeader) return null
@@ -752,8 +783,21 @@ app.get('/oauth/linuxdo', async (req, res) => {
 })
 
 app.get('/api/user/self', requireAuth, (req, res) => {
-  res.json(ok({ ...req.store.user }))
+  const groupInfo = resolveAuthGroup(req)
+  res.json(
+    ok({
+      ...req.store.user,
+      group_id: groupInfo.group?.id,
+      group_name: groupInfo.group?.name,
+      group_level: groupInfo.group?.level,
+    }),
+  )
 })
+
+app.get('/api/user/group', requireAuth, (req, res) => {
+  res.json(ok(resolveAuthGroup(req)))
+})
+
 
 app.get('/api/user/dashboard', requireAuth, (_req, res) => {
   res.json(
@@ -798,7 +842,10 @@ app.post('/api/user/checkin', requireAuth, (req, res) => {
   const quota_awarded = 2 * Q
   req.store.checkins.push({ checkin_date: today, quota_awarded })
   req.store.user.quota += quota_awarded
-  res.json(ok({ quota_awarded }))
+  try {
+    groupStore.recordUsage(req.auth.user.id, { quota: 0, requests: 0 })
+  } catch {}
+  res.json(ok({ quota_awarded, group: resolveAuthGroup(req) }))
 })
 
 app.post('/api/user/topup', requireAuth, (req, res) => {
@@ -943,9 +990,20 @@ app.post(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
       res.status(503).json(fail('CPA Management Key 未配置，无法创建密钥'))
       return
     }
+    const groupInfo = resolveAuthGroup(req)
+    const quotaCheck = groupStore.assertQuotaAvailable(
+      req.auth.user.id,
+      userGroupMetrics(req.auth.user.id, req.store),
+    )
+    if (!quotaCheck.ok) {
+      res.status(429).json(fail(quotaCheck.message))
+      return
+    }
     const body = req.body || {}
     const fullKey = `sk-mrblank-${req.auth.user.id}-${randomToken(12)}`
     await addCpaApiKey(cpaCfg, fullKey)
+    const modelLimits =
+      body.model_limits || groupStore.modelLimitsString(groupInfo.group) || ''
     const item = userKeyStore.create(req.auth.user.id, {
       name: String(body.name || 'key'),
       key: maskKey(fullKey),
@@ -954,9 +1012,9 @@ app.post(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
       unlimited_quota: body.unlimited_quota !== false,
       remain_quota: body.remain_quota ?? 0,
       expired_time: body.expired_time ?? -1,
-      model_limits: body.model_limits || '',
+      model_limits: modelLimits,
       access_group_id: 1,
-      group: body.group || 'default',
+      group: groupInfo.group?.id || body.group || 'default',
       created_at: new Date().toISOString(),
     })
     const { fullKey: __, ...rest } = item
@@ -1003,15 +1061,27 @@ app.put(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
   }
 })
 
-app.get('/api/token/options', requireAuth, async (_req, res) => {
+app.get('/api/token/options', requireAuth, async (req, res) => {
   try {
-    const model_details = await fetchCpaModels(cpaCfg)
+    const allModels = await fetchCpaModels(cpaCfg)
+    const groupInfo = resolveAuthGroup(req)
+    const model_details = groupStore.filterModels(allModels, groupInfo.group)
     res.json(
       ok({
-        groups: [{ id: 1, name: 'default', is_default: true, ratio: 1 }],
+        groups: [
+          {
+            id: groupInfo.group?.id || 1,
+            name: groupInfo.group?.name || 'default',
+            is_default: true,
+            ratio: 1,
+            level: groupInfo.group?.level,
+          },
+        ],
         model_details,
+        model_allowlist: groupInfo.group?.model_ids || [],
         api_base_url: cpaCfg.publicApiBaseUrl,
         source: 'cpa',
+        filtered: !!(groupInfo.group?.model_ids || []).length,
       }),
     )
   } catch (err) {
@@ -1089,6 +1159,19 @@ app.get('/api/log/self', requireAuth, async (req, res) => {
   try {
     const usage = await fetchCpampUsage(cpaCfg)
     const named = flattenUsageForHashes(usage, hashSet, { limit: 500, nameMap: hashToName })
+    try {
+      groupStore.syncUsageFromLogs(req.auth.user.id, named)
+      // keep in-memory store counters loosely aligned for promotion metrics
+      const reqCount = named.length
+      const usedTokens = named.reduce(
+        (s, r) => s + (Number(r.total_tokens ?? (r.prompt_tokens || 0) + (r.completion_tokens || 0)) || 0),
+        0,
+      )
+      req.store.user.request_count = Math.max(Number(req.store.user.request_count || 0), reqCount)
+      req.store.user.used_quota = Math.max(Number(req.store.user.used_quota || 0), usedTokens)
+    } catch (e) {
+      console.error('[groups] sync usage failed', e?.message || e)
+    }
     const startIdx = (p - 1) * page_size
     res.json(ok({ items: named.slice(startIdx, startIdx + page_size), total: named.length, source: 'cpamp' }))
   } catch (err) {
@@ -1300,6 +1383,45 @@ app.delete('/api/admin/keys', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('[admin] keys delete', err?.message || err)
     res.status(502).json(fail(err?.message || 'delete key failed'))
+  }
+})
+
+
+app.get('/api/admin/groups', requireAdmin, (_req, res) => {
+  res.json(ok({ groups: groupStore.listGroups(), updated_at: null, quota_unit: Q }))
+})
+
+app.put('/api/admin/groups', requireAdmin, (req, res) => {
+  try {
+    const groups = groupStore.saveGroups(req.body?.groups || req.body)
+    res.json(ok({ groups, quota_unit: Q }))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '保存用户组失败'))
+  }
+})
+
+app.get('/api/admin/groups/members', requireAdmin, (_req, res) => {
+  const members = groupStore.listMembers().map((m) => {
+    const profile = userKeyStore.getProfile(m.user_id) || {}
+    return {
+      ...m,
+      display_name: profile.display_name || '',
+      username: profile.username || '',
+      email: profile.email || '',
+    }
+  })
+  res.json(ok({ members, groups: groupStore.listGroups() }))
+})
+
+app.put('/api/admin/groups/members/:userId', requireAdmin, (req, res) => {
+  try {
+    const row = groupStore.assignMember(req.params.userId, {
+      group_id: req.body?.group_id,
+      override: req.body?.override !== false,
+    })
+    res.json(ok(row))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '分配用户组失败'))
   }
 })
 

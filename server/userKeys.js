@@ -87,11 +87,13 @@ export function createUserKeyStore(filePath) {
     setProfile(userId, profile = {}) {
       const data = readAll()
       const u = ensureUser(data, userId)
+      const prev = u.profile || {}
       u.profile = {
-        ...(u.profile || {}),
-        display_name: profile.display_name || u.profile?.display_name || '',
-        username: profile.username || u.profile?.username || '',
-        email: profile.email || u.profile?.email || '',
+        ...prev,
+        display_name: profile.display_name || prev.display_name || '',
+        username: profile.username || prev.username || '',
+        email: profile.email || prev.email || '',
+        created_at: prev.created_at || profile.created_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }
       writeAll(data)

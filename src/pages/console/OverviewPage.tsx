@@ -18,6 +18,7 @@ export function OverviewPage({ path }: { path: string }) {
   const [keyTotal, setKeyTotal] = useState(0)
   const [modelCount, setModelCount] = useState(0)
   const [checkin, setCheckin] = useState<any>(null)
+  const [groupInfo, setGroupInfo] = useState<any>(null)
   const [redeem, setRedeem] = useState('')
   const [busy, setBusy] = useState(false)
   const { toast, showToast } = useToast()
@@ -38,6 +39,7 @@ export function OverviewPage({ path }: { path: string }) {
       .then((d) => setModelCount((d.model_details || []).filter((m: any) => !m.planned).length))
       .catch(() => {})
     api.get('/api/user/checkin').then(setCheckin).catch(() => {})
+    api.get('/api/user/group').then(setGroupInfo).catch(() => {})
   }, [])
 
   const maxReq = Math.max(1, ...days.map((d) => d.requests))
@@ -67,6 +69,83 @@ export function OverviewPage({ path }: { path: string }) {
   return (
     <ConsoleLayout path={path} bare>
       <ConsoleHero title={qt(P('你好，{name}。'), { name })} subtitle={P('每一次好奇，都值得认真回应。')} />
+
+
+      {groupInfo?.group ? (
+        <div className="panel" style={{ marginBottom: 16 }}>
+          <div className="panel-head">
+            <h3>
+              <Shield size={16} style={{ marginRight: 8, verticalAlign: 'middle' }} />
+              {P('用户组')} · {groupInfo.group.name}
+            </h3>
+            <span className="muted-chip">Lv.{groupInfo.group.level}</span>
+          </div>
+          <p className="page-lead" style={{ marginTop: 0 }}>
+            {groupInfo.group.description || P('你的额度窗口与可用模型由用户组决定。')}
+          </p>
+          <div className="stats-grid">
+            <div className="stat-card">
+              <div className="label">{P('近 5 小时剩余')}</div>
+              <div className="value">
+                {formatCredits(groupInfo.remaining?.window_5h ?? 0)} <span className="unit">{P('点')}</span>
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="label">{P('本周剩余')}</div>
+              <div className="value">
+                {formatCredits(groupInfo.remaining?.week ?? 0)} <span className="unit">{P('点')}</span>
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="label">{P('本月剩余')}</div>
+              <div className="value">
+                {formatCredits(groupInfo.remaining?.month ?? 0)} <span className="unit">{P('点')}</span>
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="label">{P('模型范围')}</div>
+              <div className="value" style={{ fontSize: '1rem' }}>
+                {(groupInfo.group.model_ids || []).length
+                  ? `${groupInfo.group.model_ids.length}`
+                  : P('全部')}
+              </div>
+              <div className="hint">
+                {(groupInfo.group.model_ids || []).length
+                  ? groupInfo.group.model_ids.slice(0, 3).join(', ')
+                  : P('未限制白名单')}
+              </div>
+            </div>
+          </div>
+          {groupInfo.progress ? (
+            <div style={{ marginTop: 12 }}>
+              <div className="muted">
+                {P('下一档')}：{groupInfo.progress.next_group_name}
+                {groupInfo.override ? ` · ${P('已由管理员固定，不自动晋级')}` : ''}
+              </div>
+              <div className="tag-row" style={{ marginTop: 8 }}>
+                <span className="pill">
+                  {P('天数')} {Math.round((groupInfo.progress.ratios.account_days || 0) * 100)}%
+                </span>
+                <span className="pill">
+                  {P('请求')} {Math.round((groupInfo.progress.ratios.request_count || 0) * 100)}%
+                </span>
+                <span className="pill">
+                  {P('用量')} {Math.round((groupInfo.progress.ratios.used_quota || 0) * 100)}%
+                </span>
+                <span className="pill">
+                  {P('签到')} {Math.round((groupInfo.progress.ratios.checkins || 0) * 100)}%
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="muted" style={{ marginTop: 8 }}>
+              {groupInfo.override
+                ? P('管理员已覆盖分配本用户组。')
+                : P('你已处于当前配置的最高用户组。')}
+            </div>
+          )}
+        </div>
+      ) : null}
 
       <div className="stats-grid">
         <div className="stat-card">

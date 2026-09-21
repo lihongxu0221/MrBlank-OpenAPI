@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   Shield,
   Sparkles,
+  UserCog,
   Users,
 } from 'lucide-react'
 import { P } from '../../i18n'
@@ -20,6 +21,7 @@ const ITEMS = [
   { path: '/admin/usage', label: '用量监控', icon: Activity },
   { path: '/admin/connection', label: '连接状态', icon: Cable },
   { path: '/admin/constellation', label: '模型星座', icon: Sparkles },
+  { path: '/admin/groups', label: '用户组', icon: UserCog },
 ]
 
 export function AdminLayout({
