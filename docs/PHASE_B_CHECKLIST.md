@@ -2,6 +2,7 @@
 
 Date: 2026-09-21 (Asia/Shanghai)  
 Deploy: `openapi.juc114.cn` · service `mrblank-openapi.service`  
+Commit: `58b2e2a` (feat Phase B) + docs follow-up  
 Scope: harden `#/admin` as a **MrBlank-styled CPAMP capability subset** (no embed of `www.juc114.cn/management.html`).  
 Phase C (request diagnosis) and Phase D (Aily transplant) **not** started.
 
@@ -33,19 +34,20 @@ Keys (`CPA_MANAGEMENT_KEY`, `CPAMP_ADMIN_KEY`) stay **server-side only**. Browse
 
 | Check | Expect | Result |
 |-------|--------|--------|
-| `GET /api/admin/me` (no cookie) | 401 | |
-| `GET /api/admin/overview` (no cookie) | 401 | |
-| `GET /api/admin/accounts` (no cookie) | 401 | |
-| `GET /api/admin/keys` (no cookie) | 401 | |
-| `GET /api/admin/usage` (no cookie) | 401 | |
-| `GET /api/admin/connection` (no cookie) | 401 | |
-| Local non-admin session → `/api/admin/overview` | 403 | |
-| Local non-admin session → `/api/admin/me` | 200 `is_admin=false` | |
-| Local admin session → `/api/admin/me` | 200 `is_admin=true` | |
-| Local admin → overview / accounts / keys / usage / connection | 200 | |
-| Built JS: no `management.html` iframe embed | PASS | link-out only |
+| `GET /api/admin/me` (no cookie) | 401 | PASS |
+| `GET /api/admin/overview` (no cookie) | 401 | PASS |
+| `GET /api/admin/accounts` (no cookie) | 401 | PASS |
+| `GET /api/admin/keys` (no cookie) | 401 | PASS |
+| `GET /api/admin/usage` (no cookie) | 401 | PASS |
+| `GET /api/admin/connection` (no cookie) | 401 | PASS |
+| Local non-admin → `/api/admin/overview` (+ accounts/keys/usage/connection/users) | 403 | PASS |
+| Local non-admin → `/api/admin/me` | 200 `is_admin=false` | PASS |
+| Local admin → `/api/admin/me` | 200 `is_admin=true` | PASS |
+| Local admin → overview / accounts / keys / usage / connection / config / users / groups / constellation | 200 | PASS |
+| Built JS: `management.html` link-out only (no iframe embed) | PASS | PASS |
+| Live overview sample | pool + keys + usage populated | PASS (accounts 3, keys 2, usage_req 6046) |
 
-Fill Result column after deploy smoke (see commit message / agent report).
+Ephemeral smoke user created then deleted; passwords never logged.
 
 ## Admin pages map
 
