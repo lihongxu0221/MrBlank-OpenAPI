@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
+import { KeyRound, Plus } from 'lucide-react'
 import { api } from '../../lib/api'
 import { formatCredits, setQuotaPerUnit } from '../../lib/format'
-import { P } from '../../i18n'
+import { P, qt } from '../../i18n'
 import { ConsoleLayout } from './ConsoleLayout'
+import { ConsoleHero } from '../../components/ConsoleHero'
 import { useToast } from '../../hooks/useStore'
 import { Modal } from '../../components/Modal'
 
@@ -18,6 +20,7 @@ type Token = {
 
 export function KeysPage({ path }: { path: string }) {
   const [items, setItems] = useState<Token[]>([])
+  const [total, setTotal] = useState(0)
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
   const [limit, setLimit] = useState('5')
@@ -27,8 +30,9 @@ export function KeysPage({ path }: { path: string }) {
   async function load() {
     const status = await api.get<{ quota_per_unit: number }>('/api/status', { auth: false })
     setQuotaPerUnit(status.quota_per_unit)
-    const data = await api.get<{ items: Token[] }>('/api/token/?p=1&size=10')
+    const data = await api.get<{ items: Token[]; total: number }>('/api/token/?p=1&size=10')
     setItems(data.items || [])
+    setTotal(data.total ?? data.items?.length ?? 0)
   }
 
   useEffect(() => {
@@ -36,7 +40,9 @@ export function KeysPage({ path }: { path: string }) {
   }, [])
 
   async function create() {
-    const remain = Math.round(Number(limit) * (await api.get<{ quota_per_unit: number }>('/api/status', { auth: false })).quota_per_unit)
+    const remain = Math.round(
+      Number(limit) * (await api.get<{ quota_per_unit: number }>('/api/status', { auth: false })).quota_per_unit,
+    )
     await api.post('/api/token/', {
       name,
       unlimited_quota: false,
@@ -70,15 +76,21 @@ export function KeysPage({ path }: { path: string }) {
     ({ 1: P('已启用'), 2: P('已停用'), 3: P('已过期'), 4: P('额度耗尽') }[s] || P('未知状态'))
 
   return (
-    <ConsoleLayout path={path} title={P('API 密钥')} subtitle={P('为每一个工具，创建专属的访问密钥。')}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14 }}>
-        <div />
+    <ConsoleLayout path={path} bare>
+      <ConsoleHero title={P('API 密钥')} subtitle={P('把每一份社区资源，用在新的可能上。')} />
+
+      <div className="keys-toolbar">
+        <p>{P('为每一个工具，创建专属的访问密钥。')}</p>
         <button type="button" className="button" onClick={() => setCreating(true)}>
-          {P('创建密钥')}
+          <Plus size={16} /> {P('创建密钥')}
         </button>
       </div>
+
       {!items.length ? (
-        <div className="empty-state panel">
+        <div className="empty-state panel empty-state-rich">
+          <div className="empty-icon">
+            <KeyRound size={36} strokeWidth={1.4} />
+          </div>
           <h3>{P('还没有 API 密钥')}</h3>
           <p>{P('创建一个密钥，让你的工具连接公益模型。')}</p>
         </div>
@@ -99,12 +111,12 @@ export function KeysPage({ path }: { path: string }) {
                 <tr key={t.id}>
                   <td>
                     <strong>{t.name}</strong>
-                    <div style={{ color: 'var(--muted)' }}>{t.key}</div>
+                    <div className="masked-key">{t.key}</div>
                   </td>
                   <td>{statusLabel(t.status)}</td>
                   <td>{t.unlimited_quota ? P('跟随账户额度') : formatCredits(t.remain_quota)}</td>
                   <td>{t.expired_time < 0 ? P('长期') : new Date(t.expired_time * 1000).toLocaleDateString()}</td>
-                  <td style={{ display: 'flex', gap: 8 }}>
+                  <td className="row-actions">
                     <button type="button" className="button ghost" onClick={() => reveal(t.id).catch((e) => showToast(e.message))}>
                       {P('查看密钥')}
                     </button>
@@ -125,6 +137,19 @@ export function KeysPage({ path }: { path: string }) {
           </table>
         </div>
       )}
+
+      <div className="pagination">
+        <span>{qt(P('共 {total} 条'), { total })}</span>
+        <div className="pager-controls">
+          <button type="button" className="button ghost compact" disabled>
+            ‹
+          </button>
+          <span>1 / 1</span>
+          <button type="button" className="button ghost compact" disabled>
+            ›
+          </button>
+        </div>
+      </div>
 
       {creating ? (
         <Modal title={P('创建 API 密钥')} onClose={() => setCreating(false)}>

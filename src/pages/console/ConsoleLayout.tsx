@@ -7,6 +7,7 @@ import {
   Radio,
   Boxes,
   CalendarCheck2,
+  Sparkles,
 } from 'lucide-react'
 import { P } from '../../i18n'
 import { navigate } from '../../router/hash'
@@ -25,17 +26,13 @@ const ITEMS = [
 
 export function ConsoleLayout({
   path,
-  title,
-  subtitle,
   children,
 }: {
   path: string
-  title: string
-  subtitle?: string
   children: ReactNode
+  bare?: boolean
 }) {
   const session = useSession()
-  const name = session?.user?.display_name || session?.user?.username || P('探索者')
 
   return (
     <div className="console-shell">
@@ -59,7 +56,9 @@ export function ConsoleLayout({
           )
         })}
         <div className="console-aside-note">
-          <div className="star">✦</div>
+          <div className="star">
+            <Sparkles size={14} />
+          </div>
           <div>{P('好奇心，是最好的起点。')}</div>
           <div>{P('社区共享 · 公平使用')}</div>
           <a
@@ -73,14 +72,7 @@ export function ConsoleLayout({
           </a>
         </div>
       </aside>
-      <div className="console-main">
-        <div className="console-header">
-          <div className="eyebrow">{P('控制台')}</div>
-          <h1>{title}</h1>
-          <p>{subtitle || (session ? P('你好，{name}。').replace('{name}', name) : P('把每一份社区资源，用在新的可能上。'))}</p>
-        </div>
-        {session ? children : <GuestPanel />}
-      </div>
+      <div className="console-main">{session ? children : <GuestPanel />}</div>
     </div>
   )
 }

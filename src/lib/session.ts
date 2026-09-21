@@ -55,8 +55,8 @@ export function mockDevLogin() {
     session: { sid: 'mock-sid-' + Date.now(), current: true },
     user: {
       id: 10086,
-      display_name: '探索者',
-      username: 'dev_explorer',
+      display_name: 'lihongxu0221',
+      username: 'lihongxu0221',
     },
   }
   setSession(s)

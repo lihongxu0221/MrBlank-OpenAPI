@@ -23,45 +23,28 @@ export type Token = {
 const db = {
   user: {
     id: 10086,
-    display_name: '探索者',
-    username: 'dev_explorer',
-    quota: 12.5 * Q,
-    settled_quota: 3.2 * Q,
-    used_quota: 3.2 * Q,
-    request_count: 128,
+    display_name: 'lihongxu0221',
+    username: 'lihongxu0221',
+    quota: 0,
+    settled_quota: 0,
+    used_quota: 0,
+    request_count: 0,
     concurrency_limit: 5,
     pending_quota: 0,
   },
-  checkins: [
-    { checkin_date: day(-1), quota_awarded: 2 * Q },
-    { checkin_date: day(-3), quota_awarded: 1.5 * Q },
-  ],
-  tokens: [
-    {
-      id: 1,
-      name: '桌面客户端',
-      key: 'sk-welf****emo1',
-      fullKey: 'sk-welfare-mock-desktop-key-demo-001',
-      status: 1 as const,
-      unlimited_quota: false,
-      remain_quota: 5 * Q,
-      expired_time: -1,
-      model_limits: '',
-      access_group_id: 1,
-      group: 'default',
-    },
-  ] as Token[],
-  nextId: 2,
+  checkins: [] as { checkin_date: string; quota_awarded: number }[],
+  tokens: [] as Token[],
+  nextId: 1,
   redeemed: new Set<string>(),
-  logs: Array.from({ length: 18 }, (_, i) => ({
-    id: i + 1,
-    created_at: Math.floor(Date.now() / 1000) - i * 18000,
-    model_name: ['grok-4.6', 'grok-4', 'grok-imagine-1.5'][i % 3],
-    token_name: '桌面客户端',
-    prompt_tokens: 120 + i * 17,
-    completion_tokens: 80 + i * 9,
-    quota: Math.round((0.02 + i * 0.01) * Q),
-  })),
+  logs: [] as {
+    id: number
+    created_at: number
+    model_name: string
+    token_name: string
+    prompt_tokens: number
+    completion_tokens: number
+    quota: number
+  }[],
 }
 
 export const ok = <T,>(data: T) => ({ success: true as const, data })
@@ -85,7 +68,7 @@ export const handlers = {
     ok({
       days: Array.from({ length: 7 }, (_, i) => ({
         date: day(i - 6),
-        requests: [12, 8, 21, 5, 30, 18, 9][i],
+        requests: 0,
       })),
     }),
   checkinGet: (m?: string) => {
@@ -95,10 +78,13 @@ export const handlers = {
     const checked = db.checkins.some((r) => r.checkin_date === today)
     return ok({
       enabled: true,
+      // Demo allows claim when not checked; UI still supports exhausted messaging.
       claimable: !checked,
-      unavailable_reason: checked ? '今日已签到' : undefined,
-      min_quota: 1 * Q,
-      max_quota: 3 * Q,
+      unavailable_reason: checked
+        ? '今日已签到'
+        : undefined,
+      min_quota: 0,
+      max_quota: 5 * Q,
       month: mm,
       stats: {
         checked_in_today: checked,
@@ -180,12 +166,19 @@ export const handlers = {
     ok({
       groups: [{ id: 1, name: 'default', is_default: true, ratio: 1 }],
       model_details: [
-        { id: 'grok-4.6', name: 'Grok 4.6', kind: 'text', text_price: 1, image_price: 0, video_price: 0 },
-        { id: 'grok-4', name: 'Grok 4', kind: 'text', text_price: 1, image_price: 0, video_price: 0 },
-        { id: 'grok-imagine-1.5', name: 'Grok Imagine 1.5', kind: 'image', text_price: 0, image_price: 8, video_price: 0 },
-        { id: 'grok-imagine-video-1.5', name: 'Grok Imagine Video 1.5', kind: 'video', text_price: 0, image_price: 0, video_price: 40 },
-        { id: 'claude-4-sonnet', name: 'Claude 4 Sonnet', kind: 'text', text_price: 1, image_price: 0, video_price: 0, planned: true },
-        { id: 'gpt-5', name: 'GPT-5', kind: 'text', text_price: 1, image_price: 0, video_price: 0, planned: true },
+        { id: 'grok-4.5', name: 'Grok 4.5', provider: 'xAI', kind: 'text', text_price: 3, text_out_price: 15 },
+        { id: 'grok-4', name: 'Grok 4.0', provider: 'xAI', kind: 'text', text_price: 3, text_out_price: 15 },
+        { id: 'grok-chat-auto', name: 'Grok chat auto', provider: 'xAI', kind: 'text', text_price: 1, text_out_price: 3 },
+        { id: 'grok-chat-expert', name: 'Grok chat expert', provider: 'xAI', kind: 'text', text_price: 3, text_out_price: 15 },
+        { id: 'grok-chat-fast', name: 'Grok chat fast', provider: 'xAI', kind: 'text', text_price: 0.2, text_out_price: 0.5 },
+        { id: 'grok-heavy', name: 'Grok Heavy', provider: 'xAI', kind: 'text', text_price: 5, text_out_price: 25 },
+        { id: 'grok-composer-2.5-fast', name: 'Grok composer 2.5 fast', provider: 'xAI', kind: 'text', text_price: 0.2, text_out_price: 0.5 },
+        { id: 'grok-imagine-image', name: 'Grok Imagine - Image', provider: 'xAI', kind: 'image', image_price: 0.03 },
+        { id: 'grok-imagine-image-2.0', name: 'Grok Imagine - Image 2.0', provider: 'xAI', kind: 'image', image_price: 0.05 },
+        { id: 'grok-imagine-image-edit', name: 'Grok Imagine - Image Edit', provider: 'xAI', kind: 'image', image_price: 0.04 },
+        { id: 'grok-imagine-image-lite', name: 'Grok Imagine - Image Lite', provider: 'xAI', kind: 'image', image_price: 0.02 },
+        { id: 'grok-imagine-video', name: 'Grok Imagine - Video', provider: 'xAI', kind: 'video', video_price: 0.03 },
+        { id: 'grok-imagine-video-1.5', name: 'Grok Imagine - Video 1.5', provider: 'xAI', kind: 'video', video_price: 0.05 },
       ],
     }),
   logs: (p = 1, page_size = 10) => {
@@ -208,31 +201,40 @@ export const handlers = {
   availability: () => {
     const now = new Date().toISOString()
     const hist = (rate: number) =>
-      Array.from({ length: 24 }, (_, i) => ({
-        checked_at: new Date(Date.now() - i * 3600000).toISOString(),
-        status: Math.random() < rate ? 'operational' : 'degraded',
-        latency_ms: 180 + Math.floor(Math.random() * 400),
+      Array.from({ length: 7 }, (_, i) => ({
+        checked_at: new Date(Date.now() - i * 86400000).toISOString(),
+        status: Math.random() < rate ? 'operational' : 'down',
+        latency_ms: 800 + Math.floor(Math.random() * 1200),
       }))
+    const mk = (id: string, name: string, rate: number, latency: number, status = 'down') => ({
+      id,
+      name,
+      status,
+      latency_ms: latency,
+      availability: Math.round(rate * 1000) / 10,
+      history: hist(rate),
+    })
     return ok({
       checked_at: now,
       groups: [
         {
-          name: '文本与推理',
+          name: '默认分组',
           checked_at: now,
           models: [
-            { id: 'grok-4.6', status: 'operational', latency_ms: 312, history: hist(0.95) },
-            { id: 'grok-4', status: 'operational', latency_ms: 280, history: hist(0.92) },
+            mk('grok-4.5', 'Grok 4.5', 0.713, 1480),
+            mk('grok-4', 'Grok 4.0', 0.68, 1320),
+            mk('grok-chat-auto', 'Grok Auto', 0.74, 980),
+            mk('grok-chat-expert', 'Grok Expert', 0.71, 1510),
+            mk('grok-chat-fast', 'Grok Fast', 0.82, 640),
+            mk('grok-heavy', 'Grok Heavy', 0.55, 2400),
+            mk('grok-composer-2.5-fast', 'Grok Composer 2.5 Fast', 0.79, 720),
+            mk('grok-imagine-image', 'Grok Imagine', 0.66, 1800),
+            mk('grok-imagine-image-2.0', 'Grok Imagine Image 2.0', 0.61, 2100),
+            mk('grok-imagine-image-edit', 'Grok Imagine Image Edit', 0.58, 1950),
+            mk('grok-imagine-image-lite', 'Grok Imagine Image Lite', 0.7, 1100),
+            mk('grok-imagine-video', 'Grok Imagine Video', 0.42, 3200),
+            mk('grok-imagine-video-1.5', 'Grok Imagine Video 1.5', 0.38, 3600),
           ],
-        },
-        {
-          name: '图像创作',
-          checked_at: now,
-          models: [{ id: 'grok-imagine-1.5', status: 'operational', latency_ms: 890, history: hist(0.88) }],
-        },
-        {
-          name: '视频生成',
-          checked_at: now,
-          models: [{ id: 'grok-imagine-video-1.5', status: 'degraded', latency_ms: 2400, history: hist(0.7) }],
         },
       ],
     })
