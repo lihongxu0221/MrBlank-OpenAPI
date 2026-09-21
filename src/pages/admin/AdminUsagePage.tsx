@@ -80,7 +80,10 @@ export function AdminUsagePage({ path }: { path: string }) {
   }, [gate.allowed])
 
   useEffect(() => {
-    if (gate.allowed) load()
+    if (!gate.allowed) return
+    load()
+    const id = window.setInterval(() => load(), 30_000)
+    return () => window.clearInterval(id)
   }, [gate.allowed, load])
 
   const successRate = useMemo(() => {
@@ -100,7 +103,7 @@ export function AdminUsagePage({ path }: { path: string }) {
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
       <ConsoleHero
         title={P('用量监控')}
-        subtitle={P('CPAMP 汇总 + BFF 请求诊断（双击行打开「请求诊断详情」；触控单击）。')}
+        subtitle={P('本站 site-usage 汇总（30s 可刷新）+ BFF 请求诊断（双击行打开详情）。')}
       />
       <div className="channels-toolbar">
         <span className="muted">
@@ -139,7 +142,7 @@ export function AdminUsagePage({ path }: { path: string }) {
         <h3>{P('请求诊断')}</h3>
         <p className="muted" style={{ marginTop: 0 }}>
           {logs?.note ||
-            P('经本站 BFF /v1 转发的调用会落盘 req/res Body（脱敏）。CPAMP 汇总不含正文。')}
+            P('用量仅统计经本站 BFF /v1 的调用（site-usage）。诊断正文同样只来自 BFF 落盘。')}
           {logs?.stats
             ? ` · 已捕获 ${logs.stats.total} 条（含正文 ${logs.stats.with_detail}）`
             : ''}

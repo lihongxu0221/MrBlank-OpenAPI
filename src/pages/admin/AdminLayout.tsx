@@ -11,6 +11,9 @@ import {
   Users,
   Cloud,
   Gift,
+  Settings,
+  Blocks,
+  ScrollText,
 } from 'lucide-react'
 import { P } from '../../i18n'
 import { navigate, navigateWithQuery } from '../../router/hash'
@@ -23,6 +26,9 @@ const ITEMS = [
   { path: '/admin/keys', label: 'CPA 密钥', icon: KeyRound },
   { path: '/admin/usage', label: '用量监控', icon: Activity },
   { path: '/admin/connection', label: '连接状态', icon: Cable },
+  { path: '/admin/config', label: 'CPA 配置', icon: Settings },
+  { path: '/admin/compat', label: 'OpenAI 兼容', icon: Blocks },
+  { path: '/admin/request-log', label: '请求日志', icon: ScrollText },
   { path: '/admin/constellation', label: '模型星座', icon: Sparkles },
   { path: '/admin/groups', label: '用户组', icon: UserCog },
   { path: '/admin/credits', label: '签到兑换', icon: Gift },
@@ -104,10 +110,11 @@ export function AdminLayout({
             })
           : null}
         <div className="console-aside-note">
-          <div>{P('www CPAMP = 完整运维')}</div>
-          <div>{P('openapi /admin = 同风格运营子集')}</div>
+          <div>{P('内核：CPA Management Key')}</div>
+          <div>{P('用量：本站 site-usage（非 CPAMP）')}</div>
+          <div>{P('CPAMP 可选，不再作为生产依赖')}</div>
           <a href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">
-            {P('打开 www CPAMP')} ↗
+            {P('www CPAMP（可选）')} ↗
           </a>
           <a
             href="/console"

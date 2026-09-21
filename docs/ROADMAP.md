@@ -1,5 +1,17 @@
 # MrBlank OpenAPI — 总需求与阶段计划
 
+
+## P0–P4 — CPA Kernel (2026-09-21) ✅
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| P0 CPA wiring | ✅ | auth-files/config via Management Key; CPAMP optional |
+| P1 site usage + collector | ✅ | `siteUsage.js` + `cpaCollector.js`; leaderboard/activity site-only |
+| P2 Admin UI parity | ✅ | config / compat / request-log pages; accounts/usage/connection refreshed |
+| P3 Community pulse | ✅ | `/community` pulse layout; pool from CPA; board/activity from site-usage |
+| P4 Docs + verify | ✅ | `docs/CPA_KERNEL.md`; tests/build; deploy from main |
+
+
 更新：2026-09-21  
 站点：https://openapi.juc114.cn  
 仓库：https://github.com/lihongxu0221/MrBlank-OpenAPI  

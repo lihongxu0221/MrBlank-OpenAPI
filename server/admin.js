@@ -165,7 +165,11 @@ export function summarizeUsage(usage) {
 export function mapAdminAccounts(authFilesPayload) {
   const files = Array.isArray(authFilesPayload?.files) ? authFilesPayload.files : []
   return files.map((f) => {
-    const recent = Array.isArray(f.recent_requests) ? f.recent_requests : []
+    const recent = Array.isArray(f.recent_requests)
+      ? f.recent_requests
+      : Array.isArray(f.recent_requests)
+        ? f.recent_requests
+        : []
     return {
       id: f.id || f.name || f.auth_index,
       label: f.label || f.email || f.account || f.name,
@@ -174,12 +178,12 @@ export function mapAdminAccounts(authFilesPayload) {
       account_type: f.account_type || f.type || null,
       status: f.status || null,
       disabled: !!f.disabled,
-      unavailable: !!f.unavailable,
+      unavailable: !!(f.unavailable || f.unavailable),
       success: Number(f.success || 0) || 0,
       failed: Number(f.failed || 0) || 0,
-      last_refresh: f.last_refresh || null,
-      updated_at: f.updated_at || null,
-      status_message: f.status_message || '',
+      last_refresh: f.last_refresh || f.last_refresh || null,
+      updated_at: f.updated_at || f.modtime || null,
+      status_message: f.status_message || f.status_message || '',
       recent_requests: recent.slice(-12),
     }
   })

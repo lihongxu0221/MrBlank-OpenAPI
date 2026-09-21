@@ -15,6 +15,9 @@ type Conn = {
   secrets?: { demo: boolean; management: boolean; admin: boolean }
   health?: any
   models?: { ok: boolean; count: number; latency_ms?: number | null; base?: string | null; error?: string | null }
+  collector?: { ok?: boolean; lastSync?: string | null; error?: string | null; latency_ms?: number | null; account_count?: number }
+  cpa_latency_ms?: number
+  note?: string
 }
 
 export function AdminConnectionPage({ path }: { path: string }) {
@@ -48,7 +51,7 @@ export function AdminConnectionPage({ path }: { path: string }) {
 
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
-      <ConsoleHero title={P('连接状态')} subtitle={P('本机 CPA / billing / CPAMP 可达性与脱敏配置摘要。')} />
+      <ConsoleHero title={P('连接状态')} subtitle={P('本机 CPA / billing 可达性、collector 心跳与脱敏配置摘要。CPAMP 可选。')} />
       <div className="channels-toolbar">
         <span className="muted">
           {data?.checked_at
@@ -68,6 +71,25 @@ export function AdminConnectionPage({ path }: { path: string }) {
         </div>
       </div>
       {err ? <p style={{ color: 'var(--error)' }}>{err}</p> : null}
+
+      
+      {data?.collector ? (
+        <div className="panel" style={{ marginTop: 12 }}>
+          <h3>{P('CPA auth-files 采集器')}</h3>
+          <p className="muted">
+            {data.collector.ok ? P('正常') : P('异常/等待')}
+            {data.collector.lastSync
+              ? ` · ${P('上次同步')} ${new Date(data.collector.lastSync).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`
+              : ''}
+            {data.collector.latency_ms != null ? ` · ${data.collector.latency_ms} ms` : ''}
+            {data.collector.account_count != null ? ` · ${data.collector.account_count} accounts` : ''}
+          </p>
+          {data.collector.error ? <p style={{ color: 'var(--error)' }}>{data.collector.error}</p> : null}
+          {data?.cpa_latency_ms != null ? (
+            <p className="muted">{P('CPA 探测延迟')} · {data.cpa_latency_ms} ms</p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="panel">
         <h3>{P('端点')}</h3>
@@ -142,7 +164,7 @@ export function AdminConnectionPage({ path }: { path: string }) {
           admin={String(!!data?.secrets?.admin)}
         </p>
         <p className="muted">
-          {P('完整高级配置仍用 www CPAMP；此处仅脱敏只读摘要。')}
+          {data?.note || P('CPA 为主；CPAMP 可选。配置请用「CPA 配置 / OpenAI 兼容 / 请求日志」页面。')}
         </p>
       </div>
 

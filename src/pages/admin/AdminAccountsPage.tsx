@@ -18,6 +18,7 @@ type Account = {
   failed?: number
   last_refresh?: string | null
   status_message?: string
+  recent_requests?: { time?: string; success?: number; failed?: number }[]
 }
 
 type Pool = {
@@ -58,7 +59,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
 
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
-      <ConsoleHero title={P('上游账号')} subtitle={P('来自 CPAMP auth-files 的号池健康观测（日常子集）。')} />
+      <ConsoleHero title={P('上游账号')} subtitle={P('来自 CPA auth-files（Management Key + collector）；可强制刷新。')} />
       <div className="channels-toolbar">
         <span className="muted">
           {observedAt
@@ -131,6 +132,15 @@ export function AdminAccountsPage({ path }: { path: string }) {
                     : '—'}
                 </span>
               </div>
+              {a.recent_requests?.length ? (
+                <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+                  {P('近期请求')} ·{' '}
+                  {a.recent_requests
+                    .slice(-6)
+                    .map((r, i) => `${r.time || i}: ${r.success ?? 0}/${r.failed ?? 0}`)
+                    .join(' · ')}
+                </div>
+              ) : null}
             </article>
           )
         })}

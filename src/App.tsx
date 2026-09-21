@@ -28,6 +28,9 @@ import { AdminGroupsPage } from './pages/admin/AdminGroupsPage'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage'
 import { AdminAilyPage } from './pages/admin/AdminAilyPage'
 import { AdminCreditsPage } from './pages/admin/AdminCreditsPage'
+import { AdminConfigPage } from './pages/admin/AdminConfigPage'
+import { AdminCompatPage } from './pages/admin/AdminCompatPage'
+import { AdminRequestLogPage } from './pages/admin/AdminRequestLogPage'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { getSiteConfig, subscribeSiteConfig } from './config/site'
 import { getLanguage } from './i18n'
@@ -104,6 +107,15 @@ export default function App() {
       break
     case '/admin/connection':
       page = <AdminConnectionPage path={path} />
+      break
+    case '/admin/config':
+      page = <AdminConfigPage path={path} />
+      break
+    case '/admin/compat':
+      page = <AdminCompatPage path={path} />
+      break
+    case '/admin/request-log':
+      page = <AdminRequestLogPage path={path} />
       break
     case '/admin/constellation':
       page = <AdminConstellationPage path={path} />

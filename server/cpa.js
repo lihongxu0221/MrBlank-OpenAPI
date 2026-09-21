@@ -412,10 +412,13 @@ export function filterDetailInPeriod(detail, period) {
 export function aggregateLeaderboardFromUsage(usage, hashToUser, { period = 'today', sort = 'credits' } = {}) {
   /** @type {Map<string, { calls: number, success: number, tokens: number }>} */
   const byHash = new Map()
+  const allow = hashToUser instanceof Map ? hashToUser : null
   for (const { detail } of iterateUsageDetails(usage)) {
     if (!filterDetailInPeriod(detail, period)) continue
     const h = detail.api_key_hash
     if (!h) continue
+    // When a site key map is provided, only count keys issued by this site.
+    if (allow && !allow.has(h)) continue
     let row = byHash.get(h)
     if (!row) {
       row = { calls: 0, success: 0, tokens: 0 }
@@ -469,11 +472,14 @@ export function aggregateLeaderboardFromUsage(usage, hashToUser, { period = 'tod
 }
 
 /** Aggregate per model for community activity. */
-export function aggregateActivityFromUsage(usage, { period = 'today' } = {}) {
+export function aggregateActivityFromUsage(usage, { period = 'today', hashAllow = null } = {}) {
   /** @type {Map<string, { calls: number, successful: number, tokens: number }>} */
   const byModel = new Map()
+  const allow = hashAllow instanceof Set || hashAllow instanceof Map ? hashAllow : null
   for (const { modelName, detail } of iterateUsageDetails(usage)) {
     if (!filterDetailInPeriod(detail, period)) continue
+    const h = detail.api_key_hash
+    if (allow && (!h || !allow.has(h))) continue
     const model = detail.requested_model || detail.resolved_model || modelName
     let row = byModel.get(model)
     if (!row) {
@@ -541,8 +547,59 @@ export function modelLatencyStatsFromUsage(usage, { period = '7d', limit = 24 } 
   return out
 }
 
+
+const cpaAuthFilesCache = createTtlCache(45_000)
+
+/** CPA auth-files via management key (preferred over CPAMP). */
+export async function fetchCpaAuthFiles(cfg) {
+  if (!cfg.managementKey) throw new Error('CPA management key not configured')
+  return cpaFetch(cfg, '/v0/management/auth-files')
+}
+
+export async function fetchCpaAuthFilesCached(cfg, { force = false } = {}) {
+  if (!force) {
+    const hit = cpaAuthFilesCache.get()
+    if (hit) return hit
+  }
+  const data = await fetchCpaAuthFiles(cfg)
+  return cpaAuthFilesCache.set(data)
+}
+
+/** CPA /v0/management/config (sanitized by caller). */
+export async function fetchCpaConfig(cfg) {
+  if (!cfg.managementKey) throw new Error('CPA management key not configured')
+  return cpaFetch(cfg, '/v0/management/config')
+}
+
+/** GET { "request-log": boolean } */
+export async function fetchCpaRequestLog(cfg) {
+  if (!cfg.managementKey) throw new Error('CPA management key not configured')
+  const data = await cpaFetch(cfg, '/v0/management/request-log')
+  return { enabled: !!(data?.['request-log'] ?? data?.enabled ?? data?.value) }
+}
+
+/** PUT body: { "value": boolean } */
+export async function setCpaRequestLog(cfg, enabled) {
+  if (!cfg.managementKey) throw new Error('CPA management key not configured')
+  return cpaFetch(cfg, '/v0/management/request-log', {
+    method: 'PUT',
+    body: { value: !!enabled },
+  })
+}
+
+/** PUT openai-compatibility — body is the raw array. */
+export async function setOpenaiCompatibility(cfg, entries) {
+  if (!cfg.managementKey) throw new Error('CPA management key not configured')
+  const list = Array.isArray(entries) ? entries : []
+  return cpaFetch(cfg, '/v0/management/openai-compatibility', {
+    method: 'PUT',
+    body: list,
+  })
+}
+
 const authFilesCache = createTtlCache(45_000)
 
+/** @deprecated Prefer fetchCpaAuthFiles — CPAMP optional. */
 export async function fetchCpampAuthFiles(cfg) {
   if (!cfg.adminKey) throw new Error('CPAMP admin key not configured')
   return cpampFetch(cfg, '/v0/management/auth-files')
@@ -576,10 +633,10 @@ export function maskAccountLabel(raw) {
 
 function poolStatusFromFile(f) {
   if (f.disabled) return 'disabled'
-  if (f.unavailable) return 'exhausted'
+  if (f.unavailable || f.unavailable) return 'exhausted'
   const st = String(f.status || '').toLowerCase()
-  if (st === 'active' || st === 'ok' || st === 'available') return 'available'
-  if (st.includes('exhaust') || st.includes('quota') || st.includes('limit')) return 'exhausted'
+  if (st === 'active' || st === 'ok' || st === 'available' || st === 'ready') return 'available'
+  if (st.includes('exhaust') || st.includes('quota') || st.includes('limit') || st === 'unavailable') return 'exhausted'
   if (st.includes('disable') || st.includes('ban')) return 'disabled'
   if (st) return st
   return 'available'
@@ -591,13 +648,17 @@ export function mapAuthFilesToPoolItems(authFilesPayload) {
   return files.map((f, i) => {
     const success = Number(f.success || 0) || 0
     const failed = Number(f.failed || 0) || 0
-    const recent = Array.isArray(f.recent_requests) ? f.recent_requests : []
+    const recent = Array.isArray(f.recent_requests)
+      ? f.recent_requests
+      : Array.isArray(f.recent_requests)
+        ? f.recent_requests
+        : []
     const recentOk = recent.reduce((s, r) => s + (Number(r.success) || 0), 0)
     const recentFail = recent.reduce((s, r) => s + (Number(r.failed) || 0), 0)
     const label = f.label || f.email || f.account || f.name || `account-${i + 1}`
     return {
       name: maskAccountLabel(label),
-      provider: String(f.provider || f.type || 'cpa'),
+      provider: String(f.provider || f.type || f.account_type || 'cpa'),
       tier: String(f.account_type || f.type || 'oauth'),
       status: poolStatusFromFile(f),
       success,

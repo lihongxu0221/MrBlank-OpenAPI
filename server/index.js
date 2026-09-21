@@ -12,6 +12,12 @@ import {
   fetchCpampUsage,
   fetchCpampUsageCached,
   fetchCpampAuthFilesCached,
+  fetchCpaAuthFiles,
+  fetchCpaAuthFilesCached,
+  fetchCpaConfig,
+  fetchCpaRequestLog,
+  setCpaRequestLog,
+  setOpenaiCompatibility,
   flattenUsageForHashes,
   hashApiKey,
   maskKey,
@@ -25,6 +31,8 @@ import {
   probeUrl,
   fetchOpenaiCompatibility,
 } from './cpa.js'
+import { createSiteUsageStore } from './siteUsage.js'
+import { createCpaCollector } from './cpaCollector.js'
 import { createUserKeyStore } from './userKeys.js'
 import {
   loadAdminAllowlist,
@@ -76,6 +84,14 @@ const diagnosisStore = createDiagnosisStore(
 const userKeyStore = createUserKeyStore(
   process.env.USER_KEYS_PATH || path.join(__dirname, 'data', 'user-keys.json'),
 )
+const siteUsage = createSiteUsageStore(
+  process.env.SITE_USAGE_PATH || path.join(__dirname, 'data', 'site-usage.json'),
+)
+const cpaCollector = createCpaCollector({
+  intervalMs: Number(process.env.CPA_COLLECTOR_INTERVAL_MS || 20_000) || 20_000,
+  fetchAuthFiles: (force) => fetchCpaAuthFilesCached(cpaCfg, { force: !!force }),
+  mapPool: (payload) => mapAuthFilesToPoolItems(payload),
+})
 const adminAllowlist = loadAdminAllowlist(process.env)
 const siteContent = createSiteContentStore(
   process.env.SITE_CONTENT_PATH || path.join(__dirname, 'data', 'site-content.json'),
@@ -392,11 +408,11 @@ function rememberProbe(entry) {
 
 function overallFromHealth(modelsOk, health, modelCount) {
   const cpaUp = !!(health?.cpa?.ok || health?.billing?.ok)
-  const cpampUp = !!health?.cpamp?.ok
+  // CPAMP is optional — do not degrade community/admin when it is down.
   if (!modelsOk && !cpaUp) return 'unavailable'
   if (!modelsOk) return 'degraded'
   if (modelCount === 0) return 'degraded'
-  if (!cpampUp) return 'degraded'
+  if (!cpaUp) return 'degraded'
   return 'operational'
 }
 
@@ -414,6 +430,7 @@ async function buildAvailability() {
       models: [],
       error: e?.message || String(e),
     })),
+    // CPAMP usage optional (latency hints only); site usage is authoritative for community stats
     cpaCfg.adminKey
       ? fetchCpampUsageCached(cpaCfg).catch(() => null)
       : Promise.resolve(null),
@@ -499,7 +516,7 @@ async function buildAvailability() {
   return ok({
     checked_at: now,
     overall,
-    source: 'cpa+cpamp',
+    source: 'cpa+billing',
     cpa: health.cpa,
     billing: health.billing,
     cpamp: health.cpamp,
@@ -526,64 +543,70 @@ async function buildAvailability() {
   })
 }
 
-async function buildLeaderboard(period = 'today', sort = 'credits', p = 1) {
-  if (!cpaCfg.adminKey) {
-    return ok({
-      items: [],
-      total: 0,
-      period,
-      sort,
-      page: p,
-      note: 'CPAMP Admin Key 未配置；排行榜暂不可用。',
-    })
-  }
+
+/** Enrich site key hash map with local + session display names. */
+function enrichHashToUserMap(hashMap) {
+  if (!hashMap || !hashMap.size) return hashMap
+  const localById = new Map()
   try {
-    const usage = await fetchCpampUsageCached(cpaCfg)
-    // Merge disk profiles + live sessions + local users for display names.
-    const hashMap = userKeyStore.hashToUserMap()
-    const localById = new Map()
-    try {
-      for (const u of localUserStore.listUsers()) {
-        localById.set(String(u.id), u)
-      }
-    } catch {
-      /* ignore */
+    for (const u of localUserStore.listUsers()) {
+      localById.set(String(u.id), u)
     }
+  } catch {
+    /* ignore */
+  }
+  for (const [h, meta] of hashMap) {
+    const loc = localById.get(String(meta.userId))
+    if (loc) {
+      hashMap.set(h, {
+        ...meta,
+        display_name: meta.display_name || loc.display_name || '',
+        username: meta.username || loc.username || '',
+      })
+    }
+  }
+  for (const rec of sessions.values()) {
+    const uid = String(rec.user?.id || '')
+    if (!uid) continue
     for (const [h, meta] of hashMap) {
-      const loc = localById.get(String(meta.userId))
-      if (loc) {
+      if (String(meta.userId) === uid) {
         hashMap.set(h, {
           ...meta,
-          display_name: meta.display_name || loc.display_name || '',
-          username: meta.username || loc.username || '',
+          display_name: rec.user.display_name || meta.display_name,
+          username: rec.user.username || meta.username,
         })
       }
     }
-    for (const rec of sessions.values()) {
-      const uid = String(rec.user?.id || '')
-      if (!uid) continue
-      for (const [h, meta] of hashMap) {
-        if (meta.userId === uid) {
-          hashMap.set(h, {
-            ...meta,
-            display_name: rec.user.display_name || meta.display_name,
-            username: rec.user.username || meta.username,
-          })
-        }
-      }
-    }
-    const ranked = aggregateLeaderboardFromUsage(usage, hashMap, { period, sort })
+  }
+  return hashMap
+}
+
+async function buildLeaderboard(period = 'today', sort = 'credits', p = 1) {
+  try {
+    const hashMap = enrichHashToUserMap(userKeyStore.hashToUserMap())
+    const ranked = siteUsage.leaderboard({ period, sort, hashToUser: hashMap })
     const mapped = ranked.filter((r) => r.mapped).length
+    const pageSize = 10
+    const pageNum = Math.max(1, Number(p) || 1)
+    const start = (pageNum - 1) * pageSize
+    const emptyNote = hashMap.size
+      ? ranked.length
+        ? undefined
+        : '本站密钥尚无调用记录；排行榜在有人通过本站 /v1 产生用量后出现。'
+      : '本站尚未发放密钥；排行榜为空，直到有人在控制台创建密钥并产生用量。'
     return ok({
-      items: ranked,
+      items: ranked.slice(start, start + pageSize),
       total: ranked.length,
       mapped,
       unmapped: ranked.length - mapped,
       period,
       sort,
-      page: p,
-      source: 'cpamp',
-      privacy_note: '已登录并创建密钥的用户显示 Linux.do / 本站昵称；其余以脱敏键名展示。',
+      page: pageNum,
+      page_size: pageSize,
+      source: 'site-usage',
+      note: emptyNote,
+      privacy_note:
+        '仅统计经本站 /v1 代理、且密钥由本站控制台发放的调用。有昵称的显示 Linux.do / 本站名称；否则脱敏。',
     })
   } catch (err) {
     console.error('[welfare] leaderboard failed', err?.message || err)
@@ -593,41 +616,63 @@ async function buildLeaderboard(period = 'today', sort = 'credits', p = 1) {
       period,
       sort,
       page: p,
-      note: `排行榜暂不可用：${err?.message || 'CPAMP 错误'}`,
+      note: `排行榜暂不可用：${err?.message || 'site usage error'}`,
     })
   }
 }
 
 async function buildActivity(period = 'today') {
-  if (!cpaCfg.adminKey) {
-    return ok({ period, items: [], note: 'CPAMP Admin Key 未配置；调用实况暂不可用。' })
-  }
   try {
-    const usage = await fetchCpampUsageCached(cpaCfg)
-    const items = aggregateActivityFromUsage(usage, { period })
-    return ok({ period, items, source: 'cpamp' })
+    const hashMap = userKeyStore.hashToUserMap()
+    const items = siteUsage.activityByModel({ period })
+    return ok({
+      period,
+      items,
+      source: 'site-usage',
+      note: hashMap.size
+        ? items.length
+          ? undefined
+          : '本站密钥尚无模型调用；实况在有人通过本站 /v1 调用后出现。'
+        : '本站尚未发放密钥；模型调用实况为空，直到控制台创建密钥并产生用量。',
+    })
   } catch (err) {
     console.error('[welfare] activity failed', err?.message || err)
-    return ok({ period, items: [], note: `调用实况暂不可用：${err?.message || 'CPAMP 错误'}` })
+    return ok({ period, items: [], note: `调用实况暂不可用：${err?.message || 'site usage error'}` })
   }
 }
 
 async function buildPool() {
-  if (!cpaCfg.adminKey) {
-    return ok({ stale: true, items: [], note: 'CPAMP Admin Key 未配置；号池暂不可用。' })
+  if (!cpaCfg.managementKey) {
+    return ok({ stale: true, items: [], note: 'CPA Management Key 未配置；号池暂不可用。' })
   }
   try {
-    const auth = await fetchCpampAuthFilesCached(cpaCfg)
-    const items = mapAuthFilesToPoolItems(auth)
+    // Prefer collector cache; fall back to direct CPA fetch.
+    let snap = cpaCollector.getPoolSnapshot()
+    if (!snap.items.length) {
+      await cpaCollector.refresh({ force: true })
+      snap = cpaCollector.getPoolSnapshot()
+    }
+    if (!snap.items.length && snap.error) {
+      // Last resort: direct fetch (bypass collector state)
+      const auth = await fetchCpaAuthFilesCached(cpaCfg, { force: true })
+      const items = mapAuthFilesToPoolItems(auth)
+      return ok({
+        stale: false,
+        items,
+        observed_at: auth?.observed_at || null,
+        source: 'cpa:auth-files',
+      })
+    }
     return ok({
-      stale: false,
-      items,
-      observed_at: auth?.observed_at || null,
-      source: 'cpamp:auth-files',
+      stale: !!snap.stale,
+      items: snap.items,
+      observed_at: snap.observed_at || null,
+      source: 'cpa:auth-files',
+      note: snap.error && !snap.items.length ? `号池暂不可用：${snap.error}` : undefined,
     })
   } catch (err) {
     console.error('[welfare] pool failed', err?.message || err)
-    return ok({ stale: true, items: [], note: `号池暂不可用：${err?.message || 'CPAMP 错误'}` })
+    return ok({ stale: true, items: [], note: `号池暂不可用：${err?.message || 'CPA 错误'}` })
   }
 }
 
@@ -808,8 +853,26 @@ app.use(
       filterModelsBody(ctx, bodyText) {
         return groupStore.filterModelsResponseBody(bodyText, ctx.groupInfo?.group)
       },
-      onComplete({ userId, status, usage, isConsuming, useSiteCredits }) {
-        if (!userId || !isConsuming || !(status >= 200 && status < 300)) return
+      onComplete({ userId, status, usage, isConsuming, useSiteCredits, apiKey, requestedModel, endpoint }) {
+        const okStatus = status >= 200 && status < 300
+        // Always record site-scoped usage for community leaderboard / admin usage (incl. failures).
+        try {
+          const prompt = Number(usage?.prompt_tokens) || 0
+          const completion = Number(usage?.completion_tokens) || 0
+          siteUsage.recordEvent({
+            userId: userId || null,
+            keyHash: apiKey ? hashApiKey(apiKey) : null,
+            model: requestedModel || usage?.model || null,
+            endpoint: endpoint || null,
+            success: okStatus,
+            tokens: prompt + completion,
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+          })
+        } catch (e) {
+          console.error('[siteUsage] recordEvent failed', e?.message || e)
+        }
+        if (!userId || !isConsuming || !okStatus) return
         const tokens =
           (Number(usage?.prompt_tokens) || 0) + (Number(usage?.completion_tokens) || 0)
         const quota = Math.max(1, tokens) // at least 1 raw unit per successful call
@@ -1421,15 +1484,17 @@ app.get('/api/admin/me', requireAuth, (req, res) => {
 
 app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
   try {
-    const [health, modelsProbe, usage, authFiles, keys] = await Promise.all([
+    const [health, modelsProbe, authFiles, keys] = await Promise.all([
       probeServiceHealth(cpaCfg).catch(() => null),
       probeCpaModels(cpaCfg).catch(() => ({ ok: false, models: [], latency_ms: 0 })),
-      cpaCfg.adminKey ? fetchCpampUsageCached(cpaCfg).catch(() => null) : null,
-      cpaCfg.adminKey ? fetchCpampAuthFilesCached(cpaCfg).catch(() => null) : null,
+      cpaCfg.managementKey
+        ? fetchCpaAuthFilesCached(cpaCfg).catch(() => null)
+        : Promise.resolve(null),
       cpaCfg.managementKey ? listCpaApiKeys(cpaCfg).catch(() => []) : [],
     ])
-    const summary = usage ? summarizeUsage(usage) : null
+    const summary = siteUsage.summarize({ period: 'all' })
     const accounts = authFiles ? mapAdminAccounts(authFiles) : []
+    const collector = cpaCollector.getStatus()
     res.json(
       ok({
         checked_at: new Date().toISOString(),
@@ -1440,14 +1505,12 @@ app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
           latency_ms: modelsProbe?.latency_ms || null,
           error: modelsProbe?.error || null,
         },
-        usage: summary
-          ? {
-              total_requests: summary.total_requests,
-              success_count: summary.success_count,
-              failure_count: summary.failure_count,
-              total_tokens: summary.total_tokens,
-            }
-          : null,
+        usage: {
+          total_requests: summary.total_requests,
+          success_count: summary.success_count,
+          failure_count: summary.failure_count,
+          total_tokens: summary.total_tokens,
+        },
         accounts: {
           total: accounts.length,
           active: accounts.filter((a) => !a.disabled && !a.unavailable).length,
@@ -1456,10 +1519,11 @@ app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
         api_keys: { total: Array.isArray(keys) ? keys.length : 0 },
         public_api_base: cpaCfg.publicApiBaseUrl,
         pool: summarizeAccounts(accounts),
+        collector,
         ops: {
           www_cpamp: 'https://www.juc114.cn/management.html',
           openapi_admin: 'https://openapi.juc114.cn/admin',
-          note: 'www CPAMP = full ops; openapi /admin = styled subset (connection / accounts / keys / usage).',
+          note: 'CPA management key is primary. CPAMP is optional. Usage is site-scoped (BFF /v1).',
         },
       }),
     )
@@ -1471,13 +1535,16 @@ app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
 
 app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
   try {
+    const started = Date.now()
     const health = await probeServiceHealth(cpaCfg)
+    const cpaLatency = Date.now() - started
     const models = await probeCpaModels(cpaCfg)
     const ailyAdapter = await ailyManager.testAdapterModels().catch((e) => ({
       ok: false,
       message: e?.message || String(e),
     }))
     const ailyStatus = ailyManager.publicStatus()
+    const collector = cpaCollector.getStatus()
     res.json(
       ok({
         checked_at: new Date().toISOString(),
@@ -1493,6 +1560,8 @@ app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
           aily_adapter_key: !!ailyStatus.adapter_api_key_configured,
         },
         health,
+        cpa_latency_ms: health?.cpa?.latency_ms ?? cpaLatency,
+        collector,
         models: {
           ok: models.ok,
           count: models.models.length,
@@ -1508,6 +1577,7 @@ app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
           model_routes: ailyStatus.model_routes,
           has_access_token: ailyStatus.has_access_token,
         },
+        note: 'CPA + billing are primary. CPAMP is optional and not required for pool/accounts/config.',
       }),
     )
   } catch (err) {
@@ -1517,18 +1587,23 @@ app.get('/api/admin/connection', requireAdmin, async (_req, res) => {
 
 app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
   try {
-    if (!cpaCfg.adminKey) {
-      res.status(503).json(fail('CPAMP Admin Key 未配置'))
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
       return
     }
-    const auth = await fetchCpampAuthFilesCached(cpaCfg, { force: true })
+    await cpaCollector.refresh({ force: true })
+    let auth = cpaCollector.getAuthFilesPayload()
+    if (!auth) {
+      auth = await fetchCpaAuthFilesCached(cpaCfg, { force: true })
+    }
     const items = mapAdminAccounts(auth)
     res.json(
       ok({
-        observed_at: auth?.observed_at || null,
+        observed_at: auth?.observed_at || cpaCollector.getStatus().lastSync || null,
         items,
         pool: summarizeAccounts(items),
-        source: 'cpamp:auth-files',
+        source: 'cpa:auth-files',
+        collector: cpaCollector.getStatus(),
       }),
     )
   } catch (err) {
@@ -1539,12 +1614,15 @@ app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
 
 app.get('/api/admin/usage', requireAdmin, async (_req, res) => {
   try {
-    if (!cpaCfg.adminKey) {
-      res.status(503).json(fail('CPAMP Admin Key 未配置'))
-      return
-    }
-    const usage = await fetchCpampUsageCached(cpaCfg, { force: true })
-    res.json(ok({ ...summarizeUsage(usage), source: 'cpamp' }))
+    const summary = siteUsage.summarize({ period: 'all' })
+    res.json(
+      ok({
+        ...summary,
+        source: 'site-usage',
+        note: '用量来自本站 BFF /v1 记录，不是 CPAMP 全局 usage。无本站密钥调用时为空。',
+        stats: siteUsage.stats(),
+      }),
+    )
   } catch (err) {
     console.error('[admin] usage', err?.message || err)
     res.status(502).json(fail(err?.message || 'usage failed'))
@@ -1993,21 +2071,98 @@ app.post('/api/admin/constellation/seed-from-models', requireAdmin, async (_req,
 
 app.get('/api/admin/config', requireAdmin, async (_req, res) => {
   try {
-    if (!cpaCfg.adminKey) {
-      res.status(503).json(fail('CPAMP Admin Key 未配置'))
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
       return
     }
-    // Reuse cpamp via auth-files path style: fetch config through probeUrl with admin key
-    const result = await probeUrl(`${cpaCfg.cpampBaseUrl}/v0/management/config`, {
-      headers: { Authorization: `Bearer ${cpaCfg.adminKey}`, Accept: 'application/json' },
-    })
-    if (!result.ok) {
-      res.status(502).json(fail(result.error || `config ${result.status}`))
-      return
+    const raw = await fetchCpaConfig(cpaCfg)
+    let requestLog = null
+    try {
+      requestLog = await fetchCpaRequestLog(cpaCfg)
+    } catch {
+      requestLog = null
     }
-    res.json(ok({ config: sanitizeConfig(result.body || {}), source: 'cpamp' }))
+    res.json(
+      ok({
+        config: sanitizeConfig(raw || {}),
+        request_log: requestLog,
+        source: 'cpa',
+        writable: {
+          request_log: true,
+          openai_compatibility: true,
+          note: 'Full config PUT is not exposed; use request-log + openai-compatibility endpoints.',
+        },
+      }),
+    )
   } catch (err) {
     res.status(502).json(fail(err?.message || 'config failed'))
+  }
+})
+
+app.get('/api/admin/request-log', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const rl = await fetchCpaRequestLog(cpaCfg)
+    res.json(ok({ ...rl, source: 'cpa' }))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'request-log failed'))
+  }
+})
+
+app.put('/api/admin/request-log', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const enabled = !!(req.body?.enabled ?? req.body?.value ?? req.body?.['request-log'])
+    await setCpaRequestLog(cpaCfg, enabled)
+    const rl = await fetchCpaRequestLog(cpaCfg)
+    res.json(ok({ ...rl, source: 'cpa' }))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'request-log update failed'))
+  }
+})
+
+app.get('/api/admin/openai-compatibility', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const items = await fetchOpenaiCompatibility(cpaCfg)
+    res.json(ok({ items, source: 'cpa' }))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'openai-compatibility failed'))
+  }
+})
+
+app.put('/api/admin/openai-compatibility', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const entries = Array.isArray(req.body?.items)
+      ? req.body.items
+      : Array.isArray(req.body)
+        ? req.body
+        : Array.isArray(req.body?.['openai-compatibility'])
+          ? req.body['openai-compatibility']
+          : null
+    if (!entries) {
+      res.status(400).json(fail('body must be an array or { items: [] }'))
+      return
+    }
+    // CPA expects the raw array as PUT body.
+    await setOpenaiCompatibility(cpaCfg, entries)
+    const items = await fetchOpenaiCompatibility(cpaCfg)
+    res.json(ok({ items, source: 'cpa' }))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'openai-compatibility update failed'))
   }
 })
 
@@ -2018,6 +2173,12 @@ app.use((req, res) => {
   }
   res.status(404).end('Not Found')
 })
+
+try {
+  cpaCollector.start()
+} catch (err) {
+  console.error('[cpaCollector] start failed', err?.message || err)
+}
 
 app.listen(PORT, HOST, () => {
   console.log(`[server] listening on http://${HOST}:${PORT}`)
@@ -2036,4 +2197,5 @@ app.listen(PORT, HOST, () => {
     `[server] site-credits checkin=${creditStore.getConfig().checkin_enabled} grant=${creditStore.getConfig().daily_grant_min}-${creditStore.getConfig().daily_grant_max} codes=${creditStore.listCodes().length}`,
   )
   console.log(`[server] local_users=${localUserStore.listUsers().length} aily_adapter=${ailyManager.cfg.adapterUrl} aily_routes=${ailyManager.cfg.modelRoutes.length}`)
+  console.log(`[server] cpaCollector=${cpaCollector.getStatus().ok ? 'ok' : 'pending'} siteUsage=${siteUsage.stats().events}`)
 })

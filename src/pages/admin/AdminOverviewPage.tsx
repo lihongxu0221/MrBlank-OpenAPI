@@ -17,6 +17,7 @@ type Overview = {
   public_api_base?: string
   pool?: { total: number; active: number; unavailable: number; disabled: number; by_provider: { provider: string; count: number }[] }
   ops?: { www_cpamp?: string; openapi_admin?: string; note?: string }
+  collector?: { ok?: boolean; lastSync?: string | null; error?: string | null; latency_ms?: number | null; account_count?: number }
 }
 
 export function AdminOverviewPage({ path }: { path: string }) {
@@ -48,12 +49,12 @@ export function AdminOverviewPage({ path }: { path: string }) {
 
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
-      <ConsoleHero title={P('管理概览')} subtitle={P('CPA / CPAMP 运营摘要（密钥仅留在服务端）。')} />
+      <ConsoleHero title={P('管理概览')} subtitle={P('CPA 内核运营摘要；用量来自本站 site-usage（密钥仅留在服务端）。')} />
 
       <div className="panel" style={{ marginTop: 4, marginBottom: 12 }}>
         <h3 style={{ marginTop: 0 }}>{P('运维分工')}</h3>
         <p className="page-lead" style={{ marginBottom: 8 }}>
-          {P('www CPAMP = 完整运维面板；本站 /admin = MrBlank 风格的日常运营子集（连接 / 号池 / 密钥 / 用量），不嵌入 management.html。')}
+          {P('CPA Management Key 为生产主路径。号池/账号/配置走 CPA；用量与排行榜走本站 site-usage。CPAMP 可选，不再是硬依赖。')}
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <a className="button secondary compact" href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">
