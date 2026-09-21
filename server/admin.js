@@ -184,3 +184,28 @@ export function mapAdminAccounts(authFilesPayload) {
     }
   })
 }
+
+export function summarizeAccounts(accounts) {
+  const items = Array.isArray(accounts) ? accounts : []
+  const by_provider = {}
+  let active = 0
+  let unavailable = 0
+  let disabled = 0
+  for (const a of items) {
+    const p = String(a.provider || 'unknown')
+    by_provider[p] = (by_provider[p] || 0) + 1
+    if (a.disabled) disabled += 1
+    else if (a.unavailable) unavailable += 1
+    else active += 1
+  }
+  return {
+    total: items.length,
+    active,
+    unavailable,
+    disabled,
+    by_provider: Object.entries(by_provider)
+      .map(([provider, count]) => ({ provider, count }))
+      .sort((a, b) => b.count - a.count),
+  }
+}
+

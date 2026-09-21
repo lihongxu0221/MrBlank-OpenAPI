@@ -20,9 +20,18 @@ type Account = {
   status_message?: string
 }
 
+type Pool = {
+  total: number
+  active: number
+  unavailable: number
+  disabled: number
+  by_provider: { provider: string; count: number }[]
+}
+
 export function AdminAccountsPage({ path }: { path: string }) {
   const gate = useAdminGate()
   const [items, setItems] = useState<Account[]>([])
+  const [pool, setPool] = useState<Pool | null>(null)
   const [observedAt, setObservedAt] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -32,8 +41,9 @@ export function AdminAccountsPage({ path }: { path: string }) {
     setLoading(true)
     setErr(null)
     try {
-      const d = await api.get<{ items: Account[]; observed_at?: string }>('/api/admin/accounts')
+      const d = await api.get<{ items: Account[]; observed_at?: string; pool?: Pool }>('/api/admin/accounts')
       setItems(d.items || [])
+      setPool(d.pool || null)
       setObservedAt(d.observed_at || '')
     } catch (e) {
       setErr((e as Error).message)
@@ -48,7 +58,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
 
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
-      <ConsoleHero title={P('上游账号')} subtitle={P('来自 CPAMP auth-files 的账号健康观测。')} />
+      <ConsoleHero title={P('上游账号')} subtitle={P('来自 CPAMP auth-files 的号池健康观测（日常子集）。')} />
       <div className="channels-toolbar">
         <span className="muted">
           {observedAt
@@ -60,6 +70,34 @@ export function AdminAccountsPage({ path }: { path: string }) {
         </button>
       </div>
       {err ? <p style={{ color: 'var(--error)' }}>{err}</p> : null}
+
+      {pool ? (
+        <div className="stats-grid" style={{ marginBottom: 16 }}>
+          <div className="stat-card">
+            <div className="label">{P('号池总数')}</div>
+            <div className="value">{pool.total}</div>
+          </div>
+          <div className="stat-card">
+            <div className="label">{P('可用')}</div>
+            <div className="value">{pool.active}</div>
+          </div>
+          <div className="stat-card">
+            <div className="label">{P('不可用')}</div>
+            <div className="value">{pool.unavailable}</div>
+          </div>
+          <div className="stat-card">
+            <div className="label">{P('已禁用')}</div>
+            <div className="value">{pool.disabled}</div>
+          </div>
+        </div>
+      ) : null}
+
+      {pool?.by_provider?.length ? (
+        <p className="muted" style={{ marginBottom: 12 }}>
+          {P('按提供方')} · {pool.by_provider.map((p) => `${p.provider} ${p.count}`).join(' · ')}
+        </p>
+      ) : null}
+
       <div className="channel-grid">
         {items.map((a) => {
           const bad = a.disabled || a.unavailable

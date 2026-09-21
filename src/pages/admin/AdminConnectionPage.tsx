@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { ExternalLink, RefreshCw } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
 import { ConsoleHero } from '../../components/ConsoleHero'
@@ -55,9 +55,14 @@ export function AdminConnectionPage({ path }: { path: string }) {
             ? new Date(data.checked_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
             : ''}
         </span>
-        <button type="button" className="button secondary compact" onClick={load} disabled={loading}>
-          <RefreshCw size={14} /> {P('刷新')}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <a className="button secondary compact" href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">
+            <ExternalLink size={14} /> www CPAMP
+          </a>
+          <button type="button" className="button secondary compact" onClick={load} disabled={loading}>
+            <RefreshCw size={14} /> {P('刷新')}
+          </button>
+        </div>
       </div>
       {err ? <p style={{ color: 'var(--error)' }}>{err}</p> : null}
 
@@ -79,7 +84,11 @@ export function AdminConnectionPage({ path }: { path: string }) {
                 <td>
                   <code>{data?.cpa_base || '—'}</code>
                 </td>
-                <td>{data?.health?.cpa?.ok ? P('正常') : P('异常')}</td>
+                <td>
+                  <span className={`health-badge ${data?.health?.cpa?.ok ? 'ok' : 'down'}`}>
+                    ● {data?.health?.cpa?.ok ? P('正常') : P('异常')}
+                  </span>
+                </td>
                 <td>{data?.health?.cpa?.latency_ms != null ? `${data.health.cpa.latency_ms} ms` : '—'}</td>
               </tr>
               <tr>
@@ -87,7 +96,11 @@ export function AdminConnectionPage({ path }: { path: string }) {
                 <td>
                   <code>{data?.billing_base || '—'}</code>
                 </td>
-                <td>{data?.health?.billing?.ok ? P('正常') : P('异常')}</td>
+                <td>
+                  <span className={`health-badge ${data?.health?.billing?.ok ? 'ok' : 'down'}`}>
+                    ● {data?.health?.billing?.ok ? P('正常') : P('异常')}
+                  </span>
+                </td>
                 <td>
                   {data?.health?.billing?.latency_ms != null ? `${data.health.billing.latency_ms} ms` : '—'}
                 </td>
@@ -97,7 +110,11 @@ export function AdminConnectionPage({ path }: { path: string }) {
                 <td>
                   <code>{data?.cpamp_base || '—'}</code>
                 </td>
-                <td>{data?.health?.cpamp?.ok ? P('正常') : P('异常')}</td>
+                <td>
+                  <span className={`health-badge ${data?.health?.cpamp?.ok ? 'ok' : 'down'}`}>
+                    ● {data?.health?.cpamp?.ok ? P('正常') : P('异常')}
+                  </span>
+                </td>
                 <td>
                   {data?.health?.cpamp?.latency_ms != null ? `${data.health.cpamp.latency_ms} ms` : '—'}
                 </td>
@@ -107,7 +124,11 @@ export function AdminConnectionPage({ path }: { path: string }) {
                 <td>
                   <code>{data?.models?.base || data?.public_api_base || '—'}</code>
                 </td>
-                <td>{data?.models?.ok ? `${P('正常')} (${data.models.count})` : P('异常')}</td>
+                <td>
+                  <span className={`health-badge ${data?.models?.ok ? 'ok' : 'down'}`}>
+                    ● {data?.models?.ok ? `${P('正常')} (${data.models.count})` : P('异常')}
+                  </span>
+                </td>
                 <td>{data?.models?.latency_ms != null ? `${data.models.latency_ms} ms` : '—'}</td>
               </tr>
             </tbody>
@@ -116,6 +137,9 @@ export function AdminConnectionPage({ path }: { path: string }) {
         <p className="muted" style={{ marginTop: 10 }}>
           secrets · demo={String(!!data?.secrets?.demo)} · mgmt={String(!!data?.secrets?.management)} ·
           admin={String(!!data?.secrets?.admin)}
+        </p>
+        <p className="muted">
+          {P('完整高级配置仍用 www CPAMP；此处仅脱敏只读摘要。')}
         </p>
       </div>
 

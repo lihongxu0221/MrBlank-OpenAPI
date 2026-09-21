@@ -40,13 +40,21 @@ async function request<T>(
     })
     if (res.status === 401) {
       setSession(null)
-      throw new ApiError(P('请先登录。', 'Please sign in first.'))
+      throw new ApiError(P('请先登录。', 'Please sign in first.'), 'unauthorized')
     }
-    const json = (await res.json()) as Envelope<T>
+    let json: Envelope<T>
+    try {
+      json = (await res.json()) as Envelope<T>
+    } catch {
+      throw new ApiError(qt(P('请求未成功（{status}）'), { status: res.status }), String(res.status))
+    }
+    if (res.status === 403 || (!json.success && res.status === 403)) {
+      throw new ApiError(json.message || P('需要管理员权限'), 'forbidden')
+    }
     if (!json.success) {
       throw new ApiError(
         json.message || qt(P('请求未成功（{status}）'), { status: res.status }),
-        json.code,
+        json.code || String(res.status),
       )
     }
     return json.data

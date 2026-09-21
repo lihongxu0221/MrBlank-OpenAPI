@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Activity, Cable, KeyRound, RefreshCw, Users } from 'lucide-react'
+import { Activity, Cable, ExternalLink, KeyRound, RefreshCw, Users } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
+import { navigate } from '../../router/hash'
 
 type Overview = {
   checked_at?: string
@@ -14,6 +15,8 @@ type Overview = {
   accounts?: { total: number; active: number; unavailable: number }
   api_keys?: { total: number }
   public_api_base?: string
+  pool?: { total: number; active: number; unavailable: number; disabled: number; by_provider: { provider: string; count: number }[] }
+  ops?: { www_cpamp?: string; openapi_admin?: string; note?: string }
 }
 
 export function AdminOverviewPage({ path }: { path: string }) {
@@ -46,6 +49,31 @@ export function AdminOverviewPage({ path }: { path: string }) {
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
       <ConsoleHero title={P('管理概览')} subtitle={P('CPA / CPAMP 运营摘要（密钥仅留在服务端）。')} />
+
+      <div className="panel" style={{ marginTop: 4, marginBottom: 12 }}>
+        <h3 style={{ marginTop: 0 }}>{P('运维分工')}</h3>
+        <p className="page-lead" style={{ marginBottom: 8 }}>
+          {P('www CPAMP = 完整运维面板；本站 #/admin = MrBlank 风格的日常运营子集（连接 / 号池 / 密钥 / 用量），不嵌入 management.html。')}
+        </p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <a className="button secondary compact" href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">
+            <ExternalLink size={14} /> www CPAMP
+          </a>
+          <button type="button" className="button secondary compact" onClick={() => navigate('/admin/connection')}>
+            <Cable size={14} /> {P('连接状态')}
+          </button>
+          <button type="button" className="button secondary compact" onClick={() => navigate('/admin/accounts')}>
+            <Users size={14} /> {P('号池')}
+          </button>
+          <button type="button" className="button secondary compact" onClick={() => navigate('/admin/keys')}>
+            <KeyRound size={14} /> {P('密钥')}
+          </button>
+          <button type="button" className="button secondary compact" onClick={() => navigate('/admin/usage')}>
+            <Activity size={14} /> {P('用量')}
+          </button>
+        </div>
+      </div>
+
       <div className="channels-toolbar">
         <span className="muted">
           {P('最后更新')}：{checkedLabel}
@@ -117,7 +145,11 @@ export function AdminOverviewPage({ path }: { path: string }) {
                 return (
                   <tr key={k}>
                     <td>{k}</td>
-                    <td>{row?.ok ? P('正常') : P('异常')}</td>
+                    <td>
+                      <span className={`health-badge ${row?.ok ? 'ok' : 'down'}`}>
+                        ● {row?.ok ? P('正常') : P('异常')}
+                      </span>
+                    </td>
                     <td>{row?.latency_ms != null ? `${row.latency_ms} ms` : '—'}</td>
                   </tr>
                 )
@@ -125,6 +157,12 @@ export function AdminOverviewPage({ path }: { path: string }) {
             </tbody>
           </table>
         </div>
+        {data?.pool?.by_provider?.length ? (
+          <p className="muted" style={{ marginTop: 10 }}>
+            {P('号池提供方')} ·{' '}
+            {data.pool.by_provider.map((p) => `${p.provider}:${p.count}`).join(' · ')}
+          </p>
+        ) : null}
         {data?.public_api_base ? (
           <p className="muted" style={{ marginTop: 10 }}>
             Base URL · <code>{data.public_api_base}</code>

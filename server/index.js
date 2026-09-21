@@ -30,6 +30,7 @@ import {
   isAdminUser,
   sanitizeConfig,
   summarizeUsage,
+  summarizeAccounts,
   mapAdminAccounts,
   maskSecretValue,
 } from './admin.js'
@@ -188,13 +189,26 @@ function readSid(req) {
   return typeof raw === 'string' && raw.length > 8 ? raw : null
 }
 
+function findSessionByAccessToken(token) {
+  const t = String(token || '').trim()
+  if (!t || t.length < 8) return null
+  for (const rec of sessions.values()) {
+    if (rec.access_token === t) return rec
+  }
+  return null
+}
+
 function getSession(req) {
   const sid = readSid(req)
-  if (!sid) return null
-  const rec = sessions.get(sid)
+  let rec = sid ? sessions.get(sid) : null
+  if (!rec) {
+    const auth = String(req.headers.authorization || '')
+    const m = /^Bearer\s+(.+)$/i.exec(auth)
+    if (m) rec = findSessionByAccessToken(m[1])
+  }
   if (!rec) return null
   if (Date.now() - rec.createdAt > SESSION_TTL_MS) {
-    sessions.delete(sid)
+    sessions.delete(rec.sid)
     return null
   }
   return rec
@@ -1124,7 +1138,10 @@ app.get('/api/admin/me', requireAuth, (req, res) => {
         display_name: req.auth.user.display_name,
         email: req.auth.user.email || '',
         auth_provider: req.auth.user.auth_provider || 'linuxdo',
+        role: req.auth.user.role || null,
       },
+      ops_note:
+        'www CPAMP = full ops; openapi #/admin = MrBlank-styled CPAMP capability subset (no embed).',
       allowlist_configured:
         adminAllowlist.ids.size > 0 ||
         adminAllowlist.usernames.size > 0 ||
@@ -1170,6 +1187,12 @@ app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
         },
         api_keys: { total: Array.isArray(keys) ? keys.length : 0 },
         public_api_base: cpaCfg.publicApiBaseUrl,
+        pool: summarizeAccounts(accounts),
+        ops: {
+          www_cpamp: 'https://www.juc114.cn/management.html',
+          openapi_admin: 'https://openapi.juc114.cn/#/admin',
+          note: 'www CPAMP = full ops; openapi #/admin = styled subset (connection / accounts / keys / usage).',
+        },
       }),
     )
   } catch (err) {
@@ -1216,10 +1239,12 @@ app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
       return
     }
     const auth = await fetchCpampAuthFilesCached(cpaCfg, { force: true })
+    const items = mapAdminAccounts(auth)
     res.json(
       ok({
         observed_at: auth?.observed_at || null,
-        items: mapAdminAccounts(auth),
+        items,
+        pool: summarizeAccounts(items),
         source: 'cpamp:auth-files',
       }),
     )
@@ -1273,13 +1298,25 @@ app.post('/api/admin/keys', requireAdmin, async (req, res) => {
       res.status(503).json(fail('CPA Management Key 未配置'))
       return
     }
-    const key = String(req.body?.key || '').trim()
+    let key = String(req.body?.key || '').trim()
+    const generate = !!req.body?.generate
+    if (generate && !key) {
+      key = `sk-${crypto.randomBytes(24).toString('hex')}`
+    }
     if (!key || key.length < 8) {
-      res.status(400).json(fail('请提供有效的 API Key'))
+      res.status(400).json(fail('请提供有效的 API Key，或传 generate:true'))
       return
     }
     await addCpaApiKey(cpaCfg, key)
-    res.json(ok({ key: maskSecretValue(key), added: true }))
+    // Only return full key once when newly generated; otherwise mask.
+    res.json(
+      ok({
+        key: generate ? key : maskSecretValue(key),
+        masked: maskSecretValue(key),
+        added: true,
+        generated: generate,
+      }),
+    )
   } catch (err) {
     console.error('[admin] keys add', err?.message || err)
     res.status(502).json(fail(err?.message || 'add key failed'))

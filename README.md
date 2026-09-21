@@ -110,7 +110,16 @@ Nginx：
 
 ## 管理员白名单（`#/admin`）
 
-OpenAPI 站内运营控制台是 **CPAMP 能力的兼容风格子集**（概览 / 上游账号 / CPA 密钥 / 用量 / 连接状态），**不会**嵌入或修改 `www.juc114.cn` 的完整 management UI。
+### 运维分工
+
+| 面板 | 用途 |
+|------|------|
+| **www CPAMP**（`https://www.juc114.cn/management.html`） | **完整运维**：高级配置、供应商/账号深度操作 |
+| **openapi `#/admin`**（本站） | **日常运营子集**（MrBlank Geist / CSS 变量风格）：连接状态、号池健康、CPA 密钥、用量汇总，以及星座 / 用户组 / 本站账号 |
+
+**不会** iframe 嵌入或修改 www 的 management UI。清单见 [`docs/PHASE_B_CHECKLIST.md`](docs/PHASE_B_CHECKLIST.md)。
+
+OpenAPI 站内运营控制台是 **CPAMP 能力的兼容风格子集**（概览 / 上游账号 / CPA 密钥 / 用量 / 连接状态）。
 
 在 VPS `.env`（或 systemd 环境）中设置：
 

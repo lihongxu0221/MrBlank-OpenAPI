@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, Trash2 } from 'lucide-react'
+import { RefreshCw, Sparkles, Trash2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
 import { ConsoleHero } from '../../components/ConsoleHero'
@@ -15,6 +15,7 @@ export function AdminKeysPage({ path }: { path: string }) {
   const [items, setItems] = useState<KeyItem[]>([])
   const [note, setNote] = useState('')
   const [newKey, setNewKey] = useState('')
+  const [revealed, setRevealed] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -39,10 +40,28 @@ export function AdminKeysPage({ path }: { path: string }) {
 
   async function addKey() {
     setBusy(true)
+    setRevealed(null)
     try {
       await api.post('/api/admin/keys', { key: newKey.trim() })
       setNewKey('')
       showToast(P('已添加'))
+      await load()
+    } catch (e) {
+      showToast((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function generateKey() {
+    setBusy(true)
+    setRevealed(null)
+    try {
+      const d = await api.post<{ key: string; masked: string; generated?: boolean }>('/api/admin/keys', {
+        generate: true,
+      })
+      if (d.generated && d.key) setRevealed(d.key)
+      showToast(P('已生成并写入 CPA'))
       await load()
     } catch (e) {
       showToast((e as Error).message)
@@ -67,7 +86,7 @@ export function AdminKeysPage({ path }: { path: string }) {
 
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
-      <ConsoleHero title={P('CPA 密钥')} subtitle={P('通过服务端 Management Key 管理；浏览器只见脱敏值。')} />
+      <ConsoleHero title={P('CPA 密钥')} subtitle={P('通过服务端 Management Key 管理；浏览器只见脱敏值（生成时除外）。')} />
       {err ? <p style={{ color: 'var(--error)' }}>{err}</p> : null}
       {note ? <p className="muted">{note}</p> : null}
 
@@ -84,10 +103,40 @@ export function AdminKeysPage({ path }: { path: string }) {
           <button type="button" className="button" disabled={busy || !newKey.trim()} onClick={addKey}>
             {P('添加')}
           </button>
+          <button type="button" className="button secondary" disabled={busy} onClick={generateKey}>
+            <Sparkles size={14} /> {P('生成并添加')}
+          </button>
           <button type="button" className="button secondary" disabled={busy} onClick={load}>
             <RefreshCw size={14} /> {P('刷新')}
           </button>
         </div>
+        {revealed ? (
+          <div className="panel" style={{ marginTop: 12, background: 'var(--surface)' }}>
+            <p className="muted" style={{ marginBottom: 6 }}>
+              {P('请立即复制完整密钥（仅显示一次）：')}
+            </p>
+            <code style={{ wordBreak: 'break-all' }}>{revealed}</code>
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="button secondary compact"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(revealed)
+                    showToast(P('已复制'))
+                  } catch {
+                    showToast(P('复制失败，请手动选择'))
+                  }
+                }}
+              >
+                {P('复制')}
+              </button>
+              <button type="button" className="button secondary compact" style={{ marginLeft: 8 }} onClick={() => setRevealed(null)}>
+                {P('关闭')}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="table-wrap" style={{ marginTop: 16 }}>

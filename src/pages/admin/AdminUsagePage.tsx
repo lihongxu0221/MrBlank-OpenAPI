@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
@@ -38,13 +38,22 @@ export function AdminUsagePage({ path }: { path: string }) {
     if (gate.allowed) load()
   }, [gate.allowed])
 
+  const successRate = useMemo(() => {
+    if (!data) return null
+    const total = Number(data.total_requests) || 0
+    if (!total) return null
+    return ((Number(data.success_count) || 0) / total) * 100
+  }, [data])
+
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
-      <ConsoleHero title={P('用量监控')} subtitle={P('CPAMP 全局用量汇总（非单用户过滤）。')} />
+      <ConsoleHero title={P('用量监控')} subtitle={P('CPAMP 全局用量汇总（日常运营子集；非单用户过滤）。')} />
       <div className="channels-toolbar">
         <span className="muted">
           {data
-            ? `${P('请求')} ${data.total_requests.toLocaleString('zh-CN')} · tokens ${data.total_tokens.toLocaleString('zh-CN')}`
+            ? `${P('请求')} ${data.total_requests.toLocaleString('zh-CN')} · tokens ${data.total_tokens.toLocaleString('zh-CN')}${
+                successRate != null ? ` · ${P('成功率')} ${successRate.toFixed(1)}%` : ''
+              }`
             : ''}
         </span>
         <button type="button" className="button secondary compact" onClick={load} disabled={loading}>
@@ -61,6 +70,14 @@ export function AdminUsagePage({ path }: { path: string }) {
         <div className="stat-card">
           <div className="label">{P('失败')}</div>
           <div className="value">{data?.failure_count?.toLocaleString('zh-CN') ?? '—'}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">{P('成功率')}</div>
+          <div className="value">{successRate != null ? `${successRate.toFixed(1)}%` : '—'}</div>
+        </div>
+        <div className="stat-card">
+          <div className="label">tokens</div>
+          <div className="value">{data?.total_tokens?.toLocaleString('zh-CN') ?? '—'}</div>
         </div>
       </div>
 

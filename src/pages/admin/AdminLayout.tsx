@@ -25,6 +25,11 @@ const ITEMS = [
   { path: '/admin/users', label: '本站账号', icon: UserRound },
 ]
 
+function isActive(path: string, itemPath: string) {
+  if (itemPath === '/admin') return path === '/admin'
+  return path === itemPath || path.startsWith(`${itemPath}/`)
+}
+
 export function AdminLayout({
   path,
   children,
@@ -52,6 +57,17 @@ export function AdminLayout({
         <p className="page-lead">
           {P('当前账号不是管理员。请使用本站管理员账号，或配置 ADMIN_LINUXDO_* 白名单的 Linux.do 账号。')}
         </p>
+        <p className="muted" style={{ marginTop: 8 }}>
+          {P('非管理员不可见顶部「管理」导航；/api/admin/* 返回 403。')}
+        </p>
+        <button
+          type="button"
+          className="button secondary"
+          style={{ marginTop: 12 }}
+          onClick={() => navigate('/console')}
+        >
+          {P('返回用户控制台')}
+        </button>
       </div>
     )
   else body = children
@@ -63,27 +79,32 @@ export function AdminLayout({
           <Shield size={14} style={{ marginRight: 6 }} />
           {P('运营控制台')}
         </div>
-        {ITEMS.map((item) => {
-          const Icon = item.icon
-          const active = path === item.path
-          return (
-            <a
-              key={item.path}
-              href={`#${item.path}`}
-              className={active ? 'is-active' : ''}
-              onClick={(e) => {
-                e.preventDefault()
-                navigate(item.path)
-              }}
-            >
-              <Icon size={16} />
-              {P(item.label)}
-            </a>
-          )
-        })}
+        {allowed
+          ? ITEMS.map((item) => {
+              const Icon = item.icon
+              const active = isActive(path, item.path)
+              return (
+                <a
+                  key={item.path}
+                  href={`#${item.path}`}
+                  className={active ? 'is-active' : ''}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    navigate(item.path)
+                  }}
+                >
+                  <Icon size={16} />
+                  {P(item.label)}
+                </a>
+              )
+            })
+          : null}
         <div className="console-aside-note">
-          <div>{P('兼容风格的 CPAMP 子集')}</div>
-          <div>{P('完整高级面板仍在 www')}</div>
+          <div>{P('www CPAMP = 完整运维')}</div>
+          <div>{P('openapi #/admin = 同风格运营子集')}</div>
+          <a href="https://www.juc114.cn/management.html" target="_blank" rel="noreferrer">
+            {P('打开 www CPAMP')} ↗
+          </a>
           <a
             href="#/console"
             onClick={(e) => {
