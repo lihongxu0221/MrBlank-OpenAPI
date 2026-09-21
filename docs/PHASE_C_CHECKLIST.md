@@ -63,3 +63,17 @@ Phase D (Aily account transplant) **not** started except minimal BFF `/v1` hook 
 - `src/pages/admin/AdminUsagePage.tsx` — table + modal entry
 - `src/pages/admin/diagnosis/DiagnosisModal.tsx` — MrBlank-styled modal
 - nginx `openapi.juc114.cn` — `/v1/` → `127.0.0.1:8787`
+
+## Live smoke (2026-09-21 Asia/Shanghai)
+
+| Check | Result |
+|-------|--------|
+| Deploy `c8b204f` + nginx `/v1` → BFF `:8787` | ✅ |
+| Service log `v1_proxy=on→http://127.0.0.1:8320` | ✅ |
+| `GET /api/admin/diagnosis/logs` no cookie | ✅ 401 |
+| `GET /api/admin/diagnosis/logs` (public) | ✅ 401 |
+| `POST /v1/chat/completions` (demo key, real model) | ✅ 200; dump `has_detail=true`, bodies present, `authorization` redacted |
+| Failed model call (unknown model) | ✅ 400 captured with req/res bodies |
+| Built UI contains「请求诊断详情」 | ✅ |
+
+How to test UI: sign in as admin → https://openapi.juc114.cn/#/admin/usage → double-click a row under「请求诊断」(touch: single click).
