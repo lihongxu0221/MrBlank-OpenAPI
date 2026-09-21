@@ -25,14 +25,23 @@ export function KeysPage({ path }: { path: string }) {
   const [name, setName] = useState('')
   const [limit, setLimit] = useState('5')
   const [revealed, setRevealed] = useState<string | null>(null)
+  const [apiBase, setApiBase] = useState('https://openapi.juc114.cn/v1')
+  const [demoMasked, setDemoMasked] = useState<string | null>(null)
   const { toast, showToast } = useToast()
 
   async function load() {
     const status = await api.get<{ quota_per_unit: number }>('/api/status', { auth: false })
     setQuotaPerUnit(status.quota_per_unit)
-    const data = await api.get<{ items: Token[]; total: number }>('/api/token/?p=1&size=10')
+    const data = await api.get<{
+      items: Token[]
+      total: number
+      api_base_url?: string
+      demo_key_masked?: string | null
+    }>('/api/token/?p=1&size=10')
     setItems(data.items || [])
     setTotal(data.total ?? data.items?.length ?? 0)
+    if (data.api_base_url) setApiBase(data.api_base_url)
+    if (data.demo_key_masked !== undefined) setDemoMasked(data.demo_key_masked)
   }
 
   useEffect(() => {
@@ -84,6 +93,30 @@ export function KeysPage({ path }: { path: string }) {
         <button type="button" className="button" onClick={() => setCreating(true)}>
           <Plus size={16} /> {P('创建密钥')}
         </button>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <div className="eyebrow">Base URL</div>
+        <div className="endpoint-row" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <code>{apiBase}</code>
+          <button
+            type="button"
+            className="button ghost compact"
+            onClick={() => {
+              navigator.clipboard?.writeText(apiBase)
+              showToast(P('已复制'))
+            }}
+          >
+            {P('复制')}
+          </button>
+        </div>
+        {demoMasked ? (
+          <p className="field-note" style={{ marginTop: 8 }}>
+            {P('共享演示密钥（只读展示）')}：<code>{demoMasked}</code>
+            {' — '}
+            {P('请创建你自己的密钥用于调用；管理密钥不会下发到浏览器。')}
+          </p>
+        ) : null}
       </div>
 
       {!items.length ? (

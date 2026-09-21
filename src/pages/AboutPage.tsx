@@ -69,7 +69,7 @@ export function AboutPage() {
             )}
           </p>
           <p style={{ color: 'var(--muted)' }}>
-            {P('本站为独立部署的 OpenAPI 控制台；模型调用走配置的 Base URL，默认指向 Darkforger welfare，并非宣称自建上游。', 'This is a self-hosted OpenAPI console; model calls use the configured Base URL (default Darkforger welfare), not a claim of hosting upstream models.')}
+            {P('本站为独立部署的 OpenAPI 控制台；模型调用经本站 /v1 进入 CPA 内核（与 www CPAMP 同源），并非宣称自建模型上游。', 'This is a self-hosted OpenAPI console; /v1 on this host reaches the CPA kernel (same as www CPAMP), not a claim of hosting upstream models.')}
           </p>
         </article>
       </div>

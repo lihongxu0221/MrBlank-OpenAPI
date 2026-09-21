@@ -11,14 +11,18 @@ export function UsagePage({ path }: { path: string }) {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [items, setItems] = useState<any[]>([])
+  const [note, setNote] = useState<string | null>(null)
 
   useEffect(() => {
     api.get<{ quota_per_unit: number }>('/api/status', { auth: false }).then((s) => setQuotaPerUnit(s.quota_per_unit))
     api
-      .get<{ items: any[]; total: number }>(`/api/log/self?p=${page}&page_size=10&type=2`)
+      .get<{ items: any[]; total: number; note?: string; limited?: boolean; source?: string }>(
+        `/api/log/self?p=${page}&page_size=10&type=2`,
+      )
       .then((d) => {
         setItems(d.items || [])
         setTotal(d.total || 0)
+        setNote(d.note || (d.source === 'cpamp' ? null : null))
       })
       .catch(() => {})
   }, [page])
@@ -35,7 +39,7 @@ export function UsagePage({ path }: { path: string }) {
             <Activity size={36} strokeWidth={1.4} />
           </div>
           <h3>{P('还没有调用记录')}</h3>
-          <p>{P('第一次模型请求后，你可以在这里查看用量。')}</p>
+          <p>{note || P('第一次模型请求后，你可以在这里查看用量。')}</p>
           <button type="button" className="text-link" onClick={() => navigate('/guide')}>
             {P('查看接入指南')} →
           </button>

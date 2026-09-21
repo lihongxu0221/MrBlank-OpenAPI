@@ -1,12 +1,13 @@
 # MrBlank OpenAPI
 
-Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn)。支持 **真实 Linux.do OAuth**、会话 Cookie，以及签到 / 兑换 / 密钥等控制台 API（服务端进程内存储）。
+Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn)。支持 **真实 Linux.do OAuth**、会话 Cookie，以及对接 **CPA 内核**（与 www CPAMP 同源）的模型 / 密钥 / 用量。
 
-> 本站是独立部署的 OpenAPI **控制台 UI**。模型调用请使用配置的 Base URL（默认 `https://welfare.darkforger.com/v1`）。**本域名默认不代理 `/v1`**，请勿把本站当成已托管的上游模型服务。
+> **Base URL**：`https://openapi.juc114.cn/v1`  
+> 本域名 nginx 将 `/v1/` 反代到本机 CPA billing shim（`127.0.0.1:8320`）→ cli-proxy-api。控制台 BFF（`:8787`）用服务端持有的 Management / Admin Key 调用 CPA / CPAMP，**不会把这些密钥下发到浏览器**。
 
 ## 站名与 Base URL（可配置）
 
-编辑 `public/site-config.json`（生产可直接改该文件后刷新，无需重新打包前端逻辑以外的文案依赖构建内默认值）：
+编辑 `public/site-config.json`（生产可直接改该文件后刷新）：
 
 ```json
 {
@@ -14,32 +15,53 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
   "brandShort": "公益站",
   "siteTagline": "为每一种好奇，打开可能",
   "siteTaglineEn": "More room for every idea",
-  "apiBaseUrl": "https://welfare.darkforger.com/v1",
+  "apiBaseUrl": "https://openapi.juc114.cn/v1",
   "footerLine": "Built for curiosity, shared with care."
 }
 ```
 
 源码默认值见 `src/config/site.ts`。
 
+## 架构
+
+| 组件 | 地址 | 用途 |
+|---|---|---|
+| 本站静态 + BFF | openapi.juc114.cn → `:8787` | Linux.do 登录、控制台 `/api` |
+| `/v1` | openapi.juc114.cn/v1 → `:8320` | 对外 OpenAI 兼容调用（CPA） |
+| CPA | `127.0.0.1:8317` | cli-proxy-api；Management Key 管 api-keys |
+| CPAMP | `127.0.0.1:18317`（www） | 用量汇总；Admin Key **仅服务端**；勿改 www UI |
+
+控制台能力：
+
+- **模型**：BFF `GET /api/token/options` ← CPA `GET /v1/models`（demo key）
+- **密钥**：登录用户创建时 BFF 调 CPA `PUT /v0/management/api-keys`，并在磁盘映射 `linux.do user → key`
+- **用量**：BFF `GET /api/log/self` ← CPAMP `GET /v0/management/usage`，按密钥 sha256 过滤
+- **签到 / 兑换 / 排行等**：仍为进程内 mock（未接 CPA 配额）
+
 ## 环境变量（服务端，勿提交 git）
 
 | 变量 | 说明 |
 |---|---|
-| `LINUXDO_CLIENT_ID` | Linux.do OAuth Client ID |
-| `LINUXDO_CLIENT_SECRET` | Client Secret |
-| `LINUXDO_REDIRECT_URI` | 回调，如 `https://openapi.juc114.cn/oauth/linuxdo` |
-| `SESSION_SECRET` | 会话签名密钥（随机长串） |
-| `PORT` | 默认 `8787` |
-| `HOST` | 默认 `127.0.0.1` |
-| `SITE_ORIGIN` | 默认 `https://openapi.juc114.cn` |
+| `LINUXDO_CLIENT_ID` / `LINUXDO_CLIENT_SECRET` | Linux.do OAuth |
+| `LINUXDO_REDIRECT_URI` | 如 `https://openapi.juc114.cn/oauth/linuxdo` |
+| `SESSION_SECRET` | 会话签名 |
+| `PORT` / `HOST` / `SITE_ORIGIN` | 默认 `8787` / `127.0.0.1` / 本站 origin |
+| `CPA_BASE_URL` | 默认 `http://127.0.0.1:8317` |
+| `CPA_BILLING_URL` | 默认 `http://127.0.0.1:8320` |
+| `CPAMP_BASE_URL` | 默认 `http://127.0.0.1:18317` |
+| `PUBLIC_API_BASE_URL` | 默认 `https://openapi.juc114.cn/v1` |
+| `CPA_DEMO_API_KEY_FILE` | demo client key 文件路径 |
+| `CPA_MANAGEMENT_KEY_FILE` | CPA management key 文件路径 |
+| `CPAMP_ADMIN_KEY_FILE` | CPAMP admin key 文件路径 |
+| `USER_KEYS_PATH` | 用户密钥映射 JSON（默认 `server/data/user-keys.json`） |
 
-示例见 `server/.env.example`。本地可在仓库根目录放 `.env`（已 gitignore）。
+也可用 `CPA_DEMO_API_KEY` / `CPA_MANAGEMENT_KEY` / `CPAMP_ADMIN_KEY` 直接注入（勿写入仓库）。示例见 `server/.env.example`。
 
 ## 本地开发
 
 ```bash
 # 终端 1：OAuth + API
-cp server/.env.example .env   # 填入真实密钥；生产 redirect 用于线上测试
+cp server/.env.example .env   # 填入真实密钥
 npm install --prefix server
 npm run server
 
@@ -48,19 +70,21 @@ npm install
 npm run dev
 ```
 
-Linux.do 登录需使用已登记的 Redirect URI。当前生产回调为 `https://openapi.juc114.cn/oauth/linuxdo`，因此 **OAuth 请在该域名上验证**；本地主要联调 API。
-
-已移除「开发者模拟登录」。
+Linux.do 登录需使用已登记的 Redirect URI。生产回调为 `https://openapi.juc114.cn/oauth/linuxdo`。
 
 ## 生产
 
 ```bash
-npm run build                 # 产出 dist/
+npm run build
 npm install --omit=dev --prefix server
-npm start                     # node server/index.js （建议 systemd）
+npm start   # 建议 systemd：mrblank-openapi.service
 ```
 
-Nginx：静态根目录指向 `dist/`，并将 `/api/`、`/oauth/` 反代到 `http://127.0.0.1:8787`（`/oauth/linuxdo` 必须先于 SPA `try_files`）。
+Nginx：
+
+- 静态根目录 → `dist/`
+- `/api/`、`/oauth/` → `http://127.0.0.1:8787`
+- `/v1/` → `http://127.0.0.1:8320`（CPA billing）
 
 ## 路由
 
@@ -68,11 +92,11 @@ Nginx：静态根目录指向 `dist/`，并将 `/api/`、`/oauth/` 反代到 `ht
 |---|---|
 | `#/` | 首页 |
 | `#/guide` | 接入指南 |
-| `#/availability` | 服务状态 |
-| `#/community` | 社区动态 |
+| `#/availability` | 服务状态（仍为示意数据） |
+| `#/community` | 社区动态（仍为示意数据） |
 | `#/about` | 关于 |
 | `#/console` 等 | 控制台（需 Linux.do 登录） |
 
 ## 声明
 
-站名、文案与布局参考了公开公益站前端；本仓库用于私人部署与学习。请勿冒充官方 Darkforger 服务。
+站名与布局参考了公开公益站前端；本仓库用于私人部署与学习。请勿冒充官方 Darkforger 服务。模型上游为本地 CPA，而非 Darkforger。

@@ -27,8 +27,8 @@ export function SiteFooter() {
           </p>
           <p className="footer-copy">
             {P(
-              '本站为 OpenAPI 控制台 UI；模型调用走配置的 Base URL（非本域名 /v1）。',
-              'This is an OpenAPI console UI; model calls use the configured Base URL (not /v1 on this host).',
+              '控制台 + /v1（本域名 nginx → CPA）。Management/Admin Key 仅存服务端。',
+              'Console + /v1 on this host (nginx → CPA). Management/Admin keys stay server-side only.',
             )}
           </p>
         </div>

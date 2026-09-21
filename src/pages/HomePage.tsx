@@ -99,8 +99,8 @@ export function HomePage() {
           <h2>{P('开发者快速接入')}</h2>
           <p>
             {P(
-              '客户端使用 OpenAI SDK 兼容写法。Base URL 指向上游公益站（本控制台不托管 /v1）：',
-              'Use an OpenAI-compatible client. Base URL points at the upstream welfare API (this console does not host /v1):',
+              '客户端使用 OpenAI SDK 兼容写法。Base URL 为本站 /v1（nginx → CPA billing shim）：',
+              'Use an OpenAI-compatible client. Base URL is this host /v1 (nginx → CPA billing shim):',
             )}
           </p>
         </div>
@@ -130,8 +130,8 @@ export function HomePage() {
             [
               P('这里的 OpenAI 接口是真的吗？'),
               P(
-                '本站提供控制台与 Linux.do 登录；模型请求请使用配置的 Base URL（默认指向 Darkforger welfare）。本域名默认不代理 /v1。',
-                'This site provides the console and Linux.do login; send model requests to the configured Base URL (default: Darkforger welfare). This host does not proxy /v1 by default.',
+                '本站提供控制台与 Linux.do 登录；模型请求使用本站 Base URL（https://openapi.juc114.cn/v1 → CPA）。',
+                'This site provides the console and Linux.do login; model requests use this host Base URL (https://openapi.juc114.cn/v1 → CPA).',
               ),
             ],
           ].map(([q, a]) => (

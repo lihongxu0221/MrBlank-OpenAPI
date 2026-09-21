@@ -3,7 +3,7 @@
   "brandShort": "公益站",
   "siteTagline": "为每一种好奇，打开可能",
   "siteTaglineEn": "More room for every idea",
-  "siteDescription": "MrBlank OpenAPI — Linux.do 登录的公益站前端。快速接入 Base URL 指向 Darkforger welfare。",
-  "apiBaseUrl": "https://welfare.darkforger.com/v1",
+  "siteDescription": "MrBlank OpenAPI — Linux.do 登录控制台。模型 Base URL：https://openapi.juc114.cn/v1（本站 → CPA）。",
+  "apiBaseUrl": "https://openapi.juc114.cn/v1",
   "footerLine": "Built for curiosity, shared with care."
 }

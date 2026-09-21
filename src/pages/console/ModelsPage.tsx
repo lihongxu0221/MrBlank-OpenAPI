@@ -55,7 +55,7 @@ export function ModelsPage({ path }: { path: string }) {
 
       <div className="panel models-panel">
         <div className="info-banner">
-          {P('社区额度计量标准：文本为每百万 token，图片为每张，视频为每秒。实际状态以服务状态页为准。')}{' '}
+          {P('模型列表来自 CPA /v1/models（经本站服务端）。价格字段若为 0 表示暂未接入计费展示。')}{' '}
           <button type="button" className="text-link inline" onClick={() => navigate('/channels')}>
             {P('服务状态')}
           </button>

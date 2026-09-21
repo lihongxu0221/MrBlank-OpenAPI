@@ -4,6 +4,17 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
 import cookieParser from 'cookie-parser'
+import {
+  loadCpaConfig,
+  fetchCpaModels,
+  addCpaApiKey,
+  removeCpaApiKey,
+  fetchCpampUsage,
+  flattenUsageForHashes,
+  hashApiKey,
+  maskKey,
+} from './cpa.js'
+import { createUserKeyStore } from './userKeys.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -30,6 +41,11 @@ function loadEnvFile(filePath) {
 
 loadEnvFile(path.join(rootDir, '.env'))
 loadEnvFile(path.join(__dirname, '.env'))
+
+const cpaCfg = loadCpaConfig(process.env)
+const userKeyStore = createUserKeyStore(
+  process.env.USER_KEYS_PATH || path.join(__dirname, 'data', 'user-keys.json'),
+)
 
 const CLIENT_ID = process.env.LINUXDO_CLIENT_ID || ''
 const CLIENT_SECRET = process.env.LINUXDO_CLIENT_SECRET || ''
@@ -270,8 +286,8 @@ function publicHandlers() {
           {
             id: 'n2',
             level: 'info',
-            title: '欢迎来到 Darkforger 公益站',
-            body: '从 Grok 起步，逐步拓展更多模型。请使用 Linux.do 登录。',
+            title: '欢迎来到 MrBlank OpenAPI',
+            body: '模型调用 Base URL 为 https://openapi.juc114.cn/v1（本站 nginx → CPA billing）。请使用 Linux.do 登录。',
             published_at: '2026-09-10T09:00:00+08:00',
             ack_identity: 'n2-2026-09-10',
           },
@@ -543,109 +559,105 @@ app.get('/api/user/session', requireAuth, (req, res) => {
 app.get(['/api/token/', '/api/token'], requireAuth, (req, res) => {
   const p = Number(req.query.p || 1)
   const size = Number(req.query.size || 10)
-  const start = (p - 1) * size
+  const all = userKeyStore.list(req.auth.user.id)
+  const startIdx = (p - 1) * size
+  const items = all.slice(startIdx, startIdx + size).map(({ fullKey: _, ...rest }) => rest)
   res.json(
     ok({
-      items: req.store.tokens.slice(start, start + size).map(({ fullKey: _, ...rest }) => rest),
-      total: req.store.tokens.length,
+      items,
+      total: all.length,
+      api_base_url: cpaCfg.publicApiBaseUrl,
+      demo_key_masked: cpaCfg.demoKey ? maskKey(cpaCfg.demoKey) : null,
+      note: '密钥由本站服务端在 CPA 注册；Management/Admin Key 不会下发到浏览器。',
     }),
   )
 })
 
-app.post(['/api/token/', '/api/token'], requireAuth, (req, res) => {
-  const body = req.body || {}
-  const id = req.store.nextId++
-  const fullKey = `sk-welfare-${id}-${randomToken(4)}`
-  const item = {
-    id,
-    name: String(body.name || 'key'),
-    key: `${fullKey.slice(0, 8)}****${fullKey.slice(-4)}`,
-    fullKey,
-    status: 1,
-    unlimited_quota: !!body.unlimited_quota,
-    remain_quota: body.remain_quota ?? 5 * Q,
-    expired_time: body.expired_time ?? -1,
-    model_limits: body.model_limits || '',
-    access_group_id: 1,
-    group: body.group || 'default',
+app.post(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置，无法创建密钥'))
+      return
+    }
+    const body = req.body || {}
+    const fullKey = `sk-mrblank-${req.auth.user.id}-${randomToken(12)}`
+    await addCpaApiKey(cpaCfg, fullKey)
+    const item = userKeyStore.create(req.auth.user.id, {
+      name: String(body.name || 'key'),
+      key: maskKey(fullKey),
+      fullKey,
+      status: 1,
+      unlimited_quota: body.unlimited_quota !== false,
+      remain_quota: body.remain_quota ?? 0,
+      expired_time: body.expired_time ?? -1,
+      model_limits: body.model_limits || '',
+      access_group_id: 1,
+      group: body.group || 'default',
+      created_at: new Date().toISOString(),
+    })
+    const { fullKey: __, ...rest } = item
+    res.json(ok(rest))
+  } catch (err) {
+    console.error('[cpa] create key failed', err?.message || err)
+    res.status(502).json(fail(err?.message || '创建 CPA 密钥失败'))
   }
-  req.store.tokens.unshift(item)
-  const { fullKey: __, ...rest } = item
-  res.json(ok(rest))
 })
 
-app.put(['/api/token/', '/api/token'], requireAuth, (req, res) => {
-  const body = req.body || {}
-  const t = req.store.tokens.find((x) => x.id === Number(body.id))
-  if (!t) {
-    res.json(fail('密钥不存在'))
-    return
+app.put(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const t = userKeyStore.get(req.auth.user.id, body.id)
+    if (!t) {
+      res.json(fail('密钥不存在'))
+      return
+    }
+    if (String(req.query.status_only) === 'true') {
+      const nextStatus = Number(body.status)
+      if (nextStatus === 2 && t.status === 1 && t.fullKey) {
+        await removeCpaApiKey(cpaCfg, t.fullKey)
+      } else if (nextStatus === 1 && t.status !== 1 && t.fullKey) {
+        await addCpaApiKey(cpaCfg, t.fullKey)
+      }
+      const updated = userKeyStore.update(req.auth.user.id, t.id, { status: nextStatus })
+      const { fullKey: _, ...rest } = updated
+      res.json(ok(rest))
+      return
+    }
+    const updated = userKeyStore.update(req.auth.user.id, t.id, {
+      name: body.name ?? t.name,
+      remain_quota: body.remain_quota ?? t.remain_quota,
+      unlimited_quota: body.unlimited_quota ?? t.unlimited_quota,
+      expired_time: body.expired_time ?? t.expired_time,
+      model_limits: body.model_limits ?? t.model_limits,
+      group: body.group ?? t.group,
+    })
+    const { fullKey: __, ...rest } = updated
+    res.json(ok(rest))
+  } catch (err) {
+    console.error('[cpa] update key failed', err?.message || err)
+    res.status(502).json(fail(err?.message || '更新密钥失败'))
   }
-  if (String(req.query.status_only) === 'true') {
-    t.status = body.status
-    res.json(ok(t))
-    return
-  }
-  Object.assign(t, body)
-  res.json(ok(t))
 })
 
-app.get('/api/token/options', requireAuth, (_req, res) => {
-  res.json(
-    ok({
-      groups: [{ id: 1, name: 'default', is_default: true, ratio: 1 }],
-      model_details: [
-        { id: 'grok-4.5', name: 'Grok 4.5', provider: 'xAI', kind: 'text', text_price: 3, text_out_price: 15 },
-        { id: 'grok-4', name: 'Grok 4.0', provider: 'xAI', kind: 'text', text_price: 3, text_out_price: 15 },
-        { id: 'grok-chat-auto', name: 'Grok chat auto', provider: 'xAI', kind: 'text', text_price: 1, text_out_price: 3 },
-        { id: 'grok-chat-expert', name: 'Grok chat expert', provider: 'xAI', kind: 'text', text_price: 3, text_out_price: 15 },
-        { id: 'grok-chat-fast', name: 'Grok chat fast', provider: 'xAI', kind: 'text', text_price: 0.2, text_out_price: 0.5 },
-        { id: 'grok-heavy', name: 'Grok Heavy', provider: 'xAI', kind: 'text', text_price: 5, text_out_price: 25 },
-        {
-          id: 'grok-composer-2.5-fast',
-          name: 'Grok composer 2.5 fast',
-          provider: 'xAI',
-          kind: 'text',
-          text_price: 0.2,
-          text_out_price: 0.5,
-        },
-        { id: 'grok-imagine-image', name: 'Grok Imagine - Image', provider: 'xAI', kind: 'image', image_price: 0.03 },
-        {
-          id: 'grok-imagine-image-2.0',
-          name: 'Grok Imagine - Image 2.0',
-          provider: 'xAI',
-          kind: 'image',
-          image_price: 0.05,
-        },
-        {
-          id: 'grok-imagine-image-edit',
-          name: 'Grok Imagine - Image Edit',
-          provider: 'xAI',
-          kind: 'image',
-          image_price: 0.04,
-        },
-        {
-          id: 'grok-imagine-image-lite',
-          name: 'Grok Imagine - Image Lite',
-          provider: 'xAI',
-          kind: 'image',
-          image_price: 0.02,
-        },
-        { id: 'grok-imagine-video', name: 'Grok Imagine - Video', provider: 'xAI', kind: 'video', video_price: 0.03 },
-        {
-          id: 'grok-imagine-video-1.5',
-          name: 'Grok Imagine - Video 1.5',
-          provider: 'xAI',
-          kind: 'video',
-          video_price: 0.05,
-        },
-      ],
-    }),
-  )
+app.get('/api/token/options', requireAuth, async (_req, res) => {
+  try {
+    const model_details = await fetchCpaModels(cpaCfg)
+    res.json(
+      ok({
+        groups: [{ id: 1, name: 'default', is_default: true, ratio: 1 }],
+        model_details,
+        api_base_url: cpaCfg.publicApiBaseUrl,
+        source: 'cpa',
+      }),
+    )
+  } catch (err) {
+    console.error('[cpa] models failed', err?.message || err)
+    res.status(502).json(fail(err?.message || '无法从 CPA 拉取模型列表'))
+  }
 })
 
 app.post('/api/token/:id/key', requireAuth, (req, res) => {
-  const t = req.store.tokens.find((x) => x.id === Number(req.params.id))
+  const t = userKeyStore.get(req.auth.user.id, req.params.id)
   if (!t) {
     res.json(fail('密钥不存在'))
     return
@@ -653,21 +665,72 @@ app.post('/api/token/:id/key', requireAuth, (req, res) => {
   res.json(ok(t.fullKey))
 })
 
-app.delete('/api/token/:id', requireAuth, (req, res) => {
-  const i = req.store.tokens.findIndex((x) => x.id === Number(req.params.id))
-  if (i < 0) {
-    res.json(fail('密钥不存在'))
-    return
+app.delete('/api/token/:id', requireAuth, async (req, res) => {
+  try {
+    const t = userKeyStore.get(req.auth.user.id, req.params.id)
+    if (!t) {
+      res.json(fail('密钥不存在'))
+      return
+    }
+    if (t.fullKey && cpaCfg.managementKey) {
+      await removeCpaApiKey(cpaCfg, t.fullKey)
+    }
+    userKeyStore.remove(req.auth.user.id, req.params.id)
+    res.json(ok(true))
+  } catch (err) {
+    console.error('[cpa] delete key failed', err?.message || err)
+    res.status(502).json(fail(err?.message || '删除 CPA 密钥失败'))
   }
-  req.store.tokens.splice(i, 1)
-  res.json(ok(true))
 })
 
-app.get('/api/log/self', requireAuth, (req, res) => {
+app.get('/api/cpa/info', requireAuth, (_req, res) => {
+  res.json(
+    ok({
+      api_base_url: cpaCfg.publicApiBaseUrl,
+      demo_key_masked: cpaCfg.demoKey ? maskKey(cpaCfg.demoKey) : null,
+      models_source: 'cpa:/v1/models',
+      keys_source: 'cpa:/v0/management/api-keys',
+      usage_source: cpaCfg.adminKey ? 'cpamp:/v0/management/usage' : null,
+    }),
+  )
+})
+
+app.get('/api/log/self', requireAuth, async (req, res) => {
   const p = Number(req.query.p || 1)
   const page_size = Number(req.query.page_size || 10)
-  const start = (p - 1) * page_size
-  res.json(ok({ items: req.store.logs.slice(start, start + page_size), total: req.store.logs.length }))
+  const tokens = userKeyStore.list(req.auth.user.id)
+  const hashToName = new Map()
+  const hashSet = new Set()
+  for (const t of tokens) {
+    if (!t.fullKey) continue
+    const h = hashApiKey(t.fullKey)
+    hashSet.add(h)
+    hashToName.set(h, t.name || t.key)
+  }
+
+  if (!cpaCfg.adminKey) {
+    res.json(ok({ items: [], total: 0, limited: true, note: 'CPAMP Admin Key 未配置；用量暂不可用。' }))
+    return
+  }
+  if (!hashSet.size) {
+    res.json(
+      ok({
+        items: [],
+        total: 0,
+        note: '创建并使用 API 密钥后，将从 CPAMP 汇总与你密钥相关的调用。',
+      }),
+    )
+    return
+  }
+  try {
+    const usage = await fetchCpampUsage(cpaCfg)
+    const named = flattenUsageForHashes(usage, hashSet, { limit: 500, nameMap: hashToName })
+    const startIdx = (p - 1) * page_size
+    res.json(ok({ items: named.slice(startIdx, startIdx + page_size), total: named.length, source: 'cpamp' }))
+  } catch (err) {
+    console.error('[cpamp] usage failed', err?.message || err)
+    res.json(ok({ items: [], total: 0, limited: true, note: `用量查询受限：${err?.message || 'CPAMP 不可用'}` }))
+  }
 })
 
 app.use((req, res) => {
@@ -682,4 +745,9 @@ app.listen(PORT, HOST, () => {
   console.log(`[server] listening on http://${HOST}:${PORT}`)
   console.log(`[server] redirect_uri=${REDIRECT_URI}`)
   console.log(`[server] client_id=${CLIENT_ID}`)
+  console.log(`[server] public_api_base=${cpaCfg.publicApiBaseUrl}`)
+  console.log(`[server] cpa=${cpaCfg.cpaBaseUrl} billing=${cpaCfg.billingBaseUrl} cpamp=${cpaCfg.cpampBaseUrl}`)
+  console.log(
+    `[server] secrets demo=${cpaCfg.demoKey ? 'yes' : 'no'} mgmt=${cpaCfg.managementKey ? 'yes' : 'no'} admin=${cpaCfg.adminKey ? 'yes' : 'no'}`,
+  )
 })

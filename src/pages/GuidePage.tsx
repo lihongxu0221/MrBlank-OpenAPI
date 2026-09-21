@@ -37,8 +37,8 @@ export function GuidePage() {
       <h1>{P('三步，把灵感接上线')}</h1>
       <p className="page-lead">
         {P(
-          '使用 OpenAI 兼容客户端连接上游公益 API。本控制台负责登录与密钥管理，默认不在本域名提供 /v1 代理。',
-          'Use an OpenAI-compatible client against the upstream welfare API. This console handles login and keys; it does not host /v1 on this domain by default.',
+          '使用 OpenAI 兼容客户端连接本站 /v1（nginx 反代至 CPA）。控制台负责 Linux.do 登录与密钥管理。',
+          'Use an OpenAI-compatible client against this host /v1 (nginx → CPA). The console handles Linux.do login and API keys.',
         )}
       </p>
 
