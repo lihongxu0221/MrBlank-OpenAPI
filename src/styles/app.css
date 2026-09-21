@@ -726,16 +726,34 @@ main#main-content {
   height: 1px;
   background: var(--line);
 }
-.guest-aily-form {
+.guest-login-form,
+.guest-oauth {
   text-align: left;
   max-width: 22rem;
   margin: 0 auto;
+  width: 100%;
 }
-.guest-aily-form .field {
+.guest-login-form .field {
   margin-bottom: 12px;
 }
-.guest-aily-form .button {
+.guest-login-btn {
   margin-top: 4px;
+  min-height: 46px;
+  border: 1px solid var(--line) !important;
+  background: var(--soft) !important;
+  color: var(--ink) !important;
+  box-shadow: none;
+}
+.guest-login-btn:hover:not(:disabled) {
+  filter: none;
+  background: color-mix(in srgb, var(--soft) 70%, var(--surface)) !important;
+}
+.guest-oauth .field-note {
+  text-align: center;
+}
+.guest-error {
+  color: var(--error);
+  margin-top: 14px;
 }
 .dev-login {
   margin-top: 12px;
