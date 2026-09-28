@@ -891,8 +891,72 @@ app.use(
     governance: {
       async enforce({ apiKey, model, isModelsList, isConsuming }) {
         // Unmapped keys (CPA demo / external) bypass site group rules.
-        const owner = apiKey ? userKeyStore.findByApiKey(apiKey) : null
+        // Site-issued sk- keys: enforce aily-parity status / quota / rate / concurrency.
+        let owner = null
+        let releaseTokenConcurrency = () => {}
+        if (apiKey) {
+          const validated = userKeyStore.validateSiteKey(apiKey)
+          if (validated.error) {
+            // Unknown key → fall through as unmapped (CPA demo etc.)
+            if (validated.error === '无效的 API Key') {
+              owner = null
+            } else {
+              return {
+                allow: false,
+                status: validated.code || 401,
+                code: validated.code === 429 ? 'key_quota_exhausted' : 'key_disabled',
+                headers: { 'x-mrblank-governance': 'site_key' },
+                body: {
+                  error: {
+                    message: validated.error,
+                    type: validated.code === 429 ? 'insufficient_quota' : 'invalid_request_error',
+                    code: validated.code === 429 ? 'key_quota_exhausted' : 'key_disabled',
+                  },
+                },
+              }
+            }
+          } else {
+            owner = validated.owner
+          }
+        }
         if (!owner?.userId) return { allow: true }
+
+        if (isConsuming && owner.token) {
+          const rateHit = userKeyStore.checkRateLimit(owner.token)
+          if (rateHit) {
+            return {
+              allow: false,
+              status: rateHit.code || 429,
+              code: 'key_rate_limit',
+              headers: { 'x-mrblank-governance': 'key_rate_limit', 'retry-after': '60' },
+              body: {
+                error: {
+                  message: rateHit.error,
+                  type: 'rate_limit_exceeded',
+                  code: 'key_rate_limit',
+                },
+              },
+            }
+          }
+          const release = userKeyStore.beginConcurrency(owner.token)
+          if (!release) {
+            return {
+              allow: false,
+              status: 429,
+              code: 'key_concurrency',
+              headers: { 'x-mrblank-governance': 'key_concurrency', 'retry-after': '5' },
+              body: {
+                error: {
+                  message: '该 API Key 并发数已达上限',
+                  type: 'rate_limit_exceeded',
+                  code: 'key_concurrency',
+                },
+              },
+            }
+          }
+          releaseTokenConcurrency = release
+        }
+
         const userId = owner.userId
         const metrics = metricsForUserId(userId)
         const groupInfo = groupStore.resolveUserGroup(userId, metrics)
@@ -909,6 +973,7 @@ app.use(
               siteBal = 0
             }
             if (siteBal <= 0) {
+              try { releaseTokenConcurrency() } catch { /* ignore */ }
               return {
                 allow: false,
                 status: 429,
@@ -939,6 +1004,7 @@ app.use(
           // When group has a model allowlist, require an explicit model on consuming calls
           const allowlist = groupInfo.group?.model_ids || []
           if (allowlist.length && !String(model || '').trim()) {
+            try { releaseTokenConcurrency() } catch { /* ignore */ }
             return {
               allow: false,
               status: 403,
@@ -963,6 +1029,7 @@ app.use(
           if (model) {
             const modelCheck = groupStore.assertModelAllowed(groupInfo.group, model)
             if (!modelCheck.ok) {
+              try { releaseTokenConcurrency() } catch { /* ignore */ }
               return {
                 allow: false,
                 status: 403,
@@ -986,12 +1053,35 @@ app.use(
             }
           }
         }
-        return { allow: true, userId, groupInfo, useSiteCredits }
+        return {
+          allow: true,
+          userId,
+          groupInfo,
+          useSiteCredits,
+          siteTokenId: owner.token?.id,
+          releaseTokenConcurrency,
+        }
       },
       filterModelsBody(ctx, bodyText) {
         return groupStore.filterModelsResponseBody(bodyText, ctx.groupInfo?.group)
       },
-      onComplete({ userId, status, usage, isConsuming, useSiteCredits, apiKey, requestedModel, endpoint }) {
+      onComplete({
+        userId,
+        status,
+        usage,
+        isConsuming,
+        useSiteCredits,
+        apiKey,
+        requestedModel,
+        endpoint,
+        siteTokenId,
+        releaseTokenConcurrency,
+      }) {
+        try {
+          if (typeof releaseTokenConcurrency === 'function') releaseTokenConcurrency()
+        } catch {
+          /* ignore */
+        }
         const okStatus = status >= 200 && status < 300
         // Always record site-scoped usage for community leaderboard / admin usage (incl. failures).
         try {
@@ -1017,13 +1107,33 @@ app.use(
           console.error('[siteUsage] recordEvent failed', e?.message || e)
         }
         if (!userId || !isConsuming || !okStatus) return
-        const tokens =
-          (Number(usage?.prompt_tokens) || 0) + (Number(usage?.completion_tokens) || 0)
+        const promptTok = Number(usage?.prompt_tokens) || 0
+        const completionTok = Number(usage?.completion_tokens) || 0
+        const tokens = promptTok + completionTok
         const quota = Math.max(1, tokens) // at least 1 raw unit per successful call
+        // USD amount for key rate windows / used_amount (price book when available)
+        let amountUsd = 0
+        try {
+          const prices = modelPrices.priceMap()
+          const model = String(requestedModel || usage?.model || '').trim()
+          const price = prices.get(model) || null
+          amountUsd = modelPrices.costForTokens(price, promptTok, completionTok)
+          if (!amountUsd && tokens > 0) amountUsd = tokens / Q // fallback: 500k tokens ≈ $1
+        } catch {
+          amountUsd = tokens > 0 ? tokens / Q : 0
+        }
         try {
           groupStore.recordUsage(userId, { quota, requests: 1 })
         } catch (e) {
           console.error('[groups] recordUsage failed', e?.message || e)
+        }
+        // Site-issued key: consume remain_quota + record rate-window spend (aily parity)
+        if (siteTokenId) {
+          try {
+            userKeyStore.consumeQuota(userId, siteTokenId, quota, amountUsd)
+          } catch (e) {
+            console.error('[userKeys] consumeQuota failed', e?.message || e)
+          }
         }
         // Phase F: only deduct site credits when this call used overflow capacity
         if (useSiteCredits) {
@@ -1375,17 +1485,19 @@ app.get('/api/user/session', requireAuth, (req, res) => {
 
 app.get(['/api/token/', '/api/token'], requireAuth, (req, res) => {
   const p = Number(req.query.p || 1)
-  const size = Number(req.query.size || 10)
-  const all = userKeyStore.list(req.auth.user.id)
-  const startIdx = (p - 1) * size
-  const items = all.slice(startIdx, startIdx + size).map(({ fullKey: _, ...rest }) => rest)
+  const size = Number(req.query.size || req.query.page_size || 100)
+  const all = userKeyStore.listPublic(req.auth.user.id)
+  const startIdx = Math.max(0, (p - 1) * size)
+  const items = all.slice(startIdx, startIdx + size)
   res.json(
     ok({
       items,
       total: all.length,
+      page: p,
+      page_size: size,
       api_base_url: cpaCfg.publicApiBaseUrl,
       demo_key_masked: cpaCfg.demoKey ? maskKey(cpaCfg.demoKey) : null,
-      note: '密钥由本站服务端在 CPA 注册；Management/Admin Key 不会下发到浏览器。',
+      note: '密钥由本站服务端在 CPA 注册；Management/Admin Key 不会下发到浏览器。完整密钥仅创建时可见。',
     }),
   )
 })
@@ -1410,21 +1522,26 @@ app.post(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
     await addCpaApiKey(cpaCfg, fullKey)
     const modelLimits =
       body.model_limits || groupStore.modelLimitsString(groupInfo.group) || ''
+    const unlimited = body.unlimited_quota !== false
     const item = userKeyStore.create(req.auth.user.id, {
       name: String(body.name || 'key'),
-      key: maskKey(fullKey),
       fullKey,
-      status: 1,
-      unlimited_quota: body.unlimited_quota !== false,
-      remain_quota: body.remain_quota ?? 0,
-      expired_time: body.expired_time ?? -1,
+      status: body.enabled === false || body.status === 2 ? 2 : 1,
+      unlimited_quota: unlimited,
+      remain_quota: unlimited ? 0 : Math.max(0, Number(body.remain_quota) || 0),
+      expired_time: body.expired_time == null || body.expired_time === '' ? -1 : Number(body.expired_time),
+      max_concurrency: Math.max(0, Number(body.max_concurrency) || 0),
+      rate_limit_enabled: body.rate_limit_enabled === true,
+      rate_limit_5h: body.rate_limit_5h,
+      rate_limit_1d: body.rate_limit_1d,
+      rate_limit_7d: body.rate_limit_7d,
+      rate_limit_30d: body.rate_limit_30d,
       model_limits: modelLimits,
       access_group_id: 1,
       group: groupInfo.group?.id || body.group || 'default',
-      created_at: new Date().toISOString(),
     })
-    const { fullKey: __, ...rest } = item
-    res.json(ok(rest))
+    // Reveal full key once on create (aily parity)
+    res.json(ok(userKeyStore.getPublic(req.auth.user.id, item.id, true)))
   } catch (err) {
     console.error('[cpa] create key failed', err?.message || err)
     res.status(502).json(fail(err?.message || '创建 CPA 密钥失败'))
@@ -1446,9 +1563,8 @@ app.put(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
       } else if (nextStatus === 1 && t.status !== 1 && t.fullKey) {
         await addCpaApiKey(cpaCfg, t.fullKey)
       }
-      const updated = userKeyStore.update(req.auth.user.id, t.id, { status: nextStatus })
-      const { fullKey: _, ...rest } = updated
-      res.json(ok(rest))
+      const updated = userKeyStore.update(req.auth.user.id, t.id, { status: nextStatus }, true)
+      res.json(ok(userKeyStore.getPublic(req.auth.user.id, updated.id, false)))
       return
     }
     const updated = userKeyStore.update(req.auth.user.id, t.id, {
@@ -1456,11 +1572,19 @@ app.put(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
       remain_quota: body.remain_quota ?? t.remain_quota,
       unlimited_quota: body.unlimited_quota ?? t.unlimited_quota,
       expired_time: body.expired_time ?? t.expired_time,
+      max_concurrency: body.max_concurrency ?? t.max_concurrency,
+      rate_limit_enabled: body.rate_limit_enabled ?? t.rate_limit_enabled,
+      rate_limit_5h: body.rate_limit_5h ?? t.rate_limit_5h,
+      rate_limit_1d: body.rate_limit_1d ?? t.rate_limit_1d,
+      rate_limit_7d: body.rate_limit_7d ?? t.rate_limit_7d,
+      rate_limit_30d: body.rate_limit_30d ?? t.rate_limit_30d,
+      reset_rate_limit_usage: body.reset_rate_limit_usage,
+      status: body.status,
+      enabled: body.enabled,
       model_limits: body.model_limits ?? t.model_limits,
       group: body.group ?? t.group,
     })
-    const { fullKey: __, ...rest } = updated
-    res.json(ok(rest))
+    res.json(ok(userKeyStore.getPublic(req.auth.user.id, updated.id, false)))
   } catch (err) {
     console.error('[cpa] update key failed', err?.message || err)
     res.status(502).json(fail(err?.message || '更新密钥失败'))
@@ -1566,12 +1690,69 @@ app.get('/api/token/options', requireAuth, async (req, res) => {
   }
 })
 
+app.get('/api/token/:id', requireAuth, (req, res) => {
+  const pub = userKeyStore.getPublic(req.auth.user.id, req.params.id, false)
+  if (!pub) {
+    res.json(fail('密钥不存在'))
+    return
+  }
+  res.json(ok(pub))
+})
+
+app.put('/api/token/:id', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const t = userKeyStore.get(req.auth.user.id, req.params.id)
+    if (!t) {
+      res.json(fail('密钥不存在'))
+      return
+    }
+    const statusOnly = String(req.query.status_only) === 'true'
+    if (statusOnly) {
+      const nextStatus = Number(body.status)
+      if (nextStatus === 2 && t.status === 1 && t.fullKey) {
+        await removeCpaApiKey(cpaCfg, t.fullKey)
+      } else if (nextStatus === 1 && t.status !== 1 && t.fullKey) {
+        await addCpaApiKey(cpaCfg, t.fullKey)
+      }
+    } else if (body.status === 2 || body.enabled === false) {
+      if (t.status === 1 && t.fullKey) await removeCpaApiKey(cpaCfg, t.fullKey)
+    } else if (body.status === 1 || body.enabled === true) {
+      if (t.status !== 1 && t.fullKey) await addCpaApiKey(cpaCfg, t.fullKey)
+    }
+    const updated = userKeyStore.update(req.auth.user.id, t.id, body, statusOnly)
+    if (!updated) {
+      res.json(fail('密钥不存在'))
+      return
+    }
+    res.json(ok(userKeyStore.getPublic(req.auth.user.id, updated.id, false)))
+  } catch (err) {
+    console.error('[cpa] update key/:id failed', err?.message || err)
+    const msg = err?.message || '更新密钥失败'
+    if (/无法启用|已过期|用尽/.test(msg)) {
+      res.json(fail(msg))
+      return
+    }
+    res.status(502).json(fail(msg))
+  }
+})
+
+app.get('/api/token/:id/key', requireAuth, (req, res) => {
+  const t = userKeyStore.get(req.auth.user.id, req.params.id)
+  if (!t) {
+    res.json(fail('密钥不存在'))
+    return
+  }
+  res.json(ok({ key: t.fullKey }))
+})
+
 app.post('/api/token/:id/key', requireAuth, (req, res) => {
   const t = userKeyStore.get(req.auth.user.id, req.params.id)
   if (!t) {
     res.json(fail('密钥不存在'))
     return
   }
+  // Legacy: return raw string; also support { key } shape for aily UI
   res.json(ok(t.fullKey))
 })
 

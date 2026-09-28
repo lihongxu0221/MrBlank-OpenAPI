@@ -3141,3 +3141,135 @@ table.data tr:last-child td {
 /* Drawer body scroll lock helper (CPAMP Drawer-module body) */
 body.cred-drawer-open { overflow: hidden; }
 html.cred-drawer-open { overflow: hidden; }
+
+/* aily-parity API key rate bars (openapi theme) */
+.keys-created {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ok, #16a34a) 12%, var(--panel));
+}
+.keys-created code {
+  word-break: break-all;
+}
+.rate-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.rate-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rate-fields input {
+  width: 100%;
+  margin: 0;
+}
+.rate-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 168px;
+}
+.rate-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.rate-reset {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  padding: 0;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.rate-reset:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.rate-reset-btn {
+  margin: 8px 0 4px;
+}
+.rate-bar {
+  display: grid;
+  grid-template-columns: 28px 1fr 40px;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+}
+.rate-lab {
+  color: var(--muted);
+}
+.rate-track {
+  height: 6px;
+  background: var(--line);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.rate-track i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent, var(--ink));
+  border-radius: 99px;
+}
+.rate-track i.hot {
+  background: var(--warn, #d97706);
+}
+.rate-track i.over {
+  background: var(--err, #dc2626);
+}
+.rate-pct {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+label.chk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  font-size: 14px;
+  color: var(--ink);
+  cursor: pointer;
+}
+label.chk input {
+  width: auto;
+  margin: 0;
+}
+.status.ok {
+  color: var(--ok, #16a34a);
+}
+.status.err {
+  color: var(--err, #dc2626);
+  margin-top: 8px;
+}
+td.num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.muted {
+  color: var(--muted);
+}
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--panel);
+}
