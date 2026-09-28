@@ -454,7 +454,6 @@ export function CredListTab(props: CredListTabProps) {
               <span>{P('可用状态')}</span>
               <span>{P('最近请求')}</span>
               <span>{P('历史用量')}</span>
-              <span>{P('额度')}</span>
               <span>{P('操作')}</span>
             </div>
             {pageItems.map((a) => (
