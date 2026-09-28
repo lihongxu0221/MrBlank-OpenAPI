@@ -91,7 +91,6 @@ export const ADMIN_ROUTES = [
   '/admin/account-actions',
   '/admin/codex-inspection',
   '/admin/model-prices',
-  '/admin/api-key-aliases',
   '/admin/keys',
   '/admin/usage',
   '/admin/connection',

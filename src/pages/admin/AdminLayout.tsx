@@ -19,7 +19,6 @@ import {
   LineChart,
   AlertTriangle,
   DollarSign,
-  Tags,
   ScanSearch,
 } from 'lucide-react'
 import { P } from '../../i18n'
@@ -37,7 +36,6 @@ const ITEMS = [
   { path: '/admin/account-actions', label: '认证异常', icon: AlertTriangle },
   { path: '/admin/codex-inspection', label: 'Codex 巡检', icon: ScanSearch },
   { path: '/admin/model-prices', label: '模型价格', icon: DollarSign },
-  { path: '/admin/api-key-aliases', label: '密钥别名', icon: Tags },
   { path: '/admin/keys', label: 'CPA 密钥', icon: KeyRound },
   { path: '/admin/usage', label: '用量监控', icon: Activity },
   { path: '/admin/connection', label: '连接状态', icon: Cable },
