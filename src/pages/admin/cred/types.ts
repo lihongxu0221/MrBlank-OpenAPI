@@ -19,6 +19,8 @@ export type QuotaWindow = {
   risk?: string | null
   used_cost?: number | null
   used_tokens?: number | null
+  forecast_cost?: number | null
+  forecast_tokens?: number | null
 }
 
 export type Account = {

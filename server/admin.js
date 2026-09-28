@@ -399,6 +399,10 @@ export function extractAuthFileQuota(f) {
           limit,
           resets_at: w.resets_at != null ? String(w.resets_at) : w.reset_at != null ? String(w.reset_at) : null,
           risk,
+          used_cost: numOrNull(w.used_cost ?? w.usedCost ?? w.current_cost ?? w.currentCost),
+          used_tokens: numOrNull(w.used_tokens ?? w.usedTokens ?? w.current_tokens ?? w.currentTokens),
+          forecast_cost: numOrNull(w.forecast_cost ?? w.forecastCost),
+          forecast_tokens: numOrNull(w.forecast_tokens ?? w.forecastTokens),
         }
       })
       .filter(Boolean)

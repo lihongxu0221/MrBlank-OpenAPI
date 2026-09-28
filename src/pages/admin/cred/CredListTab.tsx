@@ -601,7 +601,12 @@ function CredRow({
           <span>{String(a.provider || '?').slice(0, 2).toUpperCase()}</span>
         </div>
         <div className="cred-identity-text">
-          <div className="cred-identity-title">{email}</div>
+          <div className="cred-identity-title-row">
+            <div className="cred-identity-title">{email}</div>
+            {formatPlanType(a.plan_type || a.quota?.plan_type) ? (
+              <span className="cred-plan-badge">{formatPlanType(a.plan_type || a.quota?.plan_type)}</span>
+            ) : null}
+          </div>
           <div className="cred-identity-file">
             <code>{file}</code>
           </div>
@@ -609,11 +614,7 @@ function CredRow({
       </div>
 
       <div className="cred-cell-plan">
-        {formatPlanType(a.plan_type || a.quota?.plan_type) ? (
-          <span className="cred-plan-badge">{formatPlanType(a.plan_type || a.quota?.plan_type)}</span>
-        ) : (
-          <div className="cred-plan-name">—</div>
-        )}
+        <div className="cred-plan-name">{formatPlanType(a.plan_type || a.quota?.plan_type) || '—'}</div>
       </div>
 
       <div className="cred-cell-health">
@@ -674,7 +675,7 @@ function RowActions({
 }) {
   const name = accountName(a)
   return (
-    <div className="cred-row-actions">
+    <div className="cred-row-actions" onClick={(e) => e.stopPropagation()}>
       <div className="cred-icon-grid" aria-label={P('操作')}>
         <button type="button" className="cred-icon-btn" disabled={busy} title={P('刷新')} onClick={() => onForceRefresh(name)}>
           <RotateCw size={14} />
@@ -692,17 +693,20 @@ function RowActions({
           <Trash2 size={14} />
         </button>
       </div>
+      <span className="cred-actions-divider" aria-hidden />
       <div className="cred-row-actions-side">
-        <label className="cred-switch" title={a.disabled ? P('启用') : P('禁用')}>
-          <input
-            type="checkbox"
-            checked={!a.disabled}
-            disabled={busy}
-            onChange={(e) => onSetDisabled(name, !e.target.checked)}
-          />
-          <span />
-        </label>
-        <button type="button" className="cred-detail-link" onClick={() => onOpenDetail(a)}>
+        <div className="cred-status-switch-wrap">
+          <label className="cred-switch" title={a.disabled ? P('启用') : P('禁用')}>
+            <input
+              type="checkbox"
+              checked={!a.disabled}
+              disabled={busy}
+              onChange={(e) => onSetDisabled(name, !e.target.checked)}
+            />
+            <span />
+          </label>
+        </div>
+        <button type="button" className="cred-detail-btn" onClick={() => onOpenDetail(a)}>
           {P('详情')}
         </button>
       </div>
@@ -955,8 +959,12 @@ function QuotaBars({ windows, layout }: { windows: QuotaWindow[]; layout: 'grid'
     return <div className={layout === 'stack' ? 'cred-quota-empty stacked' : 'cred-quota-empty'}>{P('暂无额度数据')}</div>
   }
   const list = windows.slice(0, 4)
+  const gridCls =
+    layout === 'stack'
+      ? 'cred-quota-stack'
+      : `cred-quota-grid cols-${list.length >= 2 ? 2 : 1}`
   return (
-    <div className={layout === 'stack' ? 'cred-quota-stack' : `cred-quota-grid cols-${list.length >= 2 ? 2 : 1}`}>
+    <div className={gridCls}>
       {list.map((w, i) => {
         const ratio = w.remaining_ratio
         const pct = ratio != null && Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : null
@@ -969,7 +977,11 @@ function QuotaBars({ windows, layout }: { windows: QuotaWindow[]; layout: 'grid'
               : 'good'
         const hasCost = w.used_cost != null && Number.isFinite(Number(w.used_cost))
         const hasTokens = w.used_tokens != null && Number.isFinite(Number(w.used_tokens))
-        const showGeminiMeta = hasCost || hasTokens || /gemini/i.test(w.label || '')
+        const hasForecastCost = w.forecast_cost != null && Number.isFinite(Number(w.forecast_cost))
+        const hasForecastTokens = w.forecast_tokens != null && Number.isFinite(Number(w.forecast_tokens))
+        const isGemini = /gemini/i.test(w.label || '')
+        const showUsage = hasCost || hasTokens || isGemini
+        const showForecast = hasForecastCost || hasForecastTokens
         const resetLabel = w.resets_at ? fmtResetRelative(w.resets_at) : ''
         return (
           <div key={i} className="cred-quota-window">
@@ -980,30 +992,36 @@ function QuotaBars({ windows, layout }: { windows: QuotaWindow[]; layout: 'grid'
               <span className="cred-quota-remaining">
                 {pct != null ? (
                   <>
-                    <span className="cred-quota-remaining-prefix">{P('剩余')}</span>{' '}
+                    <span className="cred-quota-remaining-prefix">{P('剩余')}</span>
                     <strong>{Math.round(pct * 100)}%</strong>
                   </>
                 ) : (
-                  P('额度未知')
+                  <strong>—</strong>
                 )}
               </span>
             </div>
-            <div className="cred-quota-track">
+            <div className="cred-quota-track" aria-hidden>
               <i className={barCls} style={{ width: pct != null ? `${pct * 100}%` : '0%' }} />
             </div>
             <div className="cred-quota-window-foot">
-              {showGeminiMeta ? (
-                <div className="cred-quota-window-extra">
-                  <span className="cred-quota-extra-bit is-cost" title={P('费用')}>
-                    <i aria-hidden />
-                    {fmtMoney(hasCost ? w.used_cost : 0)}
-                    {' / '}
-                    {hasTokens ? fmtCompact(w.used_tokens) : '—'}
-                  </span>
-                </div>
+              {showUsage ? (
+                <span className="cred-quota-extra-bit is-cost" title={P('费用')}>
+                  <i className="is-usage" aria-hidden />
+                  {fmtMoney(hasCost ? w.used_cost : 0)}
+                  {' / '}
+                  {hasTokens ? fmtCompact(w.used_tokens) : '—'}
+                </span>
               ) : (
                 <span className="cred-quota-window-extra-spacer" />
               )}
+              {showForecast ? (
+                <span className="cred-quota-extra-bit is-forecast" title={P('预测')}>
+                  <i className="is-forecast" aria-hidden />
+                  {fmtMoney(hasForecastCost ? w.forecast_cost : 0)}
+                  {' / '}
+                  {hasForecastTokens ? fmtCompact(w.forecast_tokens) : '—'}
+                </span>
+              ) : null}
               <div className="cred-quota-window-meta">{resetLabel || '—'}</div>
             </div>
           </div>

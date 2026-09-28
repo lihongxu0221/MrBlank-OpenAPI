@@ -2742,8 +2742,8 @@ table.data tr:last-child td {
 .cred-card-header > span:nth-child(5) { justify-content: center; display: flex; }
 .cred-card-header > span:last-child { justify-content: center; display: flex; }
 .cred-card-row {
-  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
-  padding: 10px 12px; min-height: 88px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  padding: 10px 12px; min-height: 104px;
 }
 .cred-card-row.is-selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
 .cred-card-row.is-select-mode { cursor: pointer; }
@@ -2755,7 +2755,15 @@ table.data tr:last-child td {
   font-size: 10px; font-weight: 800; color: var(--muted);
 }
 .cred-identity-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.cred-identity-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cred-identity-title-row {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+}
+.cred-identity-title {
+  font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.cred-identity-title-row .cred-plan-badge {
+  flex: 0 0 auto; height: 18px; padding: 0 6px; font-size: 10.5px;
+}
 .cred-identity-file { font-size: 11px; color: var(--muted); }
 .cred-cell-plan { text-align: center; }
 .cred-plan-name { font-size: 13px; font-weight: 600; }
@@ -2770,18 +2778,19 @@ table.data tr:last-child td {
 .cred-cell-history { min-width: 0; }
 .cred-cell-quota { min-width: 0; max-width: 100%; overflow: hidden; align-self: center; }
 .cred-quota-grid {
-  display: grid; gap: 8px 10px; min-width: 0; max-width: 100%;
-  align-content: center; height: 100%;
+  /* CPAMP quotaWindowGrid */
+  display: grid; gap: 10px; min-width: 0; max-width: 100%;
+  align-content: center; height: 100%; position: relative;
 }
 .cred-quota-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .cred-quota-grid.cols-1 { grid-template-columns: minmax(0, 1fr); }
 .cred-quota-window {
   /* CPAMP quotaWindowCard — head / bar / foot */
-  display: grid; grid-template-rows: auto 7px auto; row-gap: 4px; min-width: 0; width: 100%;
+  display: grid; grid-template-rows: auto 8px auto; row-gap: 4px; min-width: 0; width: 100%;
 }
 .cred-quota-window-head {
   display: flex; justify-content: space-between; align-items: center; gap: 6px;
-  min-width: 0;
+  min-width: 0; line-height: 1.2;
 }
 .cred-quota-pill {
   /* CPAMP quotaWindowLabel */
@@ -2796,57 +2805,102 @@ table.data tr:last-child td {
   display: inline-flex; align-items: baseline; gap: 2.5px; flex: 0 0 auto;
   color: var(--ink); font-size: 12px; font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1;
 }
-.cred-quota-remaining-prefix { color: var(--muted); font-weight: 600; font-size: 11px; }
-.cred-quota-remaining strong { font-weight: 780; }
+.cred-quota-remaining-prefix {
+  /* CPAMP quotaWindowPercentPrefix */
+  color: var(--muted); font-weight: 550; font-size: 10px; line-height: 1; user-select: none;
+}
+.cred-quota-remaining strong { font-weight: 750; font-size: 12px; line-height: 1; }
 .cred-quota-track {
-  height: 7px; border-radius: 999px; background: color-mix(in srgb, var(--line) 68%, transparent);
-  overflow: hidden; min-width: 0; position: relative;
+  /* CPAMP quotaTrack — dark recessed charcoal */
+  height: 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 62%, transparent);
+  overflow: hidden; min-width: 0; position: relative; max-width: none;
 }
 .cred-quota-track > i { display: block; height: 100%; border-radius: inherit; transition: width .2s; }
-.cred-quota-track > i.good { background: var(--status-ok); }
-.cred-quota-track > i.warn { background: var(--status-warn); }
-.cred-quota-track > i.bad { background: var(--error); }
+/* CPAMP --data-green-base:#4ade80 (dark theme accounts-success) — NOT muted --status-ok */
+.cred-quota-track > i.good { background: #4ade80; }
+.cred-quota-track > i.warn { background: #fbbf24; }
+.cred-quota-track > i.bad { background: #f87171; }
 .cred-quota-track > i.neutral { background: var(--muted); }
+[data-theme="light"] .cred-quota-track > i.good { background: #22c55e; }
+[data-theme="light"] .cred-quota-track {
+  background: color-mix(in srgb, var(--line) 58%, transparent);
+}
 .cred-quota-empty {
   display: inline-flex; align-items: center; min-width: 0; max-width: 100%;
   color: var(--muted); font-size: 12px; line-height: 1.3;
 }
 .cred-quota-window-foot {
-  display: flex; justify-content: space-between; align-items: center; gap: 6px; min-width: 0;
+  /* CPAMP quotaWindowUsageLine */
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px;
+  min-width: 0; min-height: 15px; line-height: 1;
 }
 .cred-quota-window-meta {
-  flex-shrink: 0; margin-left: auto; font-size: 10px; color: var(--muted);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1;
-}
-.cred-quota-window-extra {
-  display: inline-flex; align-items: center; gap: 6px; min-width: 0;
-  font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* CPAMP quotaWindowResetTime */
+  flex-shrink: 0; margin-left: auto; height: 15px;
+  color: var(--muted); font-size: 11px; font-weight: 500;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  display: inline-flex; align-items: center; line-height: 1;
 }
 .cred-quota-window-extra-spacer { flex: 1 1 auto; min-width: 0; }
 .cred-quota-extra-bit {
-  display: inline-flex; align-items: center; gap: 3px; min-width: 0;
-  font-variant-numeric: tabular-nums;
+  display: inline-flex; align-items: center; gap: 3px; min-width: 0; flex-shrink: 0;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  color: var(--ink); font-size: 11px; font-weight: 600; line-height: 1;
 }
 .cred-quota-extra-bit > i {
-  width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto;
+  width: 15px; height: 15px; border-radius: 3.5px; flex: 0 0 auto;
+  display: inline-block;
+}
+.cred-quota-extra-bit > i.is-usage,
+.cred-quota-extra-bit.is-cost > i {
+  /* CPAMP quotaUsageIcon — accounts-brand blue */
   background: color-mix(in srgb, #60a5fa 55%, transparent);
 }
-.cred-quota-extra-bit.is-cost > i { background: color-mix(in srgb, #60a5fa 70%, transparent); }
-.cred-cell-actions { display: flex; justify-content: flex-end; align-items: center; }
+.cred-quota-extra-bit > i.is-forecast,
+.cred-quota-extra-bit.is-forecast > i {
+  /* CPAMP quotaForecastIcon — violet */
+  background: color-mix(in srgb, #a78bfa 55%, transparent);
+}
+.cred-quota-extra-bit.is-forecast { opacity: 0.82; }
+.cred-cell-actions {
+  display: flex; justify-content: flex-end; align-items: center;
+  /* slightly distinct darker action panel (图1) */
+  background: color-mix(in srgb, var(--bg) 55%, var(--surface));
+  border-radius: 8px; padding: 4px 6px; margin: -4px -6px -4px 0;
+  box-sizing: border-box; align-self: stretch;
+}
 .cred-row-actions {
-  /* 图1: icon grid left + toggle/详情 stack right */
-  display: flex; flex-direction: row; align-items: center; justify-content: flex-end; gap: 8px;
+  /* CPAMP rowActions: icon grid | divider | side (toggle+详情) */
+  z-index: 2; white-space: nowrap;
+  display: grid; grid-template-columns: 98px 1px 54px;
+  justify-content: center; align-items: center; gap: 6px;
+  width: 165px; min-width: 165px; position: relative;
+}
+.cred-actions-divider {
+  background: color-mix(in srgb, var(--line) 34%, transparent);
+  border-radius: 9999px; align-self: center; width: 1px; height: auto; min-height: 58px;
 }
 .cred-row-actions-side {
-  display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 0 auto;
+  /* CPAMP accountSideActions — toggle then 详情 directly under */
+  display: grid; grid-template-rows: 30px 30px; place-items: center; gap: 4px;
+  width: 54px; flex: 0 0 auto;
 }
+.cred-status-switch-wrap {
+  display: inline-flex; justify-content: center; align-items: center;
+  width: 54px; height: 30px;
+}
+.cred-status-switch-wrap .cred-switch { transform: scale(0.9); transform-origin: center; }
 .cred-icon-row { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
 .cred-icon-btn {
-  width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line);
-  background: var(--soft); color: var(--muted); display: inline-flex; align-items: center; justify-content: center;
-  cursor: pointer; padding: 0;
+  width: 30px; height: 30px; min-width: 30px; min-height: 30px; border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--soft); color: var(--muted);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; padding: 0; box-shadow: none;
 }
 .cred-icon-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--accent); }
+.cred-icon-btn.danger { color: color-mix(in srgb, var(--error) 85%, var(--muted)); }
 .cred-icon-btn.danger:hover:not(:disabled) { color: var(--error); border-color: var(--error); }
 .cred-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .cred-detail-link {
@@ -3001,16 +3055,23 @@ table.data tr:last-child td {
 .cred-grid-footer-right { justify-content: flex-end; margin-left: auto; }
 
 .cred-icon-grid {
-  display: grid; grid-template-columns: repeat(3, 26px); gap: 2px; justify-content: end;
+  /* CPAMP accountQuickActionsGrid — 3+2 compact */
+  display: grid; grid-template-columns: repeat(3, 30px); grid-auto-rows: 30px;
+  gap: 4px; justify-content: start;
 }
 .cred-detail-btn {
+  /* CPAMP rowDetailButton — directly under toggle */
   display: inline-flex; align-items: center; justify-content: center;
-  height: 28px; min-height: 28px; padding: 0 10px; border-radius: 7px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-  color: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer;
+  width: 54px; min-width: 54px; height: 28px; min-height: 28px; padding: 0 8px;
+  border-radius: 7px; box-sizing: border-box;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  color: var(--accent); font-size: 11px; font-weight: 650; line-height: 1; cursor: pointer;
 }
-.cred-detail-btn:hover { border-color: var(--accent); }
+.cred-detail-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface));
+}
 .cred-detail-link {
   background: none; border: none; color: var(--accent); font-size: 12px; font-weight: 700;
   cursor: pointer; padding: 0; line-height: 1.2;
