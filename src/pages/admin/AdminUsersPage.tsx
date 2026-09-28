@@ -241,8 +241,8 @@ export function AdminUsersPage({ path }: { path: string }) {
         {msg ? <p style={{ color: 'var(--success, #3d9)', marginBottom: 10 }}>{msg}</p> : null}
         {pageErr ? <p style={{ color: 'var(--error)', marginBottom: 10 }}>{pageErr}</p> : null}
 
-        <div style={{ overflowX: 'auto' }}>
-          <table className="data-table">
+        <div className="table-wrap">
+          <table className="data">
             <thead>
               <tr>
                 <th>{P('账号')}</th>
@@ -256,21 +256,27 @@ export function AdminUsersPage({ path }: { path: string }) {
             <tbody>
               {users.map((u) => (
                 <tr key={u.id}>
-                  <td>{u.username}</td>
-                  <td>{u.display_name}</td>
+                  <td>
+                    <code>{u.username}</code>
+                  </td>
+                  <td>{u.display_name || '—'}</td>
                   <td>{u.role === 'admin' ? P('管理员') : P('普通用户')}</td>
                   <td>{u.disabled ? P('停用') : P('正常')}</td>
-                  <td>{u.group_id || '—'}</td>
-                  <td style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button type="button" className="button ghost" onClick={() => openEdit(u)}>
-                      <Pencil size={14} /> {P('编辑')}
-                    </button>
-                    <button type="button" className="button ghost" onClick={() => openReset(u)}>
-                      <KeyRound size={14} /> {P('重置密码')}
-                    </button>
-                    <button type="button" className="button ghost" onClick={() => removeUser(u)}>
-                      <Trash2 size={14} /> {P('删除')}
-                    </button>
+                  <td>
+                    <code>{u.group_id || '—'}</code>
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button type="button" className="button ghost compact" onClick={() => openEdit(u)}>
+                        <Pencil size={14} /> {P('编辑')}
+                      </button>
+                      <button type="button" className="button ghost compact" onClick={() => openReset(u)}>
+                        <KeyRound size={14} /> {P('重置密码')}
+                      </button>
+                      <button type="button" className="button ghost compact" onClick={() => removeUser(u)}>
+                        <Trash2 size={14} /> {P('删除')}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

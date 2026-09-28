@@ -14,7 +14,6 @@ import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
 import { useToast } from '../../hooks/useStore'
-import { navigate } from '../../router/hash'
 
 type AilyStatus = {
   auth_file?: string
@@ -131,6 +130,9 @@ export function AdminOauthPage({ path }: { path: string }) {
 
   useEffect(() => {
     if (!gate.allowed) return
+    // Keep fetching providers list for side-effect readiness (errors surface via start)
+    api.get('/api/admin/oauth/providers').catch((e) => setErr((e as Error).message))
+    loadAlias()
     loadAily()
     loadUpAccounts()
   }, [gate.allowed])
@@ -530,23 +532,104 @@ export function AdminOauthPage({ path }: { path: string }) {
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
       <ConsoleHero
-        title={P('本站上游')}
-        subtitle={P('Aily 内嵌桥接与 Grok/OpenAI 本站上游账号。CPA 凭证与 OAuth 提供商请前往「凭证管理」。')}
+        title={P('OAuth 登录')}
+        subtitle={P('选择提供商 → 打开授权页 → 粘贴回调地址 → 确认状态。也可在本页管理 Aily 上游凭证。')}
       />
-      <p className="muted" style={{ marginTop: 0, marginBottom: 12, fontSize: 13 }}>
-        {P('CPA auth-files / OAuth 配置已迁至')}{' '}
-        <a
-          href="/admin/accounts?tab=oauth"
-          onClick={(e) => {
-            e.preventDefault()
-            navigate('/admin/accounts?tab=oauth')
-          }}
-        >
-          {P('凭证管理')} · {P('OAuth 配置')}
-        </a>
-        。
-      </p>
       {err ? <p style={{ color: 'var(--error)' }}>{err}</p> : null}
+
+      <div className="panel" style={{ marginTop: 12 }}>
+        <h3>{P('选择提供商')}</h3>
+        <p className="muted" style={{ marginTop: 0, marginBottom: 10, fontSize: 13 }}>
+          {P('点击下方按钮启动授权流程，完成后在「授权进度」中粘贴回调地址。')}
+        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {buttons.map((id) => (
+            <button
+              key={id}
+              type="button"
+              className="button secondary compact"
+              disabled={busy || unavailable.includes(id)}
+              title={unavailable.includes(id) ? P('此提供商当前不可用') : ''}
+              onClick={() => start(id)}
+            >
+              {id}
+              {unavailable.includes(id) ? ' (N/A)' : ''}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginTop: 16 }}>
+        <h3>{P('授权进度')}</h3>
+        <p>
+          <span className="muted">{P('会话标识')}</span> · <code>{state || '—'}</code>
+        </p>
+        {userCode ? (
+          <p>
+            <span className="muted">{P('设备码')}</span> · <code>{userCode}</code>
+          </p>
+        ) : null}
+        {authUrl ? (
+          <p>
+            <a href={authUrl} target="_blank" rel="noreferrer">
+              {P('打开授权页')} <ExternalLink size={14} />
+            </a>
+            <div className="muted" style={{ wordBreak: 'break-all', fontSize: 12, marginTop: 4 }}>
+              {authUrl}
+            </div>
+          </p>
+        ) : null}
+        <div className="field" style={{ marginTop: 12 }}>
+          <label>{P('回调地址')}</label>
+          <input
+            style={{ width: '100%' }}
+            value={callbackUrl}
+            onChange={(e) => setCallbackUrl(e.target.value)}
+            placeholder="http://localhost:.../callback?code=..."
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button type="button" className="button" disabled={busy || !state || !callbackUrl.trim()} onClick={submitCallback}>
+            {P('提交回调')}
+          </button>
+          <button type="button" className="button secondary" disabled={busy || !state} onClick={poll}>
+            <RefreshCw size={14} /> {P('刷新状态')}
+          </button>
+        </div>
+        {status ? (
+          <pre style={{ marginTop: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 12 }}>
+            {JSON.stringify(status, null, 2)}
+          </pre>
+        ) : null}
+      </div>
+
+      <details className="panel" style={{ marginTop: 16 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600, userSelect: 'none' }}>
+          {P('高级设置')}
+        </summary>
+        <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+          {P('模型别名与排除列表，一般无需修改。')}
+        </p>
+        <div style={{ marginTop: 12 }}>
+          <h4 style={{ margin: '0 0 8px' }}>{P('模型别名')} <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>oauth-model-alias</span></h4>
+          <textarea rows={6} style={{ width: '100%', fontFamily: 'monospace' }} value={aliasJson} onChange={(e) => setAliasJson(e.target.value)} />
+          <button type="button" className="button" style={{ marginTop: 8 }} onClick={saveAlias}>
+            {P('保存别名')}
+          </button>
+        </div>
+        <div style={{ marginTop: 16 }}>
+          <h4 style={{ margin: '0 0 8px' }}>{P('排除模型')} <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>oauth-excluded-models</span></h4>
+          <textarea
+            rows={4}
+            style={{ width: '100%', fontFamily: 'monospace' }}
+            value={excludedJson}
+            onChange={(e) => setExcludedJson(e.target.value)}
+          />
+          <button type="button" className="button" style={{ marginTop: 8 }} onClick={saveExcluded}>
+            {P('保存排除列表')}
+          </button>
+        </div>
+      </details>
 
       {/* ── Aily 上游（原独立页面功能） ── */}
       <div className="panel" style={{ marginTop: 24 }}>
@@ -941,9 +1024,9 @@ export function AdminOauthPage({ path }: { path: string }) {
       <div className="panel" style={{ marginTop: 24 }}>
         <div className="channels-toolbar" style={{ marginBottom: 12 }}>
           <div>
-            <h3 style={{ margin: 0 }}>{P('本站 Grok / OpenAI 上游')}</h3>
+            <h3 style={{ margin: 0 }}>{P('上游账号')}</h3>
             <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
-              {P('站点本地上游（api_key 或粘贴 OAuth JSON），与 CPA 凭证列表分离。命中白名单/映射的 /v1 请求走内嵌兼容中继，不经 CPA。')}
+              {P('Grok / OpenAI 兼容上游（api_key 或粘贴 OAuth JSON）。命中账号白名单/映射的 /v1 请求走内嵌兼容中继，不经 CPA。')}
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

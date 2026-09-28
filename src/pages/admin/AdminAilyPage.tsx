@@ -1,10 +1,10 @@
 import { useEffect } from 'react'
 import { navigate } from '../../router/hash'
 
-/** Legacy route: redirect /admin/aily → /admin/oauth (site-local Aily/Grok). */
+/** Legacy route: redirect bookmarks /admin/aily → /admin/oauth (Aily UI merged there). */
 export function AdminAilyPage(_props: { path: string }) {
   useEffect(() => {
     navigate('/admin/oauth')
   }, [])
-  return <p className="inline-loading">正在前往本站上游…</p>
+  return <p className="inline-loading">正在前往 OAuth 登录…</p>
 }

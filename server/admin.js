@@ -162,32 +162,14 @@ export function summarizeUsage(usage) {
   }
 }
 
-function deriveDisplayStatus(f) {
-  if (f?.disabled) return 'disabled'
-  const st = String(f?.status || '').toLowerCase()
-  const msg = String(f?.status_message || f?.error || '').toLowerCase()
-  const blob = `${st} ${msg}`
-  if (
-    /reauth|re-auth|need.?reauth|expired|unauthorized|login.?required|invalid.?token|refresh.?fail|auth.?fail|token.?revok/.test(
-      blob,
-    )
-  ) {
-    return 'need_reauth'
-  }
-  if (f?.unavailable) return 'unavailable'
-  if (/exhaust|quota|limit|unavailable|error|fail|ban/.test(blob)) return 'unavailable'
-  if (/disable|off|paused/.test(blob)) return 'disabled'
-  if (/run|active|ok|ready|available|normal|success/.test(st) || !st) return 'running'
-  return st || 'running'
-}
-
 export function mapAdminAccounts(authFilesPayload) {
   const files = Array.isArray(authFilesPayload?.files) ? authFilesPayload.files : []
   return files.map((f) => {
-    const recent = Array.isArray(f.recent_requests) ? f.recent_requests : []
-    const disabled = !!f.disabled
-    const unavailable = !!f.unavailable
-    const display_status = deriveDisplayStatus(f)
+    const recent = Array.isArray(f.recent_requests)
+      ? f.recent_requests
+      : Array.isArray(f.recent_requests)
+        ? f.recent_requests
+        : []
     return {
       id: f.id || f.name || f.auth_index,
       name: f.name || f.id || null,
@@ -197,14 +179,13 @@ export function mapAdminAccounts(authFilesPayload) {
       provider: f.provider || f.type || null,
       account_type: f.account_type || f.type || null,
       status: f.status || null,
-      display_status,
-      disabled,
-      unavailable,
+      disabled: !!f.disabled,
+      unavailable: !!(f.unavailable || f.unavailable),
       success: Number(f.success || 0) || 0,
       failed: Number(f.failed || 0) || 0,
-      last_refresh: f.last_refresh || null,
+      last_refresh: f.last_refresh || f.last_refresh || null,
       updated_at: f.updated_at || f.modtime || null,
-      status_message: f.status_message || '',
+      status_message: f.status_message || f.status_message || '',
       note: f.note ?? f.attributes?.note ?? null,
       priority: f.priority ?? f.attributes?.priority ?? null,
       recent_requests: recent.slice(-12),
