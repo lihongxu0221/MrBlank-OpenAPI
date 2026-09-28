@@ -268,6 +268,14 @@ function FALLBACK_MODELS() {
  *   saveAuth: (patch: object) => void,
  *   refreshToken: () => Promise<{ok:boolean,message?:string}>,
  *   getModelRouting?: () => { whitelist: string[], mappings: {from:string,to:string}[] },
+ *   pickAilyAccount?: (opts?: {excludeIds?: number[]}) => object|null,
+ *   peekAilyAccount?: (opts?: {excludeIds?: number[]}) => object|null,
+ *   getAccount?: (id: number) => object|null,
+ *   refreshAccount?: (id: number) => Promise<{ok:boolean,message?:string}>,
+ *   markUnschedulable?: (id: number, reason: string, ms?: number) => void,
+ *   resolveAccountBase?: (account: object) => string,
+ *   REFRESH_FAIL_COOLDOWN_MS?: number,
+ *   DEFAULT_COOLDOWN_MS?: number,
  * }} deps
  */
 export function createAilyUpstream(deps) {
@@ -307,35 +315,157 @@ export function createAilyUpstream(deps) {
     }
   }
 
-  async function withAuthRetry(doFetch) {
-    let token = normalizeAilyToken(deps.getAccessToken())
-    if (!token) {
+  function legacyAccount() {
+    const token = normalizeAilyToken(deps.getAccessToken())
+    if (!token && !normalizeAilyToken(deps.getRefreshToken?.() || '')) return null
+    return {
+      id: 0,
+      access_token: token,
+      refresh_token: normalizeAilyToken(deps.getRefreshToken?.() || ''),
+      aily_base_url: deps.getUpstreamBase?.() || '',
+    }
+  }
+
+  function accountBase(acc) {
+    if (typeof deps.resolveAccountBase === 'function' && acc) {
+      try {
+        return deps.resolveAccountBase(acc)
+      } catch {
+        /* fall through */
+      }
+    }
+    if (acc?.aily_base_url) return String(acc.aily_base_url).replace(/\/+$/, '')
+    return deps.getUpstreamBase()
+  }
+
+  /**
+   * Pick account → fetch → on 401 refresh that account → on hard fail/429 cool-down + failover once.
+   * doFetch(token, account) => Response
+   */
+  async function withAuthRetry(doFetch, { excludeIds = [] } = {}) {
+    const pick = (extraExclude = []) => {
+      if (typeof deps.pickAilyAccount === 'function') {
+        return deps.pickAilyAccount({ excludeIds: [...excludeIds, ...extraExclude] })
+      }
+      return legacyAccount()
+    }
+
+    async function refreshAcc(acc) {
+      if (acc?.id && typeof deps.refreshAccount === 'function') {
+        return deps.refreshAccount(acc.id)
+      }
+      if (typeof deps.refreshToken === 'function') {
+        return deps.refreshToken()
+      }
+      return { ok: false, message: 'no refresh handler' }
+    }
+
+    function reread(acc) {
+      if (acc?.id && typeof deps.getAccount === 'function') {
+        return deps.getAccount(acc.id) || acc
+      }
+      if (!acc?.id) {
+        return {
+          ...acc,
+          access_token: normalizeAilyToken(deps.getAccessToken()),
+          refresh_token: normalizeAilyToken(deps.getRefreshToken?.() || ''),
+        }
+      }
+      return acc
+    }
+
+    async function tryOnce(acc) {
+      let cur = acc
+      let token = normalizeAilyToken(cur.access_token)
+      if (!token && cur.refresh_token) {
+        const refreshed = await refreshAcc(cur)
+        if (!refreshed?.ok) {
+          return { res: null, token: '', account: cur, refreshFailed: true, status: refreshed?.status || 401 }
+        }
+        cur = reread(cur)
+        token = normalizeAilyToken(cur.access_token)
+      }
+      if (!token) {
+        return { res: null, token: '', account: cur, refreshFailed: true, status: 401 }
+      }
+      let res = await doFetch(token, cur)
+      if (res.status === 401) {
+        const refreshed = await refreshAcc(cur)
+        if (refreshed?.ok) {
+          cur = reread(cur)
+          token = normalizeAilyToken(cur.access_token)
+          if (token) res = await doFetch(token, cur)
+          else return { res, token: '', account: cur, refreshFailed: true, status: 401 }
+        } else {
+          return { res, token, account: cur, refreshFailed: true, status: res.status }
+        }
+      }
+      return { res, token, account: cur, refreshFailed: false, status: res.status }
+    }
+
+    let account = pick()
+    if (!account) {
       const err = new Error('No Aily access_token stored')
       err.status = 401
       throw err
     }
-    let res = await doFetch(token)
-    if (res.status === 401 && deps.getRefreshToken()) {
-      const refreshed = await deps.refreshToken()
-      if (refreshed?.ok) {
-        token = normalizeAilyToken(deps.getAccessToken())
-        if (token) res = await doFetch(token)
+
+    let result = await tryOnce(account)
+
+    const hardFail =
+      result.refreshFailed ||
+      (result.res && (result.res.status === 429 || result.res.status === 401 || result.res.status === 403))
+
+    if (hardFail && typeof deps.pickAilyAccount === 'function' && account.id) {
+      const coolMs = result.refreshFailed
+        ? deps.REFRESH_FAIL_COOLDOWN_MS || 5 * 60_000
+        : deps.DEFAULT_COOLDOWN_MS || 60_000
+      try {
+        deps.markUnschedulable?.(
+          account.id,
+          result.refreshFailed ? 'refresh_exhausted' : `HTTP ${result.res?.status || '?'}`,
+          coolMs,
+        )
+      } catch {
+        /* ignore */
+      }
+      const next = pick([account.id])
+      if (next && next.id !== account.id) {
+        result = await tryOnce(next)
       }
     }
-    return { res, token }
+
+    if (!result.res) {
+      const err = new Error(result.refreshFailed ? 'Aily token refresh failed' : 'No Aily access_token stored')
+      err.status = result.status || 401
+      err.accountId = result.account?.id
+      throw err
+    }
+    return { res: result.res, token: result.token, account: result.account }
+  }
+
+  function setAccountHeader(res, account) {
+    if (!res || res.headersSent) return
+    if (account?.id) {
+      try {
+        res.setHeader('x-mrblank-aily-account-id', String(account.id))
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   async function loadCatalog(force = false) {
     const now = Date.now()
     if (!force && catalogState.payload && now - catalogState.at < CATALOG_TTL_MS) return catalogState
-    const base = deps.getUpstreamBase()
     try {
-      const { res } = await withAuthRetry((token) =>
-        fetchUpstream(`${base}/api/v2/model_catalog`, {
+      const { res } = await withAuthRetry((token, acc) => {
+        const base = accountBase(acc)
+        return fetchUpstream(`${base}/api/v2/model_catalog`, {
           headers: { Authorization: `Bearer ${token}` },
           timeoutMs: 20000,
-        }),
-      )
+        })
+      })
       const json = await res.json().catch(() => null)
       if (res.ok && json) {
         catalogState = {
@@ -359,15 +489,22 @@ export function createAilyUpstream(deps) {
 
   async function listModels(force = false) {
     const started = Date.now()
-    const token = normalizeAilyToken(deps.getAccessToken())
-    if (!token) {
+    let hasToken = !!normalizeAilyToken(deps.getAccessToken())
+    let upstream = deps.getUpstreamBase()
+    const peek = deps.peekAilyAccount || deps.pickAilyAccount
+    if (typeof peek === 'function') {
+      const acc = peek({})
+      hasToken = !!(acc && (acc.access_token || acc.refresh_token))
+      if (acc) upstream = accountBase(acc)
+    }
+    if (!hasToken) {
       return {
         ok: false,
         message: 'No access_token stored',
         models: [],
         sample: [],
         latency_ms: Date.now() - started,
-        upstream: deps.getUpstreamBase(),
+        upstream,
         embedded: true,
       }
     }
@@ -379,7 +516,7 @@ export function createAilyUpstream(deps) {
       models,
       sample: models.slice(0, 12),
       latency_ms: Date.now() - started,
-      upstream: deps.getUpstreamBase(),
+      upstream,
       embedded: true,
       data: cat.list,
     }
@@ -387,7 +524,6 @@ export function createAilyUpstream(deps) {
 
   async function runAilyTurn(openaiBody, hooks = {}) {
     const cat = await loadCatalog()
-    const base = deps.getUpstreamBase()
     const routingCfg = currentRouting()
     const routeInfo = applyModelRouting(openaiBody.model, cat.index, routingCfg, resolveAilyModel)
     if (!routeInfo.allowed) {
@@ -402,7 +538,7 @@ export function createAilyUpstream(deps) {
     }
     const bodyForUpstream = { ...openaiBody, model: routeInfo.mapped }
     const upstream_req_body = buildAilyBody(bodyForUpstream, cat.index, routingCfg)
-    const upstreamUrl = `${base}/api/v2/chat_stateless`
+    let upstreamUrl = ''
     const makeUpstreamHeaders = (token) => ({
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
@@ -410,8 +546,11 @@ export function createAilyUpstream(deps) {
     })
     // Snapshot for diagnosis (credentials redacted by diagnosis.record)
     let upstream_req_headers = makeUpstreamHeaders('(pending)')
+    let usedAccount = null
 
-    const doFetch = (token) => {
+    const doFetch = (token, acc) => {
+      const base = accountBase(acc)
+      upstreamUrl = `${base}/api/v2/chat_stateless`
       upstream_req_headers = makeUpstreamHeaders(token)
       return fetchUpstream(upstreamUrl, {
         method: 'POST',
@@ -423,7 +562,7 @@ export function createAilyUpstream(deps) {
 
     let res
     try {
-      ;({ res } = await withAuthRetry(doFetch))
+      ;({ res, account: usedAccount } = await withAuthRetry(doFetch))
     } catch (e) {
       return {
         error: e?.message || String(e),
@@ -431,6 +570,7 @@ export function createAilyUpstream(deps) {
         upstream_url: upstreamUrl,
         upstream_req_body,
         upstream_req_headers,
+        account_id: e?.accountId || usedAccount?.id || null,
       }
     }
 
@@ -545,6 +685,7 @@ export function createAilyUpstream(deps) {
       upstream_url: upstreamUrl,
       upstream_req_body,
       upstream_req_headers,
+      account_id: usedAccount?.id || null,
     }
   }
 
@@ -588,6 +729,8 @@ export function createAilyUpstream(deps) {
         }
       },
     })
+
+    if (result.account_id) setAccountHeader(res, { id: result.account_id })
 
     if (result.error) {
       const status = result.status || 502
@@ -916,17 +1059,19 @@ export function createAilyUpstream(deps) {
     }
     const bodyForUp = { ...openaiBody, model: routeInfo.mapped }
     const upstream_req_body = buildCompletionsUpstreamBody(bodyForUp)
-    const base = deps.getUpstreamBase()
-    const upstreamUrl = `${base}/api/v3/code/completions`
+    let upstreamUrl = ''
     const makeHdrs = (token) => ({
       'Content-Type': 'application/json',
       Accept: isStream ? 'text/event-stream' : 'application/json',
       Authorization: `Bearer ${token}`,
     })
     let upstream_req_headers = makeHdrs('(pending)')
+    let usedAccount = null
     let upRes
     try {
-      ;({ res: upRes } = await withAuthRetry((token) => {
+      ;({ res: upRes, account: usedAccount } = await withAuthRetry((token, acc) => {
+        const base = accountBase(acc)
+        upstreamUrl = `${base}/api/v3/code/completions`
         upstream_req_headers = makeHdrs(token)
         return fetchUpstream(upstreamUrl, {
           method: 'POST',
@@ -935,6 +1080,7 @@ export function createAilyUpstream(deps) {
           timeoutMs: 300000,
         })
       }))
+      if (usedAccount?.id) setAccountHeader(res, usedAccount)
     } catch (e) {
       const body = {
         error: {
@@ -1227,6 +1373,8 @@ export function createAilyUpstream(deps) {
         })
       },
     })
+
+    if (result.account_id) setAccountHeader(res, { id: result.account_id })
 
     if (result.error) {
       const status = result.status || 502
@@ -1530,5 +1678,7 @@ export function createAilyUpstream(deps) {
     handleResponses,
     MODEL_ALIASES,
     getModelRouting: currentRouting,
+    withAuthRetry,
+    accountBase,
   }
 }

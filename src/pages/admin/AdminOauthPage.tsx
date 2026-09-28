@@ -16,6 +16,40 @@ import { useAdminGate } from './useAdminGate'
 import { useToast } from '../../hooks/useStore'
 import { getHashQuery } from '../../router/hash'
 
+type AilyPoolAccount = {
+  id: number
+  name: string
+  email?: string
+  remark?: string
+  enabled: boolean
+  aily_base_url?: string
+  has_access_token?: boolean
+  has_refresh_token?: boolean
+  access_preview?: string
+  refresh_preview?: string
+  updated_at?: string | null
+  priority?: number
+  concurrency?: number | null
+  cooldown_until?: string | null
+  last_error?: string | null
+  last_used_at?: string | null
+  next_refresh_at?: string | null
+  schedulable?: boolean
+  full_access_token?: string
+  full_refresh_token?: string
+}
+
+type AilyPoolMetrics = {
+  total: number
+  enabled: number
+  disabled: number
+  schedulable: number
+  cooldown: number
+  with_token: number
+  strategy: string
+  strategy_env?: string
+}
+
 type AilyStatus = {
   auth_file?: string
   upstream?: string
@@ -35,6 +69,7 @@ type AilyStatus = {
   model_routes?: string[]
   bridge?: string
   cpa_note?: string
+  pool?: { items: AilyPoolAccount[]; metrics: AilyPoolMetrics; strategy?: string }
   cpa_openai_compatibility?:
     | { name: string; base_url: string; prefix?: string; disabled?: boolean; models: { name: string; alias: string }[]; api_key_count: number }[]
     | { error?: string }
@@ -84,6 +119,9 @@ export function AdminOauthPage({ path }: { path: string }) {
   const [ailyErr, setAilyErr] = useState<string | null>(null)
   const [ailyMsg, setAilyMsg] = useState<string | null>(null)
   const [ailyLoading, setAilyLoading] = useState(false)
+  const [poolItems, setPoolItems] = useState<AilyPoolAccount[]>([])
+  const [poolMetrics, setPoolMetrics] = useState<AilyPoolMetrics | null>(null)
+  const [poolSelectedId, setPoolSelectedId] = useState<number | null>(null)
   const [email, setEmail] = useState('')
   const [code, setCode] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
@@ -170,18 +208,126 @@ export function AdminOauthPage({ path }: { path: string }) {
     try {
       const d = await api.get<AilyStatus>('/api/admin/aily/status')
       setAilyStatus(d)
-      setAccess(d.full_access_token || d.fullAccessToken || '')
-      setRefresh(d.full_refresh_token || d.fullRefreshToken || '')
+      const pool = await api.get<{ items: AilyPoolAccount[]; metrics: AilyPoolMetrics; strategy?: string }>(
+        '/api/admin/aily/pool',
+      )
+      const items = pool.items || d.pool?.items || []
+      setPoolItems(items)
+      setPoolMetrics(pool.metrics || d.pool?.metrics || null)
+      let sel = poolSelectedId
+      if (sel == null || !items.some((x) => x.id === sel)) {
+        sel = items[0]?.id ?? null
+        setPoolSelectedId(sel)
+      }
+      if (sel != null) {
+        try {
+          const detail = await api.get<AilyPoolAccount>(`/api/admin/aily/pool/${sel}`)
+          setAccess(detail.full_access_token || '')
+          setRefresh(detail.full_refresh_token || '')
+          setEmail(detail.email || '')
+          if (!(d.aily_base_from_env || d.upstream_from_env)) {
+            setBaseUrl(detail.aily_base_url || d.aily_base_url || '')
+          }
+        } catch {
+          setAccess(d.full_access_token || d.fullAccessToken || '')
+          setRefresh(d.full_refresh_token || d.fullRefreshToken || '')
+        }
+      } else {
+        setAccess(d.full_access_token || d.fullAccessToken || '')
+        setRefresh(d.full_refresh_token || d.fullRefreshToken || '')
+      }
       await loadModels()
       if (d.aily_base_from_env || d.upstream_from_env) {
         setBaseUrl(d.upstream || '')
-      } else {
-        setBaseUrl(d.aily_base_url || '')
       }
     } catch (e) {
       setAilyErr((e as Error).message)
     } finally {
       setAilyLoading(false)
+    }
+  }
+
+  async function selectPoolAccount(id: number) {
+    setPoolSelectedId(id)
+    setAilyErr(null)
+    try {
+      const detail = await api.get<AilyPoolAccount>(`/api/admin/aily/pool/${id}`)
+      setAccess(detail.full_access_token || '')
+      setRefresh(detail.full_refresh_token || '')
+      setEmail(detail.email || '')
+      if (!(ailyStatus?.aily_base_from_env || ailyStatus?.upstream_from_env)) {
+        setBaseUrl(detail.aily_base_url || '')
+      }
+    } catch (e) {
+      setAilyErr((e as Error).message)
+    }
+  }
+
+  async function ensurePoolSlot(): Promise<number> {
+    if (poolSelectedId != null) return poolSelectedId
+    const row = await api.post<AilyPoolAccount>('/api/admin/aily/pool', {
+      name: `Aily ${poolItems.length + 1}`,
+      enabled: true,
+      priority: 100,
+    })
+    setPoolSelectedId(row.id)
+    return row.id
+  }
+
+  async function addPoolAccount() {
+    setAilyErr(null)
+    try {
+      const row = await api.post<AilyPoolAccount>('/api/admin/aily/pool', {
+        name: `Aily ${poolItems.length + 1}`,
+        enabled: true,
+        priority: 100,
+      })
+      setAilyMsg(P('已新增号池账号（不会覆盖已有槽位）'))
+      showToast(P('已新增 Aily 号池账号'))
+      await loadAily()
+      setPoolSelectedId(row.id)
+      await selectPoolAccount(row.id)
+    } catch (e) {
+      setAilyErr((e as Error).message)
+    }
+  }
+
+  async function togglePoolEnabled(a: AilyPoolAccount) {
+    try {
+      await api.post(`/api/admin/aily/pool/${a.id}/enable`, { enabled: !a.enabled })
+      await loadAily()
+    } catch (e) {
+      setAilyErr((e as Error).message)
+    }
+  }
+
+  async function deletePoolAccount(id: number) {
+    if (!confirm(P('确认删除此 Aily 号池账号？'))) return
+    try {
+      await api.delete(`/api/admin/aily/pool/${id}`)
+      showToast(P('已删除'))
+      if (poolSelectedId === id) setPoolSelectedId(null)
+      await loadAily()
+    } catch (e) {
+      setAilyErr((e as Error).message)
+    }
+  }
+
+  async function testPoolAccount(id?: number | null) {
+    const target = id ?? poolSelectedId
+    if (target == null) {
+      setAilyErr(P('请先选择或新增号池账号'))
+      return
+    }
+    setAilyMsg(null)
+    setAilyErr(null)
+    try {
+      const d = await api.post<{ message?: string; ok?: boolean }>(`/api/admin/aily/pool/${target}/test`)
+      setAilyMsg(d.message || P('连通测试完成'))
+      showToast(P('连通测试完成'))
+      await loadAily()
+    } catch (e) {
+      setAilyErr((e as Error).message)
     }
   }
 
@@ -448,6 +594,10 @@ export function AdminOauthPage({ path }: { path: string }) {
   }
 
   async function runAilyTest() {
+    if (poolSelectedId != null) {
+      await testPoolAccount(poolSelectedId)
+      return
+    }
     setAilyMsg(null)
     setAilyErr(null)
     try {
@@ -464,7 +614,8 @@ export function AdminOauthPage({ path }: { path: string }) {
     setAilyMsg(null)
     setAilyErr(null)
     try {
-      await api.post('/api/admin/aily/send-code', {
+      const id = await ensurePoolSlot()
+      await api.post(`/api/admin/aily/pool/${id}/send-code`, {
         email: email.trim(),
         aily_base_url: baseUrl.trim() || undefined,
       })
@@ -479,14 +630,16 @@ export function AdminOauthPage({ path }: { path: string }) {
     setAilyMsg(null)
     setAilyErr(null)
     try {
-      await api.post('/api/admin/aily/login', {
+      const id = await ensurePoolSlot()
+      await api.post(`/api/admin/aily/pool/${id}/login`, {
         email: email.trim(),
         code: code.trim(),
         aily_base_url: baseUrl.trim() || undefined,
       })
-      setAilyMsg(P('Aily 上游登录成功，token 已写入共享凭证文件'))
+      setAilyMsg(P('Aily 号池登录成功，token 已写入所选账号'))
       setCode('')
       await loadAily()
+      await selectPoolAccount(id)
     } catch (e) {
       setAilyErr((e as Error).message)
     }
@@ -497,12 +650,14 @@ export function AdminOauthPage({ path }: { path: string }) {
     setAilyMsg(null)
     setAilyErr(null)
     try {
-      await api.post('/api/admin/aily/tokens', {
+      const id = await ensurePoolSlot()
+      await api.post(`/api/admin/aily/pool/${id}/tokens`, {
         access_token: access.trim() || undefined,
         refresh_token: refresh.trim() || undefined,
         aily_base_url: baseUrl.trim() || undefined,
+        email: email.trim() || undefined,
       })
-      setAilyMsg(P('Token 已保存'))
+      setAilyMsg(P('Token 已保存到所选号池账号'))
       await loadAily()
     } catch (e) {
       setAilyErr((e as Error).message)
@@ -513,21 +668,30 @@ export function AdminOauthPage({ path }: { path: string }) {
     setAilyMsg(null)
     setAilyErr(null)
     try {
-      await api.post('/api/admin/aily/refresh')
-      setAilyMsg(P('已刷新 access_token'))
+      const id = poolSelectedId
+      if (id == null) throw new Error(P('请先选择号池账号'))
+      await api.post(`/api/admin/aily/pool/${id}/refresh`)
+      setAilyMsg(P('已刷新所选账号 access_token'))
       await loadAily()
+      await selectPoolAccount(id)
     } catch (e) {
       setAilyErr((e as Error).message)
     }
   }
 
   async function doClear() {
-    if (!confirm(P('确认清除本机 Aily access/refresh token？这会影响内嵌 Aily 上游鉴权。'))) return
+    if (poolSelectedId == null) {
+      setAilyErr(P('请先选择号池账号'))
+      return
+    }
+    if (!confirm(P('确认清除所选号池账号的 access/refresh token？'))) return
     setAilyMsg(null)
     setAilyErr(null)
     try {
-      await api.post('/api/admin/aily/logout')
-      setAilyMsg(P('已清除'))
+      await api.put(`/api/admin/aily/pool/${poolSelectedId}`, { clear_tokens: true })
+      setAccess('')
+      setRefresh('')
+      setAilyMsg(P('已清除所选账号 token'))
       await loadAily()
     } catch (e) {
       setAilyErr((e as Error).message)
@@ -651,24 +815,24 @@ export function AdminOauthPage({ path }: { path: string }) {
         </div>
       </details>
 
-      {/* ── Aily 上游（原独立页面功能） ── */}
+      {/* ── Aily 号池（本站上游；≠ CPA 凭证；≠ Grok/OpenAI 上游） ── */}
       <div className="panel" style={{ marginTop: 24 }}>
         <div className="channels-toolbar" style={{ marginBottom: 12 }}>
           <div>
-            <h3 style={{ margin: 0 }}>{P('本站上游 · Aily')}</h3>
+            <h3 style={{ margin: 0 }}>{P('本站上游 · Aily 号池')}</h3>
             <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
-              {P('管理 Aily 凭证与连通测试；客户端默认走 CPA，命中路由时用内嵌桥接。')}
-              {ailyStatus?.updated_at
-                ? ` · ${P('凭证更新')} ${new Date(ailyStatus.updated_at).toLocaleString('zh-CN', {
-                    timeZone: 'Asia/Shanghai',
-                    hour12: false,
-                  })}`
+              {P('多账号号池 + round-robin；登录/粘贴/刷新/测试作用于所选账号。≠ CPA 凭证；≠ 下方 Grok/OpenAI 上游。')}
+              {poolMetrics
+                ? ` · LB ${poolMetrics.strategy || 'round-robin'}`
                 : ''}
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button type="button" className="button secondary compact" onClick={loadAily} disabled={ailyLoading}>
               <RefreshCw size={14} /> {P('刷新状态')}
+            </button>
+            <button type="button" className="button secondary compact" onClick={addPoolAccount}>
+              <Plus size={14} /> {P('新增账号')}
             </button>
             <button type="button" className="button compact" onClick={runAilyTest}>
               <Cable size={14} /> {P('连通测试')}
@@ -683,6 +847,8 @@ export function AdminOauthPage({ path }: { path: string }) {
           <li>
             {P('桥接')} · {P('内嵌于本站 BFF')}
             {ailyStatus?.bridge ? ` (${ailyStatus.bridge})` : ''}
+            {' · '}
+            {P('命中 AILY_MODEL_ROUTES / aily/ 前缀时 round-robin 选号')}
           </li>
           <li>
             {P('上游')} · <code>{ailyStatus?.upstream || '—'}</code>
@@ -698,29 +864,98 @@ export function AdminOauthPage({ path }: { path: string }) {
 
         <div className="stats-grid" style={{ marginBottom: 16 }}>
           <div className="stat-card">
-            <div className="label">{P('Access Token')}</div>
-            <div className="value" style={{ fontSize: 16 }}>
-              {ailyStatus?.has_access_token ? ailyStatus.access_preview : P('未配置')}
-            </div>
+            <div className="label">{P('号池总数')}</div>
+            <div className="value" style={{ fontSize: 16 }}>{poolMetrics?.total ?? poolItems.length}</div>
           </div>
           <div className="stat-card">
-            <div className="label">{P('Refresh Token')}</div>
-            <div className="value" style={{ fontSize: 16 }}>
-              {ailyStatus?.has_refresh_token ? ailyStatus.refresh_preview : P('未配置')}
-            </div>
+            <div className="label">{P('可调度')}</div>
+            <div className="value" style={{ fontSize: 16 }}>{poolMetrics?.schedulable ?? '—'}</div>
           </div>
           <div className="stat-card">
-            <div className="label">{P('凭证状态')}</div>
-            <div className="value" style={{ fontSize: 16 }}>
-              {ailyStatus?.has_access_token ? P('已授权') : P('未配置')}
-            </div>
+            <div className="label">{P('冷却中')}</div>
+            <div className="value" style={{ fontSize: 16 }}>{poolMetrics?.cooldown ?? 0}</div>
           </div>
           <div className="stat-card">
-            <div className="label">{P('CPA openai-compat')}</div>
-            <div className="value" style={{ fontSize: 16 }}>
-              {compat ? compat.length : compatErr ? P('读取失败') : '0'}
-            </div>
+            <div className="label">{P('LB 策略')}</div>
+            <div className="value" style={{ fontSize: 16 }}>{poolMetrics?.strategy || 'round-robin'}</div>
           </div>
+        </div>
+
+        <div style={{ marginBottom: 16, overflowX: 'auto' }}>
+          <h4 style={{ marginTop: 0 }}>{P('号池账号')}</h4>
+          {poolItems.length === 0 ? (
+            <p className="muted" style={{ fontSize: 13 }}>
+              {P('暂无账号。可「新增账号」后登录/粘贴；启动时若存在 .aily 会自动迁入 #1。')}
+            </p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border, #e5e7eb)' }}>
+                  <th style={{ padding: '6px 8px' }}>{P('选')}</th>
+                  <th style={{ padding: '6px 8px' }}>ID</th>
+                  <th style={{ padding: '6px 8px' }}>{P('名称')}</th>
+                  <th style={{ padding: '6px 8px' }}>{P('邮箱')}</th>
+                  <th style={{ padding: '6px 8px' }}>{P('优先级')}</th>
+                  <th style={{ padding: '6px 8px' }}>{P('Token')}</th>
+                  <th style={{ padding: '6px 8px' }}>{P('状态')}</th>
+                  <th style={{ padding: '6px 8px' }}>{P('操作')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {poolItems.map((a) => (
+                  <tr
+                    key={a.id}
+                    style={{
+                      borderBottom: '1px solid var(--border, #e5e7eb)',
+                      background: poolSelectedId === a.id ? 'var(--surface-2, rgba(0,0,0,0.04))' : undefined,
+                    }}
+                  >
+                    <td style={{ padding: '6px 8px' }}>
+                      <input
+                        type="radio"
+                        name="aily-pool-sel"
+                        checked={poolSelectedId === a.id}
+                        onChange={() => void selectPoolAccount(a.id)}
+                      />
+                    </td>
+                    <td style={{ padding: '6px 8px' }}>{a.id}</td>
+                    <td style={{ padding: '6px 8px' }}>{a.name}</td>
+                    <td style={{ padding: '6px 8px' }}>{a.email || '—'}</td>
+                    <td style={{ padding: '6px 8px' }}>{a.priority ?? 100}</td>
+                    <td style={{ padding: '6px 8px', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+                      {a.has_access_token ? a.access_preview : P('无')}
+                    </td>
+                    <td style={{ padding: '6px 8px' }}>
+                      {!a.enabled
+                        ? P('已禁用')
+                        : a.cooldown_until
+                          ? P('冷却')
+                          : a.schedulable
+                            ? P('可调度')
+                            : P('不可调度')}
+                    </td>
+                    <td style={{ padding: '6px 8px' }}>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <button type="button" className="button secondary compact" onClick={() => void testPoolAccount(a.id)}>
+                          {P('测试')}
+                        </button>
+                        <button type="button" className="button secondary compact" onClick={() => void togglePoolEnabled(a)}>
+                          {a.enabled ? P('禁用') : P('启用')}
+                        </button>
+                        <button type="button" className="button secondary compact" onClick={() => void deletePoolAccount(a.id)}>
+                          {P('删除')}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>
+            {P('当前操作目标')} ·{' '}
+            {poolSelectedId != null ? `#${poolSelectedId}` : P('（未选择 — 登录/保存将自动建号）')}
+          </p>
         </div>
 
         {ailyTest ? (
@@ -754,9 +989,9 @@ export function AdminOauthPage({ path }: { path: string }) {
         ) : null}
 
         <div style={{ marginBottom: 16 }}>
-          <h4 style={{ marginTop: 0 }}>{P('邮箱验证码登录')}</h4>
+          <h4 style={{ marginTop: 0 }}>{P('邮箱验证码登录（写入所选号池账号）')}</h4>
           <p className="muted" style={{ margin: '0 0 12px', fontSize: 13 }}>
-            {P('用邮箱验证码登录，或直接粘贴已有 Token。中国区 Token 应对 api.yiyu.pro，国际区对 api.aily.pro。')}
+            {P('用邮箱验证码登录所选账号，或下方粘贴 Token。中国区 → api.yiyu.pro，国际区 → api.aily.pro。CPA OAuth 九大提供商区块不受影响。')}
           </p>
           <form className="guest-login-form" onSubmit={doLogin}>
             <div className="field">
@@ -807,13 +1042,11 @@ export function AdminOauthPage({ path }: { path: string }) {
         </div>
 
         <div style={{ marginBottom: 16 }}>
-          <h4 style={{ marginTop: 0 }}>{P('粘贴 Token')}</h4>
+          <h4 style={{ marginTop: 0 }}>{P('粘贴 Token（写入所选号池账号）')}</h4>
           <p className="muted" style={{ margin: '0 0 12px', fontSize: 13 }}>
-            {ailyStatus?.has_access_token
-              ? `${P('已授权')} · ${ailyStatus.access_preview || '****'}${
-                  ailyStatus.updated_at ? ` · ${P('更新时间')} ${ailyStatus.updated_at}` : ''
-                }`
-              : P('未配置')}
+            {poolSelectedId != null
+              ? `${P('目标')} #${poolSelectedId}`
+              : P('未选择账号时会新建槽位（不会覆盖仅有的账号）')}
           </p>
           <form className="guest-login-form" onSubmit={saveTokens}>
             <div className="field">
@@ -1044,9 +1277,9 @@ export function AdminOauthPage({ path }: { path: string }) {
       <div className="panel" style={{ marginTop: 24 }}>
         <div className="channels-toolbar" style={{ marginBottom: 12 }}>
           <div>
-            <h3 style={{ margin: 0 }}>{P('本站上游 · Grok/OpenAI')}</h3>
+            <h3 style={{ margin: 0 }}>{P('本站上游 · Grok/OpenAI（非 Aily 号池）')}</h3>
             <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
-              {P('Grok / OpenAI 兼容上游（api_key 或粘贴 OAuth JSON）。命中账号白名单/映射的 /v1 请求走内嵌兼容中继，不经 CPA。')}
+              {P('Grok / OpenAI 兼容上游（aily-accounts.json）。≠ 上方 Aily 号池；≠ CPA 凭证。命中白名单/映射的 /v1 走内嵌兼容中继。')}
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

@@ -89,6 +89,7 @@ import { createAilyManager, loadAilyConfig } from './aily.js'
 import { createAilyUpstream } from './ailyUpstream.js'
 import { createAilyModelRoutingStore, publicModelList, normalizeModelRouting, exposedModelNames, isAilyPrefixed, stripAilyPrefix } from './ailyModelRouting.js'
 import { createAilyAccountsStore } from './ailyAccounts.js'
+import { createAilyCredentialsStore } from './ailyCredentials.js'
 import { createAilyCompat } from './ailyCompat.js'
 import { createAilyOauth } from './ailyOauth.js'
 import { createQuotaSnapshotStore } from './quotaSnapshots.js'
@@ -235,20 +236,170 @@ const ailyModelRouting = createAilyModelRoutingStore(
 const ailyAccounts = createAilyAccountsStore(
   process.env.AILY_ACCOUNTS_PATH || path.join(__dirname, 'data', 'aily-accounts.json'),
 )
+const ailyCredentials = createAilyCredentialsStore(
+  process.env.AILY_CREDENTIALS_PATH || path.join(__dirname, 'data', 'aily-credentials.json'),
+)
+try {
+  const mig = ailyCredentials.migrateFromAuthFile(ailyManager.cfg.authFile)
+  if (mig.migrated) {
+    console.log(`[aily-pool] migrated .aily → account #${mig.account?.id} (${mig.account?.name || ''})`)
+  }
+} catch (e) {
+  console.warn('[aily-pool] migrate skipped:', e?.message || e)
+}
 const ailyCompat = createAilyCompat({
   getAccounts: () => ailyAccounts.loadAccounts(),
 })
 const ailyOauth = createAilyOauth({ accountsStore: ailyAccounts })
+
+async function refreshAilyPoolAccount(id) {
+  const acc = ailyCredentials.get(id)
+  if (!acc) return { ok: false, message: '账号不存在' }
+  const rt = String(acc.refresh_token || '').trim()
+  if (!rt) return { ok: false, message: 'No refresh_token stored' }
+  const base = ailyCredentials.resolveBase(acc)
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 20000)
+  try {
+    const res = await fetch(`${base}/api/v1/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: rt }),
+      signal: ctrl.signal,
+    })
+    const json = await res.json().catch(() => null)
+    const data = json?.data
+    if (res.ok && data?.access_token) {
+      ailyCredentials.setTokens(id, {
+        access_token: data.access_token,
+        refresh_token: data.refresh_token || undefined,
+      })
+      const primary = ailyCredentials
+        .loadAccounts()
+        .filter((a) => a.enabled !== false)
+        .sort((a, b) => a.id - b.id)[0]
+      if (primary) ailyCredentials.syncAccountToAuthFile(primary.id, ailyManager.cfg.authFile)
+      return { ok: true, message: '已刷新 Token', upstream: base, account_id: id }
+    }
+    return {
+      ok: false,
+      status: res.status,
+      message: json?.message || json?.errorMessage || `HTTP ${res.status}`,
+    }
+  } catch (e) {
+    return { ok: false, message: e?.message || String(e) }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function testAilyPoolAccount(id) {
+  const acc = ailyCredentials.get(id)
+  if (!acc) return { ok: false, message: '账号不存在' }
+  let token = String(acc.access_token || '').trim()
+  if (!token && acc.refresh_token) {
+    const refreshed = await refreshAilyPoolAccount(id)
+    if (!refreshed.ok) return { ok: false, message: refreshed.message || 'refresh failed' }
+    token = String(ailyCredentials.get(id)?.access_token || '').trim()
+  }
+  if (!token) return { ok: false, message: 'No access_token stored' }
+  const base = ailyCredentials.resolveBase(ailyCredentials.get(id) || acc)
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 15000)
+  try {
+    const res = await fetch(`${base}/api/v1/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: ctrl.signal,
+    })
+    const json = await res.json().catch(() => null)
+    const user =
+      json?.data?.nickname ||
+      json?.data?.email ||
+      json?.data?.user?.nickname ||
+      json?.data?.user?.email ||
+      null
+    if (res.ok && user && !acc.email) {
+      try {
+        ailyCredentials.update(id, { email: user })
+      } catch {
+        /* ignore */
+      }
+    }
+    if (res.ok) ailyCredentials.clearCooldown(id)
+    return {
+      ok: res.ok,
+      status: res.status,
+      message: res.ok ? `连接正常${user ? ` · ${user}` : ''}` : json?.message || `HTTP ${res.status}`,
+      user,
+      upstream: base,
+      account_id: id,
+    }
+  } catch (e) {
+    return { ok: false, message: e?.message || String(e), account_id: id }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 const ailyUpstream = createAilyUpstream({
-  getAccessToken: () => ailyManager.getAccessToken(),
-  getRefreshToken: () => ailyManager.getRefreshToken(),
-  getUpstreamBase: () => ailyManager.getUpstreamBase(),
+  getAccessToken: () => {
+    const peek = ailyCredentials.peekAilyAccount({})
+    if (peek?.access_token) return peek.access_token
+    return ailyManager.getAccessToken()
+  },
+  getRefreshToken: () => {
+    const peek = ailyCredentials.peekAilyAccount({})
+    if (peek?.refresh_token) return peek.refresh_token
+    return ailyManager.getRefreshToken()
+  },
+  getUpstreamBase: () => {
+    const peek = ailyCredentials.peekAilyAccount({})
+    if (peek) return ailyCredentials.resolveBase(peek)
+    return ailyManager.getUpstreamBase()
+  },
   saveAuth: (patch) => ailyManager.saveAuth(patch),
   refreshToken: () => ailyManager.refreshToken(),
+  pickAilyAccount: (opts) => ailyCredentials.pickAilyAccount(opts),
+  peekAilyAccount: (opts) => ailyCredentials.peekAilyAccount(opts),
+  getAccount: (id) => ailyCredentials.get(id),
+  refreshAccount: (id) => refreshAilyPoolAccount(id),
+  markUnschedulable: (id, reason, ms) => ailyCredentials.markUnschedulable(id, reason, ms),
+  resolveAccountBase: (acc) => ailyCredentials.resolveBase(acc),
+  DEFAULT_COOLDOWN_MS: ailyCredentials.DEFAULT_COOLDOWN_MS,
+  REFRESH_FAIL_COOLDOWN_MS: ailyCredentials.REFRESH_FAIL_COOLDOWN_MS,
   getModelRouting: () => ailyModelRouting.get(),
   resolveCompat: (model) => ailyCompat.resolve(model),
 })
 ailyManager.attachUpstream(ailyUpstream)
+
+const AILY_POOL_REFRESH_INTERVAL_MS = Number(process.env.AILY_POOL_REFRESH_INTERVAL_MS || 10 * 60 * 1000)
+setInterval(() => {
+  ;(async () => {
+    for (const a of ailyCredentials.loadAccounts()) {
+      if (a.enabled === false || !a.refresh_token || !a.access_token) continue
+      try {
+        const part = String(a.access_token).split('.')[1]
+        if (!part) continue
+        const payload = JSON.parse(
+          Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'),
+        )
+        const exp = Number(payload?.exp)
+        if (!Number.isFinite(exp)) continue
+        if (exp * 1000 - Date.now() > 10 * 60 * 1000) continue
+        const r = await refreshAilyPoolAccount(a.id)
+        if (!r.ok) {
+          ailyCredentials.markUnschedulable(
+            a.id,
+            `auto_refresh: ${r.message}`,
+            ailyCredentials.REFRESH_FAIL_COOLDOWN_MS,
+          )
+        }
+      } catch (e) {
+        console.warn('[aily-pool] auto-refresh', a.id, e?.message || e)
+      }
+    }
+  })().catch((e) => console.warn('[aily-pool] auto-refresh loop', e?.message || e))
+}, Math.max(60_000, AILY_POOL_REFRESH_INTERVAL_MS)).unref?.()
 
 /**
  * Supported price-book catalog: CPA billing /v1/models + aily/{id} when routing enabled.
@@ -2480,12 +2631,18 @@ app.get('/api/admin/aily/status', requireAdmin, async (_req, res) => {
     res.json(
       ok({
         ...ailyManager.adminStatus(),
+        pool: {
+          items: ailyCredentials.listPublic(),
+          metrics: ailyCredentials.poolMetrics(),
+          strategy: ailyCredentials.getStrategy(),
+        },
         cpa_openai_compatibility: openaiCompat,
         architecture: {
           primary: 'client → openapi /v1 → BFF → CPA billing :8320 → CPA',
-          aily_credentials: 'shared .aily auth file + upstream APIs (not site login)',
+          aily_credentials: 'multi-account pool server/data/aily-credentials.json (+ migrate from .aily)',
           selective_route:
-            'AILY_MODEL_ROUTES → BFF in-process Aily bridge (api.yiyu.pro / api.aily.pro + .aily tokens)',
+            'AILY_MODEL_ROUTES → BFF in-process Aily bridge with round-robin pool',
+          load_balance: 'AILY_LOAD_BALANCE_STRATEGY=round-robin|priority',
           legacy_adapter: 'separate aily-openai-adapter :8088 is optional/legacy; not required',
         },
       }),
@@ -2639,6 +2796,180 @@ app.put('/api/admin/aily/models', requireAdmin, async (req, res) => {
   }
 })
 
+
+
+/* ── Aily credential pool (multi-account + RR) — NOT grok/openai aily-accounts.json ── */
+app.get('/api/admin/aily/pool', requireAdmin, (_req, res) => {
+  try {
+    res.json(
+      ok({
+        items: ailyCredentials.listPublic(),
+        metrics: ailyCredentials.poolMetrics(),
+        strategy: ailyCredentials.getStrategy(),
+        auth_file: ailyManager.cfg.authFile,
+        note: 'Aily号池（本站上游）≠ Grok/OpenAI上游 ≠ CPA凭证',
+      }),
+    )
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'aily pool list failed'))
+  }
+})
+
+app.get('/api/admin/aily/pool/metrics', requireAdmin, (_req, res) => {
+  try {
+    res.json(ok(ailyCredentials.poolMetrics()))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'metrics failed'))
+  }
+})
+
+app.post('/api/admin/aily/pool', requireAdmin, (req, res) => {
+  try {
+    const row = ailyCredentials.create(req.body || {})
+    res.json(ok(row))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || 'create failed'))
+  }
+})
+
+app.get('/api/admin/aily/pool/:id', requireAdmin, (req, res) => {
+  try {
+    const a = ailyCredentials.get(req.params.id)
+    if (!a) return res.status(404).json(fail('账号不存在'))
+    res.json(
+      ok({
+        ...ailyCredentials.publicAccount(a),
+        full_access_token: a.access_token || '',
+        full_refresh_token: a.refresh_token || '',
+      }),
+    )
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'get failed'))
+  }
+})
+
+app.put('/api/admin/aily/pool/:id', requireAdmin, (req, res) => {
+  try {
+    const row = ailyCredentials.update(req.params.id, req.body || {})
+    const primary = ailyCredentials
+      .loadAccounts()
+      .filter((a) => a.enabled !== false)
+      .sort((a, b) => a.id - b.id)[0]
+    if (primary && primary.id === row.id) {
+      ailyCredentials.syncAccountToAuthFile(primary.id, ailyManager.cfg.authFile)
+    }
+    res.json(ok(row))
+  } catch (err) {
+    const status = String(err?.message || '').includes('不存在') ? 404 : 400
+    res.status(status).json(fail(err?.message || 'update failed'))
+  }
+})
+
+app.delete('/api/admin/aily/pool/:id', requireAdmin, (req, res) => {
+  try {
+    const row = ailyCredentials.remove(req.params.id)
+    res.json(ok(row))
+  } catch (err) {
+    const status = String(err?.message || '').includes('不存在') ? 404 : 400
+    res.status(status).json(fail(err?.message || 'delete failed'))
+  }
+})
+
+app.post('/api/admin/aily/pool/:id/enable', requireAdmin, (req, res) => {
+  try {
+    const enabled = req.body?.enabled !== false
+    const row = ailyCredentials.update(req.params.id, {
+      enabled,
+      ...(enabled ? { cooldown_until: null, last_error: null } : {}),
+    })
+    res.json(ok(row))
+  } catch (err) {
+    const status = String(err?.message || '').includes('不存在') ? 404 : 400
+    res.status(status).json(fail(err?.message || 'enable failed'))
+  }
+})
+
+app.post('/api/admin/aily/pool/:id/tokens', requireAdmin, (req, res) => {
+  try {
+    const body = req.body || {}
+    const row = ailyCredentials.setTokens(req.params.id, {
+      access_token: body.access_token,
+      refresh_token: body.refresh_token,
+      email: body.email,
+      aily_base_url: body.aily_base_url,
+    })
+    ailyCredentials.syncAccountToAuthFile(row.id, ailyManager.cfg.authFile)
+    res.json(ok(row))
+  } catch (err) {
+    const status = String(err?.message || '').includes('不存在') ? 404 : 400
+    res.status(status).json(fail(err?.message || 'save tokens failed'))
+  }
+})
+
+app.post('/api/admin/aily/pool/:id/refresh', requireAdmin, async (req, res) => {
+  try {
+    const result = await refreshAilyPoolAccount(req.params.id)
+    res.status(result.ok ? 200 : 400).json(result.ok ? ok(result) : fail(result.message))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'refresh failed'))
+  }
+})
+
+app.post('/api/admin/aily/pool/:id/test', requireAdmin, async (req, res) => {
+  try {
+    const result = await testAilyPoolAccount(req.params.id)
+    res.status(result.ok ? 200 : 400).json(result.ok ? ok(result) : fail(result.message))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'test failed'))
+  }
+})
+
+app.post('/api/admin/aily/pool/:id/login', requireAdmin, async (req, res) => {
+  try {
+    const id = req.params.id
+    const acc = ailyCredentials.get(id)
+    if (!acc) return res.status(404).json(fail('账号不存在'))
+    const email = String(req.body?.email || '').trim()
+    const code = String(req.body?.code || '').trim()
+    if (!email || !code) return res.status(400).json(fail('email and code required'))
+    const baseUrl = req.body?.aily_base_url
+    const result = await ailyManager.emailCodeLogin(email, code, baseUrl)
+    if (!result.ok) return res.status(401).json(fail(result.message))
+    const auth = ailyManager.readAuth()
+    const row = ailyCredentials.setTokens(id, {
+      access_token: auth.access_token,
+      refresh_token: auth.refresh_token,
+      email,
+      aily_base_url: baseUrl || undefined,
+    })
+    ailyCredentials.update(id, { name: acc.name || email, email })
+    res.json(ok({ ...result, account: ailyCredentials.publicAccount(ailyCredentials.get(id)) || row }))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'pool login failed'))
+  }
+})
+
+app.post('/api/admin/aily/pool/:id/send-code', requireAdmin, async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim()
+    if (!email) return res.status(400).json(fail('email required'))
+    const acc = ailyCredentials.get(req.params.id)
+    const base = req.body?.aily_base_url || acc?.aily_base_url
+    const result = await ailyManager.sendEmailCode(email, base)
+    res.status(result.ok ? 200 : result.status || 400).json(result.ok ? ok(result) : fail(result.message))
+  } catch (err) {
+    res.status(502).json(fail(err?.message || 'send-code failed'))
+  }
+})
+
+app.post('/api/admin/aily/pool/migrate', requireAdmin, (_req, res) => {
+  try {
+    const result = ailyCredentials.migrateFromAuthFile(ailyManager.cfg.authFile)
+    res.json(ok(result))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'migrate failed'))
+  }
+})
 
 /* ── Aily upstream accounts (Grok / OpenAI) — separate from CPA auth-files ── */
 app.get('/api/admin/aily/accounts', requireAdmin, (_req, res) => {
@@ -4123,6 +4454,6 @@ app.listen(PORT, HOST, () => {
   console.log(
     `[server] site-credits checkin=${creditStore.getConfig().checkin_enabled} grant=${creditStore.getConfig().daily_grant_min}-${creditStore.getConfig().daily_grant_max} codes=${creditStore.listCodes().length}`,
   )
-  console.log(`[server] local_users=${localUserStore.listUsers().length} aily_bridge=embedded aily_upstream=${ailyManager.getUpstreamBase()} aily_routes=${ailyManager.cfg.modelRoutes.length}`)
+  console.log(`[server] local_users=${localUserStore.listUsers().length} aily_bridge=embedded aily_upstream=${ailyManager.getUpstreamBase()} aily_routes=${ailyManager.cfg.modelRoutes.length} aily_pool=${ailyCredentials.poolMetrics().total} lb=${ailyCredentials.getStrategy()}`)
   console.log(`[server] cpaCollector=${cpaCollector.getStatus().ok ? 'ok' : 'pending'} siteUsage=${siteUsage.stats().events}`)
 })
