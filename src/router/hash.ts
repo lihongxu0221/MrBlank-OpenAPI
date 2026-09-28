@@ -82,11 +82,10 @@ export const GATED_ROUTES = [
 
 export const ADMIN_ROUTES = [
   '/admin',
-  '/admin/accounts',
   '/admin/settings',
-  '/admin/providers',
   '/admin/oauth',
-  '/admin/plugins',
+  '/admin/accounts',
+  '/admin/providers',
   '/admin/logs',
   '/admin/monitoring',
   '/admin/account-actions',

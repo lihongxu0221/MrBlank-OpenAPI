@@ -8,7 +8,7 @@
  *
  * CPA itself has NO quota-snapshots / account-window-usage (404 probed).
  */
-import { cpaApiCall, queryCpampQuotaSnapshots } from './cpa.js'
+import { cpaApiCall, queryCpampQuotaSnapshots, queryCpampAccountWindowUsage } from './cpa.js'
 
 const ANTIGRAVITY_QUOTA_URLS = [
   'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
@@ -147,9 +147,11 @@ export function mapCpampWindow(w, provider) {
   if (remaining_ratio != null) remaining_ratio = Math.max(0, Math.min(1, remaining_ratio / 100))
   else if (usedPct != null) remaining_ratio = Math.max(0, Math.min(1, 1 - usedPct / 100))
 
+  const startMs = numOrNull(w.cycle_start_ms ?? w.cycleStartMs)
   const endMs = numOrNull(w.cycle_end_ms ?? w.cycleEndMs)
   const resets_at = endMs != null && endMs > 0 ? new Date(endMs).toISOString() : null
   const risk = riskFromRatio(remaining_ratio)
+  const prev = w.previous_cycle ?? w.previousCycle
   return {
     label: labelCpampWindow(w, provider),
     window: w.provider_window_id != null ? String(w.provider_window_id) : null,
@@ -165,6 +167,10 @@ export function mapCpampWindow(w, provider) {
     forecast_tokens: numOrNull(w.forecast_tokens ?? w.forecastTokens),
     window_kind: w.window_kind != null ? String(w.window_kind) : null,
     model_scope_key: w.model_scope_key != null ? String(w.model_scope_key) : null,
+    model_scope_kind: w.model_scope_kind != null ? String(w.model_scope_kind) : w.modelScopeKind != null ? String(w.modelScopeKind) : null,
+    cycle_start_ms: startMs,
+    cycle_end_ms: endMs,
+    previous_cycle: prev && typeof prev === 'object' ? prev : null,
     stale: !!w.stale,
     source: 'cpamp:quota-snapshots',
   }
@@ -272,7 +278,162 @@ export function mergeCpampQuotaIntoAccounts(accounts, quotaByKey) {
 }
 
 /**
- * Fetch quota snapshots from CPAMP (literal SPA Yd.query).
+ * Build CPAMP account-window-usage targets from snapshot windows (SPA UO subset).
+ * Includes current (+ previous when previous_cycle bounds exist).
+ */
+export function buildWindowUsageTargets(accounts, byKey) {
+  const targets = []
+  const list = Array.isArray(accounts) ? accounts : []
+  for (const acct of list) {
+    const rowKey = String(acct?.row_key || '').trim()
+    if (!rowKey) continue
+    const hit = byKey.get(rowKey)
+    const windows = hit?.quota_windows
+    if (!Array.isArray(windows) || !windows.length) continue
+    const snap = acct.account && typeof acct.account === 'object' ? acct.account : {}
+    for (const w of windows) {
+      const pid = String(w.window || '').trim()
+      if (!pid) continue
+      const scopeKind = String(w.model_scope_kind || 'all')
+      const scopeKey = w.model_scope_key != null ? String(w.model_scope_key) : ''
+      const model_scope = { kind: scopeKind, complete: true }
+      if (scopeKey) model_scope.key = scopeKey
+      const periods = []
+      if (w.cycle_start_ms && w.cycle_end_ms) {
+        periods.push(['current', w.cycle_start_ms, w.cycle_end_ms])
+      }
+      const prev = w.previous_cycle
+      if (prev && typeof prev === 'object') {
+        const pfrom = numOrNull(prev.actual_start_ms ?? prev.actualStartMs ?? prev.scheduled_start_ms ?? prev.scheduledStartMs)
+        const pto = numOrNull(prev.actual_end_ms ?? prev.actualEndMs ?? prev.scheduled_end_ms ?? prev.scheduledEndMs)
+        if (pfrom && pto) periods.push(['previous', pfrom, pto])
+      }
+      for (const [period, fromMs, toMs] of periods) {
+        const request_key = `${rowKey}|${pid}|${period}|${scopeKind}:${scopeKey}`
+        targets.push({
+          request_key,
+          row_key: rowKey,
+          window_key: pid,
+          provider_window_id: pid,
+          period,
+          from_ms: fromMs,
+          to_ms: toMs,
+          model_scope,
+          account_snapshot: snap.account_snapshot ?? '',
+          auth_label_snapshot: snap.auth_label_snapshot ?? '',
+          auth_file_snapshot: snap.auth_file_snapshot ?? rowKey,
+          auth_provider_snapshot: snap.auth_provider_snapshot ?? String(acct.provider || ''),
+          auth_account_id_snapshot: snap.auth_account_id_snapshot ?? '',
+          auth_project_id_snapshot: snap.auth_project_id_snapshot ?? '',
+          auth_index: snap.auth_index ?? '',
+          source: snap.source ?? rowKey,
+        })
+      }
+    }
+  }
+  return targets
+}
+
+function usageTrusted(item) {
+  if (!item || item.matched !== true) return null
+  if (String(item.scope_match_status ?? 'complete') !== 'complete') return null
+  const requests = numOrNull(item.total_requests ?? item.totalRequests)
+  const tokens = numOrNull(item.total_tokens ?? item.totalTokens)
+  const cost = numOrNull(item.total_cost ?? item.totalCost)
+  if (requests == null || tokens == null || cost == null) return null
+  if (requests < 0 || tokens < 0 || cost < 0) return null
+  return { requests, tokens, cost }
+}
+
+/** CPAMP UEe — forecast from current×usedPercent, else previous cycle. */
+export function forecastFromUsage({ usedPercent, current, previous }) {
+  const curOk = current && Number.isFinite(current.requests) && Number.isFinite(current.tokens) && Number.isFinite(current.cost)
+  const pctOk = usedPercent != null && Number.isFinite(usedPercent) && usedPercent > 0 && usedPercent <= 100
+  if (curOk && pctOk) {
+    const scale = 100 / usedPercent
+    const out = {
+      requests: Math.max(current.requests, Math.round(current.requests * scale)),
+      tokens: Math.max(current.tokens, Math.round(current.tokens * scale)),
+      cost: Math.max(current.cost, Number((current.cost * scale).toFixed(6))),
+    }
+    if (Number.isFinite(out.requests) && Number.isFinite(out.tokens) && Number.isFinite(out.cost)) return out
+  }
+  if (previous && Number.isFinite(previous.requests) && Number.isFinite(previous.tokens) && Number.isFinite(previous.cost)) {
+    return { requests: previous.requests, tokens: previous.tokens, cost: previous.cost }
+  }
+  return null
+}
+
+/**
+ * Merge account-window-usage into quota_windows (CPAMP GEe fields).
+ * Strips join-only fields from windows returned to the client.
+ */
+export function applyWindowUsageToQuotaMap(byKey, usageItems) {
+  const byRequest = new Map()
+  for (const it of Array.isArray(usageItems) ? usageItems : []) {
+    const rk = String(it?.request_key || '').trim()
+    if (rk) byRequest.set(rk, it)
+  }
+  for (const [rowKey, hit] of byKey.entries()) {
+    if (!hit?.quota_windows?.length) continue
+    const nextWindows = hit.quota_windows.map((w) => {
+      const pid = String(w.window || '').trim()
+      const scopeKind = String(w.model_scope_kind || 'all')
+      const scopeKey = w.model_scope_key != null ? String(w.model_scope_key) : ''
+      const curKey = `${rowKey}|${pid}|current|${scopeKind}:${scopeKey}`
+      const prevKey = `${rowKey}|${pid}|previous|${scopeKind}:${scopeKey}`
+      const current = usageTrusted(byRequest.get(curKey))
+      const previous = usageTrusted(byRequest.get(prevKey))
+      let used_cost = w.used_cost ?? null
+      let used_tokens = w.used_tokens ?? null
+      let forecast_cost = w.forecast_cost ?? null
+      let forecast_tokens = w.forecast_tokens ?? null
+      if (current) {
+        used_cost = current.cost
+        used_tokens = current.tokens
+        const forecast = forecastFromUsage({
+          usedPercent: w.used_percent,
+          current,
+          previous,
+        })
+        // CPAMP: only expose forecast when trusted current exists and forecast >= actual
+        if (
+          forecast &&
+          forecast.requests >= current.requests &&
+          forecast.tokens >= current.tokens &&
+          forecast.cost + 1e-9 >= current.cost
+        ) {
+          forecast_cost = forecast.cost
+          forecast_tokens = forecast.tokens
+        }
+      }
+      return {
+        label: w.label,
+        window: w.window,
+        remaining_ratio: w.remaining_ratio,
+        remaining: w.remaining,
+        limit: w.limit,
+        resets_at: w.resets_at,
+        risk: w.risk,
+        used_percent: w.used_percent,
+        used_cost,
+        used_tokens,
+        forecast_cost,
+        forecast_tokens,
+        window_kind: w.window_kind,
+        model_scope_key: w.model_scope_key,
+        stale: w.stale,
+        source: current ? 'cpamp:quota-snapshots+window-usage' : w.source,
+      }
+    })
+    byKey.set(rowKey, { ...hit, quota_windows: nextWindows })
+  }
+  return byKey
+}
+
+/**
+ * Fetch quota snapshots from CPAMP (literal SPA Yd.query),
+ * then enrich footers via account-window-usage (SPA Jd.getAccountWindowUsage / GEe).
  */
 export async function fetchCpampAccountQuotas(cfg, authFilesPayload) {
   if (!cfg?.adminKey) {
@@ -287,7 +448,40 @@ export async function fetchCpampAccountQuotas(cfg, authFilesPayload) {
     include_inactive: true,
     now_ms: Date.now(),
   })
-  const byKey = mapCpampQueryToAccountQuota(result)
+  let byKey = mapCpampQueryToAccountQuota(result)
+  let usageMeta = { ok: false, attempted: false }
+  try {
+    const targets = buildWindowUsageTargets(accounts, byKey)
+    usageMeta = { ok: false, attempted: true, targets: targets.length }
+    if (targets.length) {
+      const usage = await queryCpampAccountWindowUsage(cfg, { windows: targets })
+      const items = Array.isArray(usage?.items) ? usage.items : []
+      byKey = applyWindowUsageToQuotaMap(byKey, items)
+      const withCost = [...byKey.values()].filter((v) =>
+        (v.quota_windows || []).some((w) => w.used_tokens != null || w.used_cost != null),
+      ).length
+      usageMeta = {
+        ok: true,
+        attempted: true,
+        targets: targets.length,
+        items: items.length,
+        with_cost: withCost,
+        source: 'cpamp:account-window-usage',
+      }
+    } else {
+      usageMeta = { ok: true, attempted: true, targets: 0, skipped: true }
+      byKey = applyWindowUsageToQuotaMap(byKey, [])
+    }
+  } catch (err) {
+    usageMeta = {
+      ok: false,
+      attempted: true,
+      error: err?.message || String(err),
+      source: 'cpamp:account-window-usage',
+    }
+    // Still strip join-only fields so clients never see cycle_start_ms etc.
+    byKey = applyWindowUsageToQuotaMap(byKey, [])
+  }
   return {
     byKey,
     meta: {
@@ -296,6 +490,7 @@ export async function fetchCpampAccountQuotas(cfg, authFilesPayload) {
       with_windows: [...byKey.values()].filter((v) => v.quota_windows?.length).length,
       generated_at_ms: result?.generated_at_ms ?? null,
       source: 'cpamp:quota-snapshots',
+      window_usage: usageMeta,
     },
     raw: result,
   }

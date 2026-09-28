@@ -15,7 +15,6 @@ import {
   SlidersHorizontal,
   KeySquare,
   LogIn,
-  Puzzle,
   FileText,
   LineChart,
   AlertTriangle,
@@ -29,11 +28,10 @@ import { useSession } from '../../hooks/useStore'
 
 const ITEMS = [
   { path: '/admin', label: '管理概览', icon: LayoutDashboard },
-  { path: '/admin/accounts', label: '凭证管理', icon: KeyRound },
   { path: '/admin/settings', label: '基础设置', icon: SlidersHorizontal },
-  { path: '/admin/providers', label: 'AI 提供商', icon: KeySquare },
   { path: '/admin/oauth', label: 'OAuth 登录', icon: LogIn },
-  { path: '/admin/plugins', label: '插件管理', icon: Puzzle },
+  { path: '/admin/accounts', label: '凭证管理', icon: KeyRound },
+  { path: '/admin/providers', label: 'AI 提供商', icon: KeySquare },
   { path: '/admin/logs', label: '日志查看', icon: FileText },
   { path: '/admin/monitoring', label: '请求监控', icon: LineChart },
   { path: '/admin/account-actions', label: '认证异常', icon: AlertTriangle },

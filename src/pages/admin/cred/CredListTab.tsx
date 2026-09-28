@@ -974,12 +974,13 @@ function QuotaBars({ windows, layout }: { windows: QuotaWindow[]; layout: 'grid'
             : risk === 'low' || risk === 'critical' || (pct != null && pct < 0.5)
               ? 'warn'
               : 'good'
+        // CPAMP GEe: trusted current → show $ / tokens; else empty (we still render
+        // `$0.00 / —` so every 5h+weekly cell keeps left meta + right reset).
         const hasCost = w.used_cost != null && Number.isFinite(Number(w.used_cost))
         const hasTokens = w.used_tokens != null && Number.isFinite(Number(w.used_tokens))
         const hasForecastCost = w.forecast_cost != null && Number.isFinite(Number(w.forecast_cost))
         const hasForecastTokens = w.forecast_tokens != null && Number.isFinite(Number(w.forecast_tokens))
-        const isGemini = /gemini/i.test(w.label || '')
-        const showUsage = hasCost || hasTokens || isGemini
+        const showUsage = hasCost || hasTokens
         const showForecast = hasForecastCost || hasForecastTokens
         const resetLabel = w.resets_at ? fmtResetRelative(w.resets_at) : ''
         return (
@@ -1004,14 +1005,18 @@ function QuotaBars({ windows, layout }: { windows: QuotaWindow[]; layout: 'grid'
             </div>
             <div className="cred-quota-window-foot">
               {showUsage ? (
-                <span className="cred-quota-extra-bit is-cost" title={P('费用')}>
+                <span className="cred-quota-extra-bit is-cost" title={P('当前预计金额 / Token')}>
                   <i className="is-usage" aria-hidden />
                   {fmtMoney(hasCost ? w.used_cost : 0)}
                   {' / '}
                   {hasTokens ? fmtCompact(w.used_tokens) : '—'}
                 </span>
               ) : (
-                <span className="cred-quota-window-extra-spacer" />
+                <span className="cred-quota-extra-bit is-cost is-empty" title={P('当前预计金额 / Token')}>
+                  <i className="is-usage" aria-hidden />
+                  {fmtMoney(0)}
+                  {' / —'}
+                </span>
               )}
               {showForecast ? (
                 <span className="cred-quota-extra-bit is-forecast" title={P('预测')}>

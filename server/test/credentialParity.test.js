@@ -30,6 +30,9 @@ import {
   mapAntigravityGroupsToWindows,
   isListQuotaWindow,
   parseAntigravitySubscription,
+  buildWindowUsageTargets,
+  forecastFromUsage,
+  applyWindowUsageToQuotaMap,
 } from '../cpampQuota.js'
 
 test('deriveDisplayStatus maps reauth / disabled / running', () => {
@@ -502,4 +505,82 @@ test('mergeCpampQuotaIntoAccounts keeps plan_type from hit without windows', () 
   const byKey = new Map([['a.json', { plan_type: 'pro', quota_windows: null, quota: null }]])
   const items = mergeCpampQuotaIntoAccounts([{ name: 'a.json', provider: 'antigravity', plan_type: null }], byKey)
   assert.equal(items[0].plan_type, 'pro')
+})
+
+test('forecastFromUsage scales by used_percent (CPAMP UEe)', () => {
+  const f = forecastFromUsage({
+    usedPercent: 50,
+    current: { requests: 10, tokens: 1000, cost: 0 },
+    previous: null,
+  })
+  assert.equal(f.tokens, 2000)
+  assert.equal(f.requests, 20)
+  assert.equal(f.cost, 0)
+})
+
+test('applyWindowUsageToQuotaMap fills used/forecast for matched windows', () => {
+  const byKey = mapCpampQueryToAccountQuota({
+    items: [
+      {
+        row_key: 'a.json',
+        provider: 'antigravity',
+        windows: [
+          {
+            provider_window_id: 'gemini-models:gemini-5h',
+            window_kind: 'five_hour',
+            window_mode: 'fixed',
+            model_scope_kind: 'family',
+            model_scope_key: 'gemini',
+            remaining_percent: 50,
+            used_percent: 50,
+            cycle_start_ms: 1000,
+            cycle_end_ms: 2000,
+          },
+          {
+            provider_window_id: 'claude-and-gpt-models:3p-5h',
+            window_kind: 'five_hour',
+            window_mode: 'fixed',
+            model_scope_kind: 'family',
+            model_scope_key: 'claude_gpt',
+            remaining_percent: 100,
+            used_percent: 0,
+            cycle_start_ms: 1000,
+            cycle_end_ms: 2000,
+          },
+        ],
+      },
+    ],
+  })
+  const accounts = buildCpampQueryAccounts({
+    files: [{ name: 'a.json', provider: 'antigravity', email: 'a@b.c', auth_index: '1' }],
+  })
+  const targets = buildWindowUsageTargets(accounts, byKey)
+  assert.ok(targets.length >= 2)
+  applyWindowUsageToQuotaMap(byKey, [
+    {
+      request_key: 'a.json|gemini-models:gemini-5h|current|family:gemini',
+      matched: true,
+      scope_match_status: 'complete',
+      total_requests: 10,
+      total_tokens: 128900000,
+      total_cost: 0,
+    },
+    {
+      request_key: 'a.json|claude-and-gpt-models:3p-5h|current|family:claude_gpt',
+      matched: false,
+      scope_match_status: 'complete',
+      total_requests: 0,
+      total_tokens: 0,
+      total_cost: 0,
+    },
+  ])
+  const wins = byKey.get('a.json').quota_windows
+  const gemini = wins.find((w) => /gemini/i.test(w.label))
+  const claude = wins.find((w) => /claude/i.test(w.label))
+  assert.equal(gemini.used_tokens, 128900000)
+  assert.equal(gemini.used_cost, 0)
+  assert.equal(gemini.forecast_tokens, 257800000)
+  assert.equal(claude.used_tokens, null)
+  assert.equal(claude.used_cost, null)
+  assert.equal(claude.cycle_start_ms, undefined)
 })

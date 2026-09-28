@@ -2876,6 +2876,7 @@ table.data tr:last-child td {
   background: color-mix(in srgb, #a78bfa 55%, transparent);
 }
 .cred-quota-extra-bit.is-forecast { opacity: 0.82; }
+.cred-quota-extra-bit.is-empty { opacity: 0.55; font-weight: 500; }
 .cred-cell-actions {
   display: flex; justify-content: flex-end; align-items: center;
   /* slightly distinct darker action panel (图1) */

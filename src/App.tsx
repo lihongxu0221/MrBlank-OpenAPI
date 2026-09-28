@@ -34,7 +34,6 @@ import { AdminRequestLogPage } from './pages/admin/AdminRequestLogPage'
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage'
 import { AdminProvidersPage } from './pages/admin/AdminProvidersPage'
 import { AdminOauthPage } from './pages/admin/AdminOauthPage'
-import { AdminPluginsPage } from './pages/admin/AdminPluginsPage'
 import { AdminLogsPage } from './pages/admin/AdminLogsPage'
 import { AdminMonitoringPage } from './pages/admin/AdminMonitoringPage'
 import { AdminAccountActionsPage } from './pages/admin/AdminAccountActionsPage'
@@ -135,9 +134,6 @@ export default function App() {
       break
     case '/admin/oauth':
       page = <AdminOauthPage path={path} />
-      break
-    case '/admin/plugins':
-      page = <AdminPluginsPage path={path} />
       break
     case '/admin/logs':
       page = <AdminLogsPage path={path} />

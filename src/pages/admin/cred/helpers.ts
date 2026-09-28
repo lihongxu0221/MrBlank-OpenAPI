@@ -68,8 +68,9 @@ export function fmtCompact(n?: number | null) {
 }
 
 export function fmtMoney(n?: number | null) {
-  if (n == null || !Number.isFinite(Number(n))) return '$ 0.00'
-  return `$ ${Number(n).toFixed(2)}`
+  // CPAMP Vw/Bw — `$0.00` (no space)
+  if (n == null || !Number.isFinite(Number(n))) return '$0.00'
+  return `$${Number(n).toFixed(2)}`
 }
 
 export function fmtPct(n?: number | null) {

@@ -1240,3 +1240,15 @@ export async function writeCpampQuotaSnapshots(cfg, entries) {
     body: { entries: Array.isArray(entries) ? entries : [] },
   })
 }
+
+/**
+ * CPAMP Manager: POST /v0/management/monitoring/account-window-usage (SPA Jd.getAccountWindowUsage).
+ * Body: { windows: [{ request_key, row_key, provider_window_id, period, from_ms, to_ms, model_scope, ...account }] }
+ */
+export async function queryCpampAccountWindowUsage(cfg, { windows } = {}) {
+  if (!cfg.adminKey) throw Object.assign(new Error('CPAMP admin key not configured'), { status: 503 })
+  return cpampFetch(cfg, '/v0/management/monitoring/account-window-usage', {
+    method: 'POST',
+    body: { windows: Array.isArray(windows) ? windows : [] },
+  })
+}
