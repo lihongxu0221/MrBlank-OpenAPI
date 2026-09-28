@@ -249,9 +249,12 @@ export function createAilyCredentialsStore(filePath = defaultPath(), opts = {}) 
     if (!access && !refresh) {
       return { migrated: false, account: null, reason: 'no_tokens' }
     }
-    const email =
-      String(auth.email || jwtPayload(access)?.email || jwtPayload(access)?.sub || '').slice(0, 120) ||
-      ''
+    const payload = jwtPayload(access) || {}
+    let email = String(auth.email || payload.email || '').trim().slice(0, 120)
+    // Ignore non-email junk (e.g. stringified JWT claims objects)
+    if (email.startsWith('{') || email.includes(' ') || (email && !email.includes('@'))) {
+      email = ''
+    }
     const a = normalizeAccount(
       {
         id: 1,
