@@ -298,4 +298,8 @@ test('cred list CSS: no forced 1240 min-width; models panel not height-clipped',
   assert.ok(!/height:\s*100%/.test(panelNoComments))
   assert.ok(/height:\s*auto/.test(panel[0]))
   assert.ok(!/minmax\(280px,\s*3fr\)/.test(css))
+  assert.ok(/minmax\(0,\s*3fr\)/.test(css), 'quota column should be minmax(0, 3fr)')
+  for (const cls of ['.cred-grid-card-header', '.cred-grid-history', '.cred-grid-recent', '.cred-spark-h', '.cred-quota-stack', '.cred-grid-card-footer', '.cred-plan-badge']) {
+    assert.ok(css.includes(cls), `missing ${cls}`)
+  }
 })

@@ -20,6 +20,7 @@ import type { Account, Pool, ViewMode } from './types'
 import {
   accountName,
   deriveListMetrics,
+  formatPlanType,
   fmtCompact,
   fmtMoney,
   fmtPct,
@@ -33,6 +34,7 @@ import {
   sparkSegments,
   usageStats,
 } from './helpers'
+import type { QuotaWindow } from './types'
 
 const STATUS_OPTS = [
   { id: 'all', label: '全部状态' },
@@ -475,42 +477,22 @@ export function CredListTab(props: CredListTabProps) {
         </div>
       ) : (
         <div className="cred-grid-list">
-          {pageItems.map((a) => {
-            const name = accountName(a)
-            const hb = healthBadge(a)
-            const usage = usageStats(a)
-            return (
-              <article key={a.id || name} className={`cred-grid-card panel ${selected[name] ? 'is-selected' : ''}`}>
-                <div className="cred-grid-card-head">
-                  <span className={hb.className}>● {hb.label}</span>
-                  {(selectMode || selected[name]) && (
-                    <input type="checkbox" checked={!!selected[name]} onChange={() => toggleRow(name)} />
-                  )}
-                </div>
-                <h3>{maskEmail(a.email || a.label, showFullId) || maskId(name, showFullId)}</h3>
-                <p className="muted" style={{ fontSize: 12 }}>
-                  <code>{maskId(name, showFullId)}</code> · {providerLabel(String(a.provider || '—'))}
-                </p>
-                <div className="cred-grid-meta">
-                  <span>
-                    {P('套餐')} · {a.plan_type || a.quota?.plan_type || '—'}
-                  </span>
-                  <span>
-                    {fmtCompact(usage.requests)} / {fmtPct(usage.successRate)}
-                  </span>
-                </div>
-                <RowActions
-                  a={a}
-                  busy={busyName === name}
-                  onOpenDetail={onOpenDetail}
-                  onForceRefresh={onForceRefresh}
-                  onDownload={onDownload}
-                  onRemove={onRemove}
-                  onSetDisabled={onSetDisabled}
-                />
-              </article>
-            )
-          })}
+          {pageItems.map((a) => (
+            <CredGridCard
+              key={a.id || accountName(a)}
+              a={a}
+              showFullId={showFullId}
+              selectMode={selectMode}
+              selected={!!selected[accountName(a)]}
+              busy={busyName === accountName(a)}
+              onToggleSelect={() => toggleRow(accountName(a))}
+              onOpenDetail={onOpenDetail}
+              onForceRefresh={onForceRefresh}
+              onDownload={onDownload}
+              onRemove={onRemove}
+              onSetDisabled={onSetDisabled}
+            />
+          ))}
         </div>
       )}
 
@@ -591,7 +573,6 @@ function CredRow({
 }) {
   const name = accountName(a)
   const hb = healthBadge(a)
-  const usage = usageStats(a)
   const sparks = sparkSegments(a)
   const windows = quotaWindows(a)
   const email = maskEmail(a.email || a.label, showFullId) || maskId(name, showFullId)
@@ -628,7 +609,11 @@ function CredRow({
       </div>
 
       <div className="cred-cell-plan">
-        <div className="cred-plan-name">{a.plan_type || a.quota?.plan_type || '—'}</div>
+        {formatPlanType(a.plan_type || a.quota?.plan_type) ? (
+          <span className="cred-plan-badge">{formatPlanType(a.plan_type || a.quota?.plan_type)}</span>
+        ) : (
+          <div className="cred-plan-name">—</div>
+        )}
       </div>
 
       <div className="cred-cell-health">
@@ -648,56 +633,11 @@ function CredRow({
       </div>
 
       <div className="cred-cell-history">
-        <div className="cred-history-grid">
-          <span title={P('请求数')}>✈ {fmtCompact(usage.requests)}</span>
-          <span title={P('费用')}>{fmtMoney(usage.cost)}</span>
-          <span title="Token">⚡ {usage.tokens != null ? fmtCompact(usage.tokens) : '—'}</span>
-          <span title={P('成功率')}>✓ {fmtPct(usage.successRate)}</span>
-        </div>
+        <HistoryMetrics a={a} variant="table" />
       </div>
 
       <div className="cred-cell-quota">
-        {windows.length ? (
-          <div className={`cred-quota-grid cols-${windows.length >= 2 ? 2 : 1}`}>
-            {windows.slice(0, 4).map((w, i) => {
-              const ratio = w.remaining_ratio
-              const pct = ratio != null && Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : null
-              const risk = String(w.risk || '')
-              const barCls =
-                risk === 'exhausted' || (pct != null && pct <= 0)
-                  ? 'bad'
-                  : risk === 'low' || risk === 'critical' || (pct != null && pct < 0.5)
-                    ? 'warn'
-                    : 'good'
-              const extraBits: string[] = []
-              if (w.used_cost != null && Number.isFinite(Number(w.used_cost))) {
-                extraBits.push(fmtMoney(w.used_cost))
-              }
-              if (w.used_tokens != null && Number.isFinite(Number(w.used_tokens))) {
-                extraBits.push(fmtCompact(w.used_tokens))
-              }
-              return (
-                <div key={i} className="cred-quota-window">
-                  <div className="cred-quota-window-head">
-                    <span title={w.label}>{w.label}</span>
-                    <span>{pct != null ? `${P('剩余')} ${Math.round(pct * 100)}%` : P('额度未知')}</span>
-                  </div>
-                  <div className="cred-quota-track">
-                    <i className={barCls} style={{ width: pct != null ? `${pct * 100}%` : '0%' }} />
-                  </div>
-                  {extraBits.length ? (
-                    <div className="cred-quota-window-extra">{extraBits.join(' / ')}</div>
-                  ) : null}
-                  <div className="cred-quota-window-meta">
-                    {w.resets_at ? fmtResetRelative(w.resets_at) : '—'}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        ) : (
-          <div className="cred-quota-empty">{P('暂无额度数据')}</div>
-        )}
+        <QuotaBars windows={windows} layout="grid" />
       </div>
 
       <div className="cred-cell-actions" onClick={(e) => e.stopPropagation()}>
@@ -735,7 +675,16 @@ function RowActions({
   const name = accountName(a)
   return (
     <div className="cred-row-actions">
-      <div className="cred-icon-row">
+      <label className="cred-switch" title={a.disabled ? P('启用') : P('禁用')}>
+        <input
+          type="checkbox"
+          checked={!a.disabled}
+          disabled={busy}
+          onChange={(e) => onSetDisabled(name, !e.target.checked)}
+        />
+        <span />
+      </label>
+      <div className="cred-icon-grid">
         <button type="button" className="cred-icon-btn" disabled={busy} title={P('刷新')} onClick={() => onForceRefresh(name)}>
           <RotateCw size={14} />
         </button>
@@ -752,18 +701,287 @@ function RowActions({
           <Trash2 size={14} />
         </button>
       </div>
-      <button type="button" className="cred-detail-link" onClick={() => onOpenDetail(a)}>
+      <button type="button" className="cred-detail-btn" onClick={() => onOpenDetail(a)}>
         {P('详情')}
       </button>
-      <label className="cred-switch" title={a.disabled ? P('启用') : P('禁用')}>
-        <input
-          type="checkbox"
-          checked={!a.disabled}
-          disabled={busy}
-          onChange={(e) => onSetDisabled(name, !e.target.checked)}
-        />
-        <span />
-      </label>
+    </div>
+  )
+}
+
+function CredGridCard({
+  a,
+  showFullId,
+  selectMode,
+  selected,
+  busy,
+  onToggleSelect,
+  onOpenDetail,
+  onForceRefresh,
+  onDownload,
+  onRemove,
+  onSetDisabled,
+}: {
+  a: Account
+  showFullId: boolean
+  selectMode: boolean
+  selected: boolean
+  busy: boolean
+  onToggleSelect: () => void
+  onOpenDetail: CredListTabProps['onOpenDetail']
+  onForceRefresh: (name: string) => void
+  onDownload: (name: string) => void
+  onRemove: (name: string) => void
+  onSetDisabled: (name: string, disabled: boolean) => void
+}) {
+  const name = accountName(a)
+  const hb = healthBadge(a)
+  const windows = quotaWindows(a)
+  const sparks = sparkSegments(a, 24)
+  const usage = usageStats(a)
+  const email = maskEmail(a.email || a.label, showFullId) || maskId(name, showFullId)
+  const file = maskId(name, showFullId)
+  const plan = formatPlanType(a.plan_type || a.quota?.plan_type)
+  const ok = Number(a.success || 0)
+  const fail = Number(a.failed || 0)
+  const ratePct = usage.successRate != null ? `${(usage.successRate * 100).toFixed(0)}%` : '—'
+
+  return (
+    <article
+      className={`cred-grid-card panel ${selected ? 'is-selected' : ''} ${a.disabled ? 'is-disabled' : ''} ${selectMode ? 'is-select-mode' : ''}`}
+      data-account-card={name}
+      aria-selected={selected}
+      onClick={selectMode ? onToggleSelect : () => onOpenDetail(a, 'overview')}
+    >
+      <div className="cred-grid-card-header">
+        <div className="cred-grid-card-identity">
+          {(selectMode || selected) && (
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={(e) => {
+                e.stopPropagation()
+                onToggleSelect()
+              }}
+              onClick={(e) => e.stopPropagation()}
+            />
+          )}
+          <div className="cred-provider-logo" aria-hidden>
+            <span>{String(a.provider || '?').slice(0, 2).toUpperCase()}</span>
+          </div>
+          <div className="cred-identity-text">
+            <div className="cred-identity-title">{email}</div>
+            <div className="cred-identity-file">
+              <code>{file}</code>
+            </div>
+          </div>
+        </div>
+        <div className="cred-grid-card-header-right" onClick={(e) => e.stopPropagation()}>
+          <span className={hb.className}>{hb.label}</span>
+          <label className="cred-switch" title={a.disabled ? P('启用') : P('禁用')}>
+            <input
+              type="checkbox"
+              checked={!a.disabled}
+              disabled={busy}
+              onChange={(e) => onSetDisabled(name, !e.target.checked)}
+            />
+            <span />
+          </label>
+        </div>
+      </div>
+
+      <div className="cred-grid-card-meta">
+        <div className="cred-grid-card-meta-badges">
+          {plan ? <span className="cred-plan-badge">{plan}</span> : null}
+          <span className="cred-priority-chip">
+            {P('优先级')} {a.priority != null && !Number.isNaN(Number(a.priority)) ? a.priority : 0}
+          </span>
+        </div>
+        <div className={`cred-grid-card-note ${a.note?.trim() ? '' : 'is-empty'}`}>
+          <span aria-hidden>📝</span>
+          <span>{a.note?.trim() || P('备注')}</span>
+        </div>
+      </div>
+
+      <HistoryMetrics a={a} variant="card" onOpen={() => onOpenDetail(a, 'quota')} />
+
+      <div
+        className="cred-grid-recent"
+        role="button"
+        tabIndex={0}
+        onClick={(e) => {
+          e.stopPropagation()
+          onOpenDetail(a, 'overview')
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            e.stopPropagation()
+            onOpenDetail(a, 'overview')
+          }
+        }}
+      >
+        <div className="cred-grid-recent-head">
+          <span className="cred-grid-recent-title">{P('最近状态')}</span>
+          <div className="cred-grid-recent-pills">
+            <span className="ok" title={P('成功')}>
+              + {ok}
+            </span>
+            <span className={fail > 0 ? 'bad' : ''} title={P('失败')}>
+              − {fail}
+            </span>
+            <span className="rate">{ratePct}</span>
+          </div>
+        </div>
+        <div className="cred-spark-h" title={P('最近状态')}>
+          {sparks.map((v, i) => (
+            <i key={i} className={v > 0 ? 'on' : 'off'} style={{ opacity: 0.2 + v * 0.8 }} />
+          ))}
+        </div>
+      </div>
+
+      <div
+        className="cred-grid-quota"
+        role="button"
+        tabIndex={0}
+        onClick={(e) => {
+          e.stopPropagation()
+          onOpenDetail(a, 'quota')
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            e.stopPropagation()
+            onOpenDetail(a, 'quota')
+          }
+        }}
+      >
+        <QuotaBars windows={windows} layout="stack" />
+      </div>
+
+      <div className="cred-grid-card-footer" onClick={(e) => e.stopPropagation()}>
+        <div className="cred-grid-footer-left">
+          <button type="button" className="cred-icon-btn danger" disabled={busy} title={P('删除')} onClick={() => onRemove(name)}>
+            <Trash2 size={14} />
+          </button>
+          <button type="button" className="cred-icon-btn" disabled={busy} title={P('下载')} onClick={() => onDownload(name)}>
+            <Download size={14} />
+          </button>
+        </div>
+        <div className="cred-grid-footer-right">
+          <button type="button" className="cred-icon-btn" disabled={busy} title={P('刷新')} onClick={() => onForceRefresh(name)}>
+            <RotateCw size={14} />
+          </button>
+          <button type="button" className="cred-icon-btn" disabled={busy} title={P('配置')} onClick={() => onOpenDetail(a, 'config')}>
+            <Settings2 size={14} />
+          </button>
+          <button type="button" className="cred-detail-btn" onClick={() => onOpenDetail(a)}>
+            {P('详情')}
+          </button>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function HistoryMetrics({
+  a,
+  variant,
+  onOpen,
+}: {
+  a: Account
+  variant: 'table' | 'card'
+  onOpen?: () => void
+}) {
+  const usage = usageStats(a)
+  const items = [
+    { key: 'requests', label: P('请求'), value: fmtCompact(usage.requests), cls: 'requests' },
+    { key: 'tokens', label: 'Token', value: usage.tokens != null ? fmtCompact(usage.tokens) : '—', cls: 'tokens' },
+    { key: 'cost', label: P('费用'), value: fmtMoney(usage.cost), cls: 'cost' },
+    { key: 'success', label: P('成功率'), value: fmtPct(usage.successRate), cls: 'success' },
+  ]
+  if (variant === 'table') {
+    return (
+      <div className="cred-history-grid">
+        {items.map((it) => (
+          <span key={it.key} className={`cred-history-metric is-${it.cls}`} title={it.label}>
+            <span className="cred-history-icon" aria-hidden>
+              {it.cls === 'requests' ? '✈' : it.cls === 'tokens' ? '⚡' : it.cls === 'cost' ? '$' : '✓'}
+            </span>
+            <strong>{it.value}</strong>
+          </span>
+        ))}
+      </div>
+    )
+  }
+  return (
+    <div
+      className="cred-grid-history"
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={(e) => {
+        if (!onOpen) return
+        e.stopPropagation()
+        onOpen()
+      }}
+      onKeyDown={(e) => {
+        if (!onOpen) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          e.stopPropagation()
+          onOpen()
+        }
+      }}
+    >
+      <span className="cred-grid-history-title">{P('历史用量')}</span>
+      <div className="cred-grid-history-grid">
+        {items.map((it) => (
+          <span key={it.key} className={`cred-grid-history-metric is-${it.cls}`} aria-label={`${it.label}: ${it.value}`}>
+            <span className="cred-history-icon" aria-hidden>
+              {it.cls === 'requests' ? '✈' : it.cls === 'tokens' ? '⚡' : it.cls === 'cost' ? '$' : '✓'}
+            </span>
+            <span className="cred-grid-history-label">{it.label}</span>
+            <strong>{it.value}</strong>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function QuotaBars({ windows, layout }: { windows: QuotaWindow[]; layout: 'grid' | 'stack' }) {
+  if (!windows.length) {
+    return <div className={layout === 'stack' ? 'cred-quota-empty stacked' : 'cred-quota-empty'}>{P('暂无额度数据')}</div>
+  }
+  const list = windows.slice(0, 4)
+  return (
+    <div className={layout === 'stack' ? 'cred-quota-stack' : `cred-quota-grid cols-${list.length >= 2 ? 2 : 1}`}>
+      {list.map((w, i) => {
+        const ratio = w.remaining_ratio
+        const pct = ratio != null && Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : null
+        const risk = String(w.risk || '')
+        const barCls =
+          risk === 'exhausted' || (pct != null && pct <= 0)
+            ? 'bad'
+            : risk === 'low' || risk === 'critical' || (pct != null && pct < 0.5)
+              ? 'warn'
+              : 'good'
+        const extraBits: string[] = []
+        if (w.used_cost != null && Number.isFinite(Number(w.used_cost))) extraBits.push(fmtMoney(w.used_cost))
+        if (w.used_tokens != null && Number.isFinite(Number(w.used_tokens))) extraBits.push(fmtCompact(w.used_tokens))
+        return (
+          <div key={i} className="cred-quota-window">
+            <div className="cred-quota-window-head">
+              <span title={w.label}>{w.label}</span>
+              <span>{pct != null ? `${P('剩余')} ${Math.round(pct * 100)}%` : P('额度未知')}</span>
+            </div>
+            <div className="cred-quota-track">
+              <i className={barCls} style={{ width: pct != null ? `${pct * 100}%` : '0%' }} />
+            </div>
+            {extraBits.length ? <div className="cred-quota-window-extra">{extraBits.join(' / ')}</div> : null}
+            <div className="cred-quota-window-meta">{w.resets_at ? fmtResetRelative(w.resets_at) : '—'}</div>
+          </div>
+        )
+      })}
     </div>
   )
 }

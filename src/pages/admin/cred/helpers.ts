@@ -191,6 +191,24 @@ export function deriveListMetrics(items: Account[]) {
   }
 }
 
+
+export function formatPlanType(raw?: string | null) {
+  const s = String(raw || '').trim()
+  if (!s || s === '-' || s === '—') return ''
+  const lower = s.toLowerCase()
+  const known: Record<string, string> = {
+    free: 'Free',
+    pro: 'Pro',
+    plus: 'Plus',
+    team: 'Team',
+    enterprise: 'Enterprise',
+    ultra: 'Ultra',
+    go: 'Go',
+  }
+  if (known[lower]) return known[lower]
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
 export function providerLabel(p: string) {
   const k = p.toLowerCase()
   if (k === 'xai') return 'xAI'
