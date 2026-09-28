@@ -1,19 +1,45 @@
 /**
  * Pure helpers for credential detail 「模型」tab — normalize CPA auth-files/models
  * shapes and compute per-credential excluded_models disable sets / filter counts.
+ * Keep in sync with src/lib/credModels.ts
  */
 
-/** @typedef {{ id: string, name?: string, provider?: string }} CredModel */
+/** @typedef {{ id: string, name?: string, provider?: string, synthetic?: boolean }} CredModel */
+
+/** @param {unknown} item @returns {string|null} */
+export function coerceExcludedRule(item) {
+  if (item == null) return null
+  if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+    const s = String(item).trim()
+    return s && s !== '[object Object]' ? s : null
+  }
+  if (typeof item !== 'object' || Array.isArray(item)) return null
+  const o = /** @type {Record<string, unknown>} */ (item)
+  const raw =
+    o.model_id ??
+    o.modelId ??
+    o.model ??
+    o.id ??
+    o.pattern ??
+    o.rule ??
+    o.name ??
+    o.value ??
+    o.excluded ??
+    o['excluded-model']
+  if (raw == null) return null
+  if (typeof raw === 'object') return coerceExcludedRule(raw)
+  const s = String(raw).trim()
+  return s && s !== '[object Object]' ? s : null
+}
 
 /**
- * Parse excluded_models from CPA auth-file fields (array, CSV string, or nested).
  * @param {unknown} raw
  * @returns {string[]}
  */
 export function parseExcludedModels(raw) {
   if (raw == null || raw === '') return []
   if (Array.isArray(raw)) {
-    return dedupeStrings(raw.map((x) => String(x ?? '').trim()).filter(Boolean))
+    return dedupeStrings(raw.map(coerceExcludedRule).filter(Boolean))
   }
   if (typeof raw === 'string') {
     return dedupeStrings(
@@ -26,14 +52,15 @@ export function parseExcludedModels(raw) {
   if (typeof raw === 'object') {
     const o = /** @type {Record<string, unknown>} */ (raw)
     const nested =
-      o.excluded_models ?? o['excluded-models'] ?? o.excludedModels ?? o.models ?? o.items
+      o.excluded_models ?? o['excluded-models'] ?? o.excludedModels ?? o.models ?? o.items ?? o.rules
     if (nested != null && nested !== raw) return parseExcludedModels(nested)
+    const one = coerceExcludedRule(raw)
+    if (one) return [one]
   }
   return []
 }
 
 /**
- * Normalize various CPA /auth-files/models response shapes into { id, name?, provider? }[].
  * @param {unknown} raw
  * @returns {CredModel[]}
  */
@@ -54,9 +81,28 @@ export function normalizeAuthFileModels(raw) {
 }
 
 /**
+ * Exact excluded ids missing from runtime models become synthetic rows (CPAMP qke lite).
+ * @param {CredModel[]} models
+ * @param {Iterable<string>} excludedRules
+ * @returns {CredModel[]}
+ */
+export function mergeExcludedIntoModels(models, excludedRules) {
+  const base = normalizeAuthFileModels(models)
+  const seen = new Set(base.map((m) => m.id.toLowerCase()))
+  const out = [...base]
+  for (const rule of parseExcludedModels([...(excludedRules || [])])) {
+    if (!rule || rule.includes('*')) continue
+    const key = rule.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ id: rule, name: rule, synthetic: true })
+  }
+  return out
+}
+
+/**
  * @param {string} modelId
  * @param {Iterable<string>} excludedRules
- * @returns {boolean}
  */
 export function isModelExcluded(modelId, excludedRules) {
   const id = String(modelId || '').trim()
@@ -83,19 +129,13 @@ export function computeModelFilterCounts(models, excludedRules) {
     if (isModelExcluded(m.id, rules)) disabled += 1
     else available += 1
   }
-  return {
-    all: (models || []).length,
-    available,
-    disabled,
-  }
+  return { all: (models || []).length, available, disabled }
 }
 
 /**
- * Toggle a model id in the draft excluded list (exact id only; does not expand wildcards).
  * @param {string[]} draft
  * @param {string} modelId
  * @param {boolean} disable
- * @returns {string[]}
  */
 export function toggleExcludedModel(draft, modelId, disable) {
   const id = String(modelId || '').trim()
@@ -148,10 +188,7 @@ function extractModelsArray(raw) {
   return []
 }
 
-/**
- * @param {unknown} item
- * @returns {CredModel | null}
- */
+/** @param {unknown} item @returns {CredModel | null} */
 function coerceModel(item) {
   if (item == null) return null
   if (typeof item === 'string') {
@@ -160,22 +197,20 @@ function coerceModel(item) {
   }
   if (typeof item !== 'object' || Array.isArray(item)) return null
   const r = /** @type {Record<string, unknown>} */ (item)
-  const idRaw =
-    r.id ?? r.model ?? r.name ?? r.model_id ?? r.modelId ?? r.model_name ?? r.modelName
+  const idRaw = r.id ?? r.model ?? r.name ?? r.model_id ?? r.modelId ?? r.model_name ?? r.modelName
   const id = String(idRaw ?? '').trim()
-  if (!id) return null
+  if (!id || id === '[object Object]') return null
   /** @type {CredModel} */
   const out = { id }
   const display =
     r.display_name ?? r.displayName ?? r.title ?? (typeof r.name === 'string' && r.name !== id ? r.name : null)
   if (typeof display === 'string' && display.trim()) out.name = display.trim()
-  const provider =
-    r.provider ?? r.owned_by ?? r.ownedBy ?? r.type ?? r.platform ?? r.vendor
+  const provider = r.provider ?? r.owned_by ?? r.ownedBy ?? r.type ?? r.platform ?? r.vendor
   if (typeof provider === 'string' && provider.trim()) out.provider = provider.trim()
+  if (r.synthetic === true) out.synthetic = true
   return out
 }
 
-/** Simple glob: * matches any run of chars (case-insensitive inputs expected). */
 function wildcardMatch(pattern, value) {
   const parts = pattern.split('*').map(escapeRegex)
   const re = new RegExp(`^${parts.join('.*')}$`, 'i')

@@ -9,6 +9,8 @@ import { deriveDisplayStatus, mapAdminAccounts, summarizeAccounts } from '../adm
 import {
   normalizeAuthFileModels,
   parseExcludedModels,
+  coerceExcludedRule,
+  mergeExcludedIntoModels,
   isModelExcluded,
   computeModelFilterCounts,
   toggleExcludedModel,
@@ -136,4 +138,58 @@ test('parseExcludedModels + filter counts + toggle', () => {
   assert.equal(isModelExcluded('gpt-4', restored), false)
   assert.equal(excludedListsEqual(['A', 'b'], ['b', 'a']), true)
   assert.equal(excludedListsEqual(['A'], ['b']), false)
+})
+
+test('parseExcludedModels handles object / rule shapes from CPA/CPAMP', () => {
+  assert.equal(coerceExcludedRule({ model_id: 'gpt-4o' }), 'gpt-4o')
+  assert.equal(coerceExcludedRule({ modelId: 'o1' }), 'o1')
+  assert.equal(coerceExcludedRule({ model: 'claude-3' }), 'claude-3')
+  assert.equal(coerceExcludedRule({ id: 'x', name: 'ignored' }), 'x')
+  assert.equal(coerceExcludedRule({ pattern: 'gpt-*' }), 'gpt-*')
+  assert.equal(coerceExcludedRule({ nested: true }), null)
+  assert.deepEqual(
+    parseExcludedModels([
+      { model_id: 'a' },
+      { id: 'b' },
+      { pattern: 'c-*' },
+      'd',
+      { model: 'a' }, // dedupe
+    ]),
+    ['a', 'b', 'c-*', 'd'],
+  )
+  assert.deepEqual(parseExcludedModels({ model: 'solo' }), ['solo'])
+  assert.deepEqual(parseExcludedModels({ rules: [{ id: 'r1' }, { pattern: 'r*' }] }), ['r1', 'r*'])
+  // Must NOT produce "[object Object]"
+  const bad = parseExcludedModels([{ foo: 1 }, { id: 'ok' }])
+  assert.deepEqual(bad, ['ok'])
+  assert.ok(!bad.some((x) => x.includes('[object')))
+})
+
+test('mergeExcludedIntoModels synthesizes excluded-only ids for 已禁用 filter', () => {
+  const models = normalizeAuthFileModels([{ id: 'gpt-4' }, { id: 'o1' }])
+  const rules = ['gpt-4', 'missing-model', 'wild-*', { model_id: 'also-missing' }]
+  const parsed = parseExcludedModels(rules)
+  const merged = mergeExcludedIntoModels(models, parsed)
+  const ids = merged.map((m) => m.id)
+  assert.ok(ids.includes('gpt-4'))
+  assert.ok(ids.includes('o1'))
+  assert.ok(ids.includes('missing-model'))
+  assert.ok(ids.includes('also-missing'))
+  assert.ok(!ids.includes('wild-*')) // wildcards not synthesized as rows
+  const syn = merged.find((m) => m.id === 'missing-model')
+  assert.equal(syn?.synthetic, true)
+  const counts = computeModelFilterCounts(merged, parsed)
+  assert.equal(counts.disabled, 3) // gpt-4 + missing-model + also-missing (wild does not match o1)
+  assert.equal(counts.available, 1) // o1
+  // Filter 「已禁用」 view
+  const disabledOnly = merged.filter((m) => isModelExcluded(m.id, parsed))
+  assert.deepEqual(
+    disabledOnly.map((m) => m.id).sort(),
+    ['also-missing', 'gpt-4', 'missing-model'].sort(),
+  )
+  // toggle → save cycle: restore missing-model
+  const after = toggleExcludedModel(parsed, 'missing-model', false)
+  assert.equal(isModelExcluded('missing-model', after), false)
+  const remount = mergeExcludedIntoModels(models, after)
+  assert.ok(!remount.some((m) => m.id === 'missing-model'))
 })

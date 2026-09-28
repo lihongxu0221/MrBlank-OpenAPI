@@ -1,9 +1,35 @@
-export type CredModel = { id: string; name?: string; provider?: string }
+export type CredModel = { id: string; name?: string; provider?: string; synthetic?: boolean }
+
+/** Coerce one exclude-rule entry (string | object) into a model-id / pattern string. */
+export function coerceExcludedRule(item: unknown): string | null {
+  if (item == null) return null
+  if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+    const s = String(item).trim()
+    return s && s !== '[object Object]' ? s : null
+  }
+  if (typeof item !== 'object' || Array.isArray(item)) return null
+  const o = item as Record<string, unknown>
+  const raw =
+    o.model_id ??
+    o.modelId ??
+    o.model ??
+    o.id ??
+    o.pattern ??
+    o.rule ??
+    o.name ??
+    o.value ??
+    o.excluded ??
+    o['excluded-model']
+  if (raw == null) return null
+  if (typeof raw === 'object') return coerceExcludedRule(raw)
+  const s = String(raw).trim()
+  return s && s !== '[object Object]' ? s : null
+}
 
 export function parseExcludedModels(raw: unknown): string[] {
   if (raw == null || raw === '') return []
   if (Array.isArray(raw)) {
-    return dedupeStrings(raw.map((x) => String(x ?? '').trim()).filter(Boolean))
+    return dedupeStrings(raw.map(coerceExcludedRule).filter((x): x is string => !!x))
   }
   if (typeof raw === 'string') {
     return dedupeStrings(
@@ -15,8 +41,12 @@ export function parseExcludedModels(raw: unknown): string[] {
   }
   if (typeof raw === 'object') {
     const o = raw as Record<string, unknown>
-    const nested = o.excluded_models ?? o['excluded-models'] ?? o.excludedModels ?? o.models ?? o.items
+    const nested =
+      o.excluded_models ?? o['excluded-models'] ?? o.excludedModels ?? o.models ?? o.items ?? o.rules
     if (nested != null && nested !== raw) return parseExcludedModels(nested)
+    // Single rule object
+    const one = coerceExcludedRule(raw)
+    if (one) return [one]
   }
   return []
 }
@@ -32,6 +62,25 @@ export function normalizeAuthFileModels(raw: unknown): CredModel[] {
     if (seen.has(key)) continue
     seen.add(key)
     out.push(m)
+  }
+  return out
+}
+
+/**
+ * CPAMP qke behavior (lite): exact excluded ids not present in runtime models
+ * still appear as synthetic rows so 「已禁用」 filter is never empty junk.
+ * Wildcard rules are kept as rules only (advanced) — not synthesized as rows.
+ */
+export function mergeExcludedIntoModels(models: CredModel[], excludedRules: Iterable<string>): CredModel[] {
+  const base = normalizeAuthFileModels(models)
+  const seen = new Set(base.map((m) => m.id.toLowerCase()))
+  const out = [...base]
+  for (const rule of parseExcludedModels([...excludedRules])) {
+    if (!rule || rule.includes('*')) continue
+    const key = rule.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ id: rule, name: rule, synthetic: true })
   }
   return out
 }
@@ -117,13 +166,14 @@ function coerceModel(item: unknown): CredModel | null {
   const r = item as Record<string, unknown>
   const idRaw = r.id ?? r.model ?? r.name ?? r.model_id ?? r.modelId ?? r.model_name ?? r.modelName
   const id = String(idRaw ?? '').trim()
-  if (!id) return null
+  if (!id || id === '[object Object]') return null
   const out: CredModel = { id }
   const display =
     r.display_name ?? r.displayName ?? r.title ?? (typeof r.name === 'string' && r.name !== id ? r.name : null)
   if (typeof display === 'string' && display.trim()) out.name = display.trim()
   const provider = r.provider ?? r.owned_by ?? r.ownedBy ?? r.type ?? r.platform ?? r.vendor
   if (typeof provider === 'string' && provider.trim()) out.provider = provider.trim()
+  if (r.synthetic === true) out.synthetic = true
   return out
 }
 

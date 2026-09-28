@@ -2531,15 +2531,72 @@ table.data tr:last-child td {
 }
 
 /* Credential detail drawer — models tab (openapi tokens, CPAMP IA) */
+.cred-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
 .cred-drawer {
   width: min(640px, 100%);
   min-width: min(560px, 100%);
   height: 100%;
+  max-height: 100vh;
   margin: 0;
   border-radius: 0;
-  overflow: auto;
-  padding: 16px;
+  padding: 0;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cred-drawer-head {
+  flex: 0 0 auto;
+  padding: 16px 16px 0;
+}
+.cred-drawer-tabs {
+  flex: 0 0 auto;
+  margin: 12px 16px 0;
+}
+.cred-drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px;
+}
+.cred-drawer-foot {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--border, var(--line));
+  background: var(--surface, var(--panel));
+}
+.cred-models-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  height: 100%;
+}
+.cred-models-panel > .cred-models-toolbar,
+.cred-models-panel > .cred-models-dirty,
+.cred-models-panel > .cred-models-search,
+.cred-models-panel > .cred-model-filters {
+  flex: 0 0 auto;
+}
+.cred-model-list {
+  display: grid;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  /* list scrolls with drawer-body; keep padding so last card isn't clipped */
+  padding-bottom: 8px;
 }
 .cred-drawer-head h2 { margin: 0; font-size: 1.05rem; letter-spacing: -0.02em; }
 .cred-drawer-sub { margin: 4px 0 0; font-size: 12px; color: var(--muted); word-break: break-all; }
@@ -2573,7 +2630,6 @@ table.data tr:last-child td {
   color: var(--ink); border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, var(--soft));
 }
-.cred-model-list { display: grid; gap: 8px; }
 .cred-model-card {
   border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
   background: var(--surface); display: grid; gap: 6px;
@@ -2617,3 +2673,159 @@ table.data tr:last-child td {
 .cred-kv .k { color: var(--muted); }
 .cred-section { margin-bottom: 14px; }
 .cred-section h4 { margin: 0 0 8px; font-size: 13px; }
+
+/* Credential list — CPAMP IA, openapi tokens */
+.cred-list { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.cred-list-title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.cred-list-title { margin: 0; font-size: 1.15rem; letter-spacing: -0.02em; }
+.cred-list-header-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cred-provider-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cred-provider-chips button {
+  border: 1px solid var(--line); background: var(--soft); color: var(--muted);
+  border-radius: 999px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+}
+.cred-provider-chips button.on {
+  color: var(--ink); border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--soft));
+}
+.cred-list-toolbar-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(4, minmax(110px, 1fr)) minmax(110px, auto);
+  gap: 8px; align-items: center;
+}
+.cred-list-search { width: 100%; box-sizing: border-box; }
+@media (max-width: 1100px) {
+  .cred-list-toolbar-filters { grid-template-columns: 1fr 1fr; }
+}
+.cred-metrics {
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; min-width: 0;
+}
+@media (max-width: 1240px) { .cred-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .cred-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.cred-metric-card {
+  position: relative; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  padding: 12px 14px; min-height: 96px;
+}
+.cred-metric-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.cred-metric-value { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.03em; margin-top: 4px; }
+.cred-metric-meta { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.35; }
+.cred-metric-spark {
+  position: absolute; right: 8px; bottom: 8px; width: 64px; height: 28px; opacity: 0.18;
+  background: linear-gradient(120deg, transparent 0%, var(--accent) 45%, transparent 100%);
+  border-radius: 8px; pointer-events: none;
+}
+.cred-batch-bar {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--soft); padding: 10px 12px;
+}
+.cred-batch-summary { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cred-batch-summary > span { font-size: 13px; font-weight: 700; }
+.cred-batch-summary > small { color: var(--muted); font-size: 12px; }
+.cred-batch-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cred-view-switch { display: inline-flex; gap: 4px; }
+.cred-table-scroller { width: 100%; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+.cred-card-list { display: grid; gap: 8px; min-width: 1240px; padding: 4px 0 8px; }
+.cred-card-header, .cred-card-row {
+  box-sizing: border-box; min-width: 0; display: grid; column-gap: 8px; align-items: center;
+  grid-template-columns: minmax(140px, 1.1fr) 76px 96px minmax(124px, .3fr) minmax(160px, .35fr) minmax(280px, 3fr) 146px;
+}
+.cred-card-header {
+  min-height: 34px; color: var(--muted); padding: 2px 12px 0; font-size: 12px; font-weight: 700;
+}
+.cred-card-header > span:nth-child(2),
+.cred-card-header > span:nth-child(3),
+.cred-card-header > span:nth-child(4),
+.cred-card-header > span:nth-child(5) { justify-content: center; display: flex; }
+.cred-card-header > span:last-child { justify-content: center; display: flex; }
+.cred-card-row {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  padding: 10px 12px; min-height: 88px;
+}
+.cred-card-row.is-selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.cred-card-row.is-select-mode { cursor: pointer; }
+.cred-cell-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cred-provider-logo {
+  flex: 0 0 35px; width: 35px; height: 35px; border-radius: 8px;
+  background: var(--soft); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800; color: var(--muted);
+}
+.cred-identity-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.cred-identity-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cred-identity-file { font-size: 11px; color: var(--muted); }
+.cred-cell-plan { text-align: center; }
+.cred-plan-name { font-size: 13px; font-weight: 600; }
+.cred-cell-health { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.cred-priority-meta { font-size: 11px; color: var(--muted); }
+.cred-cell-recent { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12px; }
+.cred-spark { display: flex; align-items: flex-end; gap: 2px; height: 16px; }
+.cred-spark i {
+  display: block; width: 4px; height: 100%; border-radius: 1px;
+  background: var(--accent); transform-origin: bottom center;
+}
+.cred-cell-history { min-width: 0; }
+.cred-history-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; font-size: 11px; color: var(--muted);
+}
+.cred-cell-quota { min-width: 0; }
+.cred-quota-grid { display: grid; gap: 8px 10px; }
+.cred-quota-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cred-quota-window { display: grid; grid-template-rows: auto 6px auto; row-gap: 4px; min-width: 0; }
+.cred-quota-window-head {
+  display: flex; justify-content: space-between; gap: 6px; font-size: 11px; font-weight: 700;
+}
+.cred-quota-window-head span:last-child { color: var(--muted); font-weight: 600; }
+.cred-quota-track {
+  height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--line) 80%, transparent);
+  overflow: hidden;
+}
+.cred-quota-track > i { display: block; height: 100%; border-radius: inherit; }
+.cred-quota-track > i.good { background: var(--status-ok); }
+.cred-quota-track > i.warn { background: var(--status-warn); }
+.cred-quota-track > i.bad { background: var(--error); }
+.cred-quota-track > i.neutral { background: var(--muted); }
+.cred-quota-empty { display: flex; flex-direction: column; gap: 4px; }
+.cred-quota-window-meta { font-size: 10px; }
+.cred-cell-actions { display: flex; justify-content: center; }
+.cred-row-actions { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.cred-icon-row { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
+.cred-icon-btn {
+  width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--soft); color: var(--muted); display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; padding: 0;
+}
+.cred-icon-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--accent); }
+.cred-icon-btn.danger:hover:not(:disabled) { color: var(--error); border-color: var(--error); }
+.cred-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.cred-detail-link {
+  background: none; border: none; color: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer; padding: 0;
+}
+.cred-switch { position: relative; width: 36px; height: 20px; display: inline-block; }
+.cred-switch input { opacity: 0; width: 0; height: 0; }
+.cred-switch span {
+  position: absolute; inset: 0; border-radius: 999px; background: var(--line); cursor: pointer; transition: .15s;
+}
+.cred-switch span::before {
+  content: ''; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px;
+  border-radius: 50%; background: var(--surface); transition: .15s;
+}
+.cred-switch input:checked + span { background: color-mix(in srgb, var(--accent) 70%, var(--status-ok)); }
+.cred-switch input:checked + span::before { transform: translateX(16px); }
+.cred-grid-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.cred-grid-card { display: grid; gap: 8px; }
+.cred-grid-card.is-selected { border-color: var(--accent); }
+.cred-grid-card-head { display: flex; justify-content: space-between; align-items: center; }
+.cred-grid-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--muted); }
+.cred-pagination {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--soft); padding: 10px 14px;
+}
+.cred-pagination-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cred-jump { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.cred-jump input { width: 48px; }
+
+/* Drawer body scroll lock helper (CPAMP Drawer-module body) */
+.cred-drawer-body { overscroll-behavior: contain; }
+body.cred-drawer-open { overflow: hidden; }
+html.cred-drawer-open { overflow: hidden; }

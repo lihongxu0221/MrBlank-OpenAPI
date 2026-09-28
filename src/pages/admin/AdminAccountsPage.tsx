@@ -29,12 +29,15 @@ import { getHashQuery, navigate, navigateWithQuery } from '../../router/hash'
 import {
   type CredModel,
   normalizeAuthFileModels,
+  mergeExcludedIntoModels,
   parseExcludedModels,
   isModelExcluded,
   computeModelFilterCounts,
   toggleExcludedModel,
   excludedListsEqual,
 } from '../../lib/credModels'
+import { CredListTab } from './cred/CredListTab'
+import type { Account as CredAccount } from './cred/types'
 
 type QuotaSnap = {
   remaining_ratio?: number | null
@@ -397,6 +400,22 @@ export function AdminAccountsPage({ path }: { path: string }) {
   }, [tab, gate.allowed, loadInspection])
 
   useEffect(() => {
+    if (!detail) return
+    const prevBody = document.body.style.overflow
+    const prevHtml = document.documentElement.style.overflow
+    document.body.classList.add('cred-drawer-open')
+    document.documentElement.classList.add('cred-drawer-open')
+    document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
+    return () => {
+      document.body.classList.remove('cred-drawer-open')
+      document.documentElement.classList.remove('cred-drawer-open')
+      document.body.style.overflow = prevBody
+      document.documentElement.style.overflow = prevHtml
+    }
+  }, [detail])
+
+  useEffect(() => {
     setPage(1)
   }, [q, providerFilter, statusFilter, sortBy, pageSize])
 
@@ -680,7 +699,10 @@ export function AdminAccountsPage({ path }: { path: string }) {
       const d = await api.get<{ models: unknown; excluded_models?: unknown }>(
         `/api/admin/accounts/models?name=${encodeURIComponent(name)}`,
       )
-      setDetailModels(normalizeAuthFileModels(d.models))
+      const exFromApi =
+        d.excluded_models !== undefined ? parseExcludedModels(d.excluded_models) : excludedDraft
+      const rules = !wasDirty && d.excluded_models !== undefined ? exFromApi : excludedDraft
+      setDetailModels(mergeExcludedIntoModels(normalizeAuthFileModels(d.models), rules))
       if (!wasDirty && d.excluded_models !== undefined) {
         const ex = parseExcludedModels(d.excluded_models)
         setExcludedDraft(ex)
@@ -723,13 +745,17 @@ export function AdminAccountsPage({ path }: { path: string }) {
   }, [detail, detailTab])
 
   const modelsDirty = !excludedListsEqual(excludedDraft, excludedBaseline)
-  const modelCounts = useMemo(
-    () => computeModelFilterCounts(detailModels, excludedDraft),
+  const modelsForUi = useMemo(
+    () => mergeExcludedIntoModels(detailModels, excludedDraft),
     [detailModels, excludedDraft],
+  )
+  const modelCounts = useMemo(
+    () => computeModelFilterCounts(modelsForUi, excludedDraft),
+    [modelsForUi, excludedDraft],
   )
   const filteredModels = useMemo(() => {
     const q = modelsSearch.trim().toLowerCase()
-    return detailModels.filter((m) => {
+    return modelsForUi.filter((m) => {
       const disabled = isModelExcluded(m.id, excludedDraft)
       if (modelsFilter === 'available' && disabled) return false
       if (modelsFilter === 'disabled' && !disabled) return false
@@ -737,7 +763,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
       const blob = `${m.id} ${m.name || ''} ${m.provider || ''}`.toLowerCase()
       return blob.includes(q)
     })
-  }, [detailModels, excludedDraft, modelsFilter, modelsSearch])
+  }, [modelsForUi, excludedDraft, modelsFilter, modelsSearch])
 
   async function saveExcludedModels() {
     if (!detail || !modelsDirty) return
@@ -945,7 +971,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
       <ConsoleHero
         title={P('凭证管理')}
         subtitle={P(
-          'CPA auth-files 工作台：凭证列表 / 健康巡检 / OAuth 配置 / 登录凭证。完整 CPA OAuth 九大提供商仍在「OAuth 登录」页；Aily/Grok 为「本站上游」。',
+          '统一管理登录凭证、可用状态、剩余额度和巡检结果。完整 CPA OAuth 九大提供商仍在「OAuth 登录」页。',
         )}
       />
 
@@ -966,302 +992,57 @@ export function AdminAccountsPage({ path }: { path: string }) {
       </div>
 
       {tab === 'list' ? (
-        <>
-          <div className="channels-toolbar">
-            <span className="muted">
-              {observedAt ? `${P('观测时间')} · ${fmtTime(observedAt)}` : ''}
-            </span>
-            <button type="button" className="button secondary compact" onClick={load} disabled={loading}>
-              <RefreshCw size={14} /> {P('刷新列表')}
-            </button>
-          </div>
-          {err ? <p style={{ color: 'var(--error)' }}>{err}</p> : null}
-
-          {pool ? (
-            <div className="stats-grid" style={{ marginBottom: 16 }}>
-              <div className="stat-card">
-                <div className="label">{P('总凭证')}</div>
-                <div className="value">{pool.total}</div>
-              </div>
-              <div className="stat-card">
-                <div className="label">{P('正常可用')}</div>
-                <div className="value">{pool.active}</div>
-              </div>
-              <div className="stat-card">
-                <div className="label">{P('需处理')}</div>
-                <div className="value">{pool.attention ?? pool.unavailable}</div>
-              </div>
-              <div className="stat-card">
-                <div className="label">{P('额度风险')}</div>
-                <div className="value">{pool.quota_risk ?? 0}</div>
-              </div>
-              <div className="stat-card">
-                <div className="label">{P('已禁用')}</div>
-                <div className="value">{pool.disabled}</div>
-              </div>
-              <div className="stat-card">
-                <div className="label">{P('需重登')}</div>
-                <div className="value">{pool.need_reauth ?? 0}</div>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="panel" style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-              <input
-                style={{ minWidth: 220, flex: 1 }}
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder={P('搜索凭证 / 邮箱 / 备注')}
-              />
-              <select value={providerFilter} onChange={(e) => setProviderFilter(e.target.value)}>
-                <option value="all">{P('全部提供商')}</option>
-                {providers.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                {STATUS_FILTERS.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {P(s.label)}
-                  </option>
-                ))}
-              </select>
-              <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-                {SORT_OPTS.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {P('排序')} · {P(s.label)}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className={`button compact ${viewMode === 'table' ? '' : 'secondary'}`}
-                onClick={() => setViewMode('table')}
-                title={P('表格')}
-              >
-                <Table2 size={14} />
-              </button>
-              <button
-                type="button"
-                className={`button compact ${viewMode === 'card' ? '' : 'secondary'}`}
-                onClick={() => setViewMode('card')}
-                title={P('卡片')}
-              >
-                <LayoutGrid size={14} />
-              </button>
-              <button
-                type="button"
-                className="button secondary compact"
-                onClick={() => setShowFullId((v) => !v)}
-                title={P('切换标识脱敏')}
-              >
-                {showFullId ? <Eye size={14} /> : <EyeOff size={14} />}
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12, alignItems: 'center' }}>
-              <button type="button" className="button secondary compact" onClick={toggleAllPage}>
-                {allPageSelected ? <CheckSquare size={14} /> : <Square size={14} />} {P('全选本页')}
-              </button>
-              <button type="button" className="button secondary compact" onClick={toggleAllFiltered}>
-                {P('全选筛选')}
-                {selectedNames.length ? ` (${selectedNames.length})` : ''}
-              </button>
-              <button type="button" className="button compact" disabled={batchBusy || !selectedNames.length} onClick={() => runBatch('enable')}>
-                <Power size={14} /> {P('批量启用')}
-              </button>
-              <button type="button" className="button secondary compact" disabled={batchBusy || !selectedNames.length} onClick={() => runBatch('disable')}>
-                <Ban size={14} /> {P('批量禁用')}
-              </button>
-              <button type="button" className="button secondary compact" disabled={batchBusy || !selectedNames.length} onClick={() => runBatch('delete')}>
-                <Trash2 size={14} /> {P('批量删除')}
-              </button>
-              <button type="button" className="button secondary compact" disabled={batchBusy || !selectedNames.length} onClick={() => runBatch('download')}>
-                <Download size={14} /> {P('批量下载')}
-              </button>
-              <input style={{ width: 64 }} value={batchPriority} onChange={(e) => setBatchPriority(e.target.value)} title={P('批量优先级')} />
-              <button type="button" className="button secondary compact" disabled={batchBusy || !selectedNames.length} onClick={() => runBatch('priority')}>
-                {P('批量优先级')}
-              </button>
-              <input style={{ width: 64 }} value={batchWeight} onChange={(e) => setBatchWeight(e.target.value)} title={P('批量权重')} />
-              <button type="button" className="button secondary compact" disabled={batchBusy || !selectedNames.length} onClick={() => runBatch('weight')}>
-                {P('批量权重')}
-              </button>
-            </div>
-          </div>
-
-          {viewMode === 'table' ? (
-            <div className="table-wrap">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th style={{ width: 36 }} />
-                    <th>{P('凭证')}</th>
-                    <th>{P('平台')}</th>
-                    <th>{P('状态')}</th>
-                    <th>{P('额度')}</th>
-                    <th>OK/Fail</th>
-                    <th>{P('优先级')}</th>
-                    <th>{P('备注')}</th>
-                    <th>{P('操作')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pageItems.map((a) => {
-                    const name = accountName(a)
-                    const display = resolveDisplay(a)
-                    const busy = busyName === name
-                    return (
-                      <tr key={a.id || name}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={!!selected[name]}
-                            onChange={() =>
-                              setSelected((prev) => {
-                                const next = { ...prev }
-                                if (next[name]) delete next[name]
-                                else next[name] = true
-                                return next
-                              })
-                            }
-                          />
-                        </td>
-                        <td>
-                          <div style={{ fontWeight: 600 }}>{a.label || a.email || name}</div>
-                          <div className="muted" style={{ fontSize: 12 }}>
-                            <code>{maskId(name, showFullId)}</code>
-                            {a.email ? ` · ${a.email}` : ''}
-                          </div>
-                          {a.status_message ? (
-                            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                              {a.status_message}
-                            </div>
-                          ) : null}
-                        </td>
-                        <td>
-                          <code>{a.provider || '—'}</code>
-                          {a.plan_type || a.quota?.plan_type ? (
-                            <div className="muted" style={{ fontSize: 11 }}>
-                              {a.plan_type || a.quota?.plan_type}
-                            </div>
-                          ) : null}
-                        </td>
-                        <td>
-                          <span className={badgeClass(display)}>● {badgeLabel(display, a.status)}</span>
-                          {a.quota?.risk ? (
-                            <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                              quota · {a.quota.risk}
-                            </div>
-                          ) : null}
-                        </td>
-                        <td>{fmtRatio(a.quota?.remaining_ratio)}</td>
-                        <td>
-                          {a.success ?? 0} / {a.failed ?? 0}
-                        </td>
-                        <td>
-                          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                            <input
-                              style={{ width: 56 }}
-                              value={priorityDraft[name] ?? ''}
-                              onChange={(e) => setPriorityDraft((prev) => ({ ...prev, [name]: e.target.value }))}
-                            />
-                            <button type="button" className="button secondary compact" disabled={busy} onClick={() => savePriority(name)}>
-                              {P('存')}
-                            </button>
-                          </div>
-                        </td>
-                        <td>
-                          <div style={{ display: 'flex', gap: 4 }}>
-                            <input
-                              style={{ minWidth: 100, width: '100%' }}
-                              value={noteDraft[name] ?? ''}
-                              onChange={(e) => setNoteDraft((prev) => ({ ...prev, [name]: e.target.value }))}
-                            />
-                            <button type="button" className="button secondary compact" disabled={busy} onClick={() => saveNote(name)}>
-                              {P('存')}
-                            </button>
-                          </div>
-                        </td>
-                        <td>{renderRowActions(a, true)}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="channel-grid">
-              {pageItems.map((a) => {
-                const name = accountName(a)
-                const display = resolveDisplay(a)
-                return (
-                  <article key={a.id || name} className="channel-card panel">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                      <span className={badgeClass(display)}>● {badgeLabel(display, a.status)}</span>
-                      <input
-                        type="checkbox"
-                        checked={!!selected[name]}
-                        onChange={() =>
-                          setSelected((prev) => {
-                            const next = { ...prev }
-                            if (next[name]) delete next[name]
-                            else next[name] = true
-                            return next
-                          })
-                        }
-                      />
-                    </div>
-                    <h3>{a.label || a.email || name}</h3>
-                    <p className="muted" style={{ fontSize: 12 }}>
-                      <code>{maskId(name, showFullId)}</code> · {a.provider || '—'}
-                    </p>
-                    <div className="channel-meta">
-                      <div>
-                        <span className="label">OK/Fail</span>
-                        <strong>
-                          {a.success ?? 0} / {a.failed ?? 0}
-                        </strong>
-                      </div>
-                      <div>
-                        <span className="label">{P('额度')}</span>
-                        <strong>{fmtRatio(a.quota?.remaining_ratio)}</strong>
-                      </div>
-                    </div>
-                    {renderRowActions(a)}
-                  </article>
-                )
-              })}
-            </div>
-          )}
-
-          <div className="channels-toolbar" style={{ marginTop: 12 }}>
-            <span className="muted">
-              {P('共')} {filtered.length} · {P('第')} {page}/{pageCount} {P('页')}
-              {filtered.length > 200 ? ` · ${P('结果较多，建议收窄筛选')}` : ''}
-            </span>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
-                {PAGE_SIZES.map((n) => (
-                  <option key={n} value={n}>
-                    {n}/{P('页')}
-                  </option>
-                ))}
-              </select>
-              <button type="button" className="button secondary compact" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                {P('上一页')}
-              </button>
-              <button type="button" className="button secondary compact" disabled={page >= pageCount} onClick={() => setPage((p) => p + 1)}>
-                {P('下一页')}
-              </button>
-            </div>
-          </div>
-
-          {!loading && !filtered.length && !err ? <p className="empty-state">{P('没有匹配凭证')}</p> : null}
-        </>
+        <CredListTab
+          items={items as CredAccount[]}
+          pool={pool}
+          loading={loading}
+          err={err}
+          busyName={busyName}
+          selected={selected}
+          setSelected={setSelected}
+          onRefresh={load}
+          onPasteJson={() => switchTab('credentials')}
+          onUploadFile={(file) => {
+            const reader = new FileReader()
+            reader.onload = () => {
+              setUploadContent(String(reader.result || ''))
+              setUploadName(file.name || 'upload.json')
+              setPasteType('cpa')
+              switchTab('credentials')
+              showToast(P('已载入文件，请在「登录凭证」确认后上传'))
+            }
+            reader.readAsText(file)
+          }}
+          onOpenDetail={(a, tabId) => openDetail(a as Account, tabId)}
+          onForceRefresh={forceRefresh}
+          onDownload={download}
+          onRemove={remove}
+          onSetDisabled={setDisabled}
+          onRefreshQuota={async (names) => {
+            if (!names.length) {
+              showToast(P('当前没有可刷新额度的凭证'))
+              return
+            }
+            setBatchBusy(true)
+            try {
+              let okN = 0
+              for (const name of names) {
+                try {
+                  await api.post('/api/admin/accounts/reset-quota', { name })
+                  okN += 1
+                } catch {
+                  /* continue */
+                }
+              }
+              showToast(`${P('额度刷新完成')}：${P('成功')} ${okN} / ${names.length}`)
+              await load()
+            } finally {
+              setBatchBusy(false)
+            }
+          }}
+          onBatch={runBatch}
+          batchBusy={batchBusy}
+        />
       ) : null}
 
       {tab === 'health' ? (
@@ -1567,14 +1348,6 @@ export function AdminAccountsPage({ path }: { path: string }) {
       {detail ? (
         <div
           className="cred-drawer-backdrop"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.35)',
-            zIndex: 80,
-            display: 'flex',
-            justifyContent: 'flex-end',
-          }}
           onClick={() => setDetail(null)}
         >
           <aside className="panel cred-drawer" onClick={(e) => e.stopPropagation()}>
@@ -1590,7 +1363,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
               </button>
             </div>
 
-            <div className="diag-tabs" style={{ margin: '12px 0' }}>
+            <div className="diag-tabs cred-drawer-tabs">
               {(
                 [
                   ['overview', '概览'],
@@ -1606,6 +1379,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
               ))}
             </div>
 
+            <div className="cred-drawer-body">
             {detailTab === 'overview' ? (
               <div>
                 <div className="cred-section">
@@ -1802,7 +1576,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
             ) : null}
 
             {detailTab === 'models' ? (
-              <div>
+              <div className="cred-models-panel">
                 <div className="cred-models-toolbar">
                   <div className="title">
                     {accountName(detail)} · {modelCounts.all} {P('个模型')}
@@ -1959,7 +1733,9 @@ export function AdminAccountsPage({ path }: { path: string }) {
               </div>
             ) : null}
 
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+            </div>
+
+            <div className="cred-drawer-foot">
               {detail.disabled ? (
                 <button type="button" className="button compact" onClick={() => setDisabled(accountName(detail), false)}>
                   <Power size={14} /> {P('启用')}
