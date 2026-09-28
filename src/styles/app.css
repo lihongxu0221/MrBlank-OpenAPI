@@ -2731,7 +2731,8 @@ table.data tr:last-child td {
 .cred-card-header, .cred-card-row {
   /* Stacked row: identity | TOP(plan/health/recent/history) + BOTTOM(quota) | actions */
   box-sizing: border-box; width: 100%; min-width: 0; display: grid; column-gap: 8px; align-items: stretch;
-  grid-template-columns: minmax(140px, 1.1fr) 76px 96px minmax(124px, .35fr) minmax(160px, 1fr) 146px;
+  /* Reserve the full action-grid width so it cannot overlap quota content. */
+  grid-template-columns: minmax(140px, 1.1fr) 76px 96px minmax(124px, .35fr) minmax(160px, 1fr) 177px;
 }
 .cred-card-header {
   min-height: 34px; color: var(--muted); padding: 2px 12px 0; font-size: 12px; font-weight: 700;
@@ -2791,7 +2792,7 @@ table.data tr:last-child td {
 .cred-cell-quota { min-width: 0; max-width: 100%; overflow: visible; }
 .cred-quota-grid {
   /* CPAMP quotaWindowGrid — full width under metrics strip */
-  display: grid; gap: 10px; min-width: 0; max-width: 100%;
+  display: grid; gap: 10px; min-width: 0; max-width: 100%; padding: 5px;
   align-content: start; height: auto; position: relative;
 }
 .cred-quota-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -3131,7 +3132,7 @@ table.data tr:last-child td {
 }
 @media (min-width: 1025px) and (max-width: 1200px) {
   .cred-card-header, .cred-card-row {
-    grid-template-columns: minmax(120px, 1.1fr) 64px 88px minmax(100px, .3fr) minmax(130px, 1fr) 130px;
+    grid-template-columns: minmax(120px, 1.1fr) 64px 88px minmax(100px, .3fr) minmax(130px, 1fr) 177px;
     column-gap: 6px;
   }
 }
