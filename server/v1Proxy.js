@@ -3,6 +3,7 @@
  * Default upstream: CPA billing. Optional in-process Aily bridge by model allowlist.
  * Phase E: per-user rolling quotas (429) and model allowlist (403) when API key maps to a site user.
  */
+import crypto from 'node:crypto'
 import {
   extractModelFromReqBody,
   extractUsageFromBody,
@@ -135,6 +136,30 @@ export function createV1Proxy({
     let ttft_ms = null
     const endpoint = req.originalUrl || req.url || '/v1'
     const apiKey = bearerFromReq(req)
+    const eventId = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`
+    const tokenNameMasked = maskTokenNameFromAuth(req.headers.authorization || req.headers['x-api-key'])
+    const ip = clientIp(req)
+
+    function emitComplete(extra = {}) {
+      if (typeof governance?.onComplete !== 'function') return
+      try {
+        governance.onComplete({
+          ...govCtx,
+          diagnosis_id: eventId,
+          id: eventId,
+          ip,
+          token_name: tokenNameMasked,
+          duration_ms: Date.now() - started,
+          ttft_ms,
+          endpoint,
+          requestedModel,
+          apiKey,
+          ...extra,
+        })
+      } catch (err) {
+        console.error('[v1] governance onComplete failed', err?.message || err)
+      }
+    }
 
     let reqBuf = Buffer.alloc(0)
     try {
@@ -179,6 +204,7 @@ export function createV1Proxy({
           // Still record a slim diagnosis row for admins
           try {
             store.record({
+          id: eventId,
               method: req.method,
               endpoint,
               upstream_url: '',
@@ -201,6 +227,18 @@ export function createV1Proxy({
           } catch {
             /* ignore */
           }
+          emitComplete({
+            status,
+            usage: {},
+            isConsuming: false,
+            is_stream: false,
+            model_name: requestedModel,
+            route_via: 'governance',
+            group: decision.group_id || '',
+            success: false,
+            content: decision.body?.error?.message || decision.code || 'governance deny',
+            has_detail: true,
+          })
           res.status(status).json(decision.body || { error: { message: 'forbidden' } })
           return
         }
@@ -246,6 +284,7 @@ export function createV1Proxy({
         })
       } catch (err) {
         const slim = store.record({
+          id: eventId,
           method: req.method,
           endpoint,
           upstream_url: '',
@@ -265,15 +304,28 @@ export function createV1Proxy({
           route_via: 'aily',
           group_id: govCtx.groupInfo?.group?.id || '',
         })
+        emitComplete({
+          status: 502,
+          usage: {},
+          isConsuming: isConsumingEndpoint(endpoint, req.method),
+          is_stream: false,
+          model_name: requestedModel,
+          route_via: 'aily',
+          group: govCtx.groupInfo?.group?.id || '',
+          success: false,
+          content: String(err?.message || err),
+          has_detail: true,
+        })
         if (!res.headersSent) {
           res.status(502).json({
-            error: { message: 'aily upstream unavailable', diagnosis_id: slim.id, route_via: 'aily' },
+            error: { message: 'aily upstream unavailable', diagnosis_id: slim.id || eventId, route_via: 'aily' },
           })
         }
         return
       }
       try {
         store.record({
+          id: eventId,
           method: req.method,
           endpoint,
           upstream_url: handled?.upstream_url || '',
@@ -301,18 +353,16 @@ export function createV1Proxy({
       } catch (err) {
         console.error('[diagnosis] record failed', err?.message || err)
       }
-      if (typeof governance?.onComplete === 'function') {
-        try {
-          governance.onComplete({
-            ...govCtx,
-            status: handled?.status || 200,
-            usage: handled?.usage || {},
-            isConsuming: isConsumingEndpoint(endpoint, req.method),
-          })
-        } catch (err) {
-          console.error('[v1] governance onComplete failed', err?.message || err)
-        }
-      }
+      emitComplete({
+        status: handled?.status || 200,
+        usage: handled?.usage || {},
+        isConsuming: isConsumingEndpoint(endpoint, req.method),
+        is_stream: !!handled?.is_stream,
+        model_name: handled?.model_name || requestedModel,
+        route_via: 'aily',
+        group: govCtx.groupInfo?.group?.id || govCtx.groupInfo?.group?.name || '',
+        has_detail: true,
+      })
       return
     }
 
@@ -330,6 +380,7 @@ export function createV1Proxy({
       })
     } catch (err) {
       const slim = store.record({
+          id: eventId,
         method: req.method,
         endpoint,
         upstream_url: upstreamUrl,
@@ -351,7 +402,19 @@ export function createV1Proxy({
         route_via: routeVia,
         group_id: govCtx.groupInfo?.group?.id || '',
       })
-      res.status(502).json({ error: { message: 'upstream unavailable', diagnosis_id: slim.id, route_via: routeVia } })
+      emitComplete({
+        status: 502,
+        usage: {},
+        isConsuming: isConsumingEndpoint(endpoint, req.method),
+        is_stream: false,
+        model_name: requestedModel,
+        route_via: routeVia,
+        group: govCtx.groupInfo?.group?.id || '',
+        success: false,
+        content: String(err?.message || err),
+        has_detail: true,
+      })
+      res.status(502).json({ error: { message: 'upstream unavailable', diagnosis_id: slim.id || eventId, route_via: routeVia } })
       return
     }
 
@@ -385,6 +448,7 @@ export function createV1Proxy({
       const usage = extractUsageFromBody(resBodyOverride)
       try {
         store.record({
+          id: eventId,
           method: req.method,
           endpoint,
           upstream_url: upstreamUrl,
@@ -413,6 +477,16 @@ export function createV1Proxy({
       } catch (err) {
         console.error('[diagnosis] record failed', err?.message || err)
       }
+      emitComplete({
+        status: upstream.status,
+        usage,
+        isConsuming: false,
+        is_stream: false,
+        model_name: usage.model_name || requestedModel,
+        route_via: routeVia,
+        group: govCtx.groupInfo?.group?.id || '',
+        has_detail: true,
+      })
       return
     }
 
@@ -478,6 +552,7 @@ export function createV1Proxy({
 
     try {
       store.record({
+          id: eventId,
         method: req.method,
         endpoint,
         upstream_url: upstreamUrl,
@@ -507,17 +582,15 @@ export function createV1Proxy({
       console.error('[diagnosis] record failed', err?.message || err)
     }
 
-    if (typeof governance?.onComplete === 'function') {
-      try {
-        governance.onComplete({
-          ...govCtx,
-          status: upstream.status,
-          usage,
-          isConsuming: isConsumingEndpoint(endpoint, req.method),
-        })
-      } catch (err) {
-        console.error('[v1] governance onComplete failed', err?.message || err)
-      }
-    }
+    emitComplete({
+      status: upstream.status,
+      usage,
+      isConsuming: isConsumingEndpoint(endpoint, req.method),
+      is_stream,
+      model_name: usage.model_name || requestedModel,
+      route_via: routeVia,
+      group: govCtx.groupInfo?.group?.id || govCtx.groupInfo?.group?.name || '',
+      has_detail: true,
+    })
   }
 }

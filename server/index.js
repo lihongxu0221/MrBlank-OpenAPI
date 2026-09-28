@@ -1294,6 +1294,19 @@ app.use(
         endpoint,
         siteTokenId,
         releaseTokenConcurrency,
+        diagnosis_id,
+        id: eventId,
+        ip,
+        token_name,
+        duration_ms,
+        ttft_ms,
+        is_stream,
+        model_name,
+        route_via,
+        group,
+        content,
+        has_detail,
+        groupInfo,
       }) {
         try {
           if (typeof releaseTokenConcurrency === 'function') releaseTokenConcurrency()
@@ -1309,17 +1322,63 @@ app.use(
             Number(usage?.cache_tokens ?? usage?.prompt_tokens_details?.cached_tokens ?? 0) || 0
           const cacheWriteTokens =
             Number(usage?.cache_write_tokens ?? usage?.cache_creation_tokens ?? 0) || 0
+          const resolvedModel = model_name || usage?.model || requestedModel || null
+          let amountUsd = 0
+          let rawQuota = 0
+          try {
+            const price = modelPrices.lookupPrice(String(resolvedModel || requestedModel || '').trim())
+            amountUsd = modelPrices.costForTokens(price, prompt, completion, {
+              cacheReadTokens: cacheTokens,
+              cacheWriteTokens: cacheWriteTokens,
+            })
+            rawQuota = quotaUnitStore.dollarsToQuota(amountUsd)
+          } catch {
+            amountUsd = 0
+            rawQuota = 0
+          }
+          let username = null
+          try {
+            if (userId) {
+              const u = localUserStore.findById(userId)
+              username = u?.username || u?.display_name || null
+              if (!username) {
+                const store = userStores.get(String(userId))
+                username = store?.user?.username || store?.user?.display_name || null
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+          const diagId = diagnosis_id || eventId || null
           siteUsage.recordEvent({
+            id: diagId || undefined,
+            diagnosis_id: diagId,
             userId: userId || null,
+            username,
             keyHash: apiKey ? hashApiKey(apiKey) : null,
-            model: requestedModel || usage?.model || null,
+            token_name: token_name || null,
+            model: resolvedModel,
+            model_requested: requestedModel || null,
+            model_resolved: resolvedModel,
             endpoint: endpoint || null,
+            group: group || groupInfo?.group?.id || groupInfo?.group?.name || null,
+            status,
             success: okStatus,
+            type: okStatus ? 2 : 5,
             tokens: prompt + completion,
             prompt_tokens: prompt,
             completion_tokens: completion,
             cache_tokens: cacheTokens,
             cache_write_tokens: cacheWriteTokens,
+            amountUsd,
+            rawQuota,
+            duration_ms: duration_ms ?? null,
+            ttft_ms: ttft_ms ?? null,
+            stream: !!is_stream,
+            ip: ip || null,
+            route: route_via || null,
+            content: content || null,
+            has_detail: has_detail !== false && !!diagId,
           })
         } catch (e) {
           console.error('[siteUsage] recordEvent failed', e?.message || e)
@@ -2014,55 +2073,138 @@ app.get('/api/cpa/info', requireAuth, (_req, res) => {
   )
 })
 
-app.get('/api/log/self', requireAuth, async (req, res) => {
-  const p = Number(req.query.p || 1)
-  const page_size = Number(req.query.page_size || 10)
-  const tokens = userKeyStore.list(req.auth.user.id)
-  const hashToName = new Map()
+function consoleUsageScope(req) {
+  const userId = String(req.auth?.user?.id || '')
+  const tokens = userKeyStore.list(userId)
   const hashSet = new Set()
+  const hashToName = new Map()
   for (const t of tokens) {
     if (!t.fullKey) continue
     const h = hashApiKey(t.fullKey)
     hashSet.add(h)
     hashToName.set(h, t.name || t.key)
   }
+  return { userId, hashSet, hashToName }
+}
 
-  if (!cpaCfg.adminKey) {
-    res.json(ok({ items: [], total: 0, limited: true, note: 'CPAMP Admin Key 未配置；用量暂不可用。' }))
-    return
+function parseUsageQuery(req, { consoleScope = false } = {}) {
+  const q = {
+    p: req.query.p,
+    page_size: req.query.page_size,
+    type: req.query.type,
+    token_name: req.query.token_name || req.query.key || '',
+    model_name: req.query.model_name || req.query.model || '',
+    group: req.query.group || '',
+    is_stream: req.query.is_stream || req.query.stream || '',
+    range: req.query.range || '24h',
+    grain: req.query.grain || '',
+    start_timestamp: req.query.start_timestamp,
+    end_timestamp: req.query.end_timestamp,
+    username: req.query.username || '',
+    includeUser: !consoleScope,
   }
-  if (!hashSet.size) {
+  if (consoleScope) {
+    const { userId, hashSet } = consoleUsageScope(req)
+    // Scope server-side: userId OR keyHash in user's keys (never trust client filters for identity)
+    q._consoleUserId = userId
+    q._consoleHashes = hashSet
+  }
+  return q
+}
+
+app.get('/api/log/self', requireAuth, (req, res) => {
+  try {
+    const scope = parseUsageQuery(req, { consoleScope: true })
+    const { userId, hashSet, hashToName } = consoleUsageScope(req)
+    const type = req.query.type != null && req.query.type !== '' ? Number(req.query.type) : undefined
+    const result = siteUsage.listEvents({
+      p: scope.p,
+      page_size: scope.page_size || 20,
+      type,
+      token_name: scope.token_name,
+      model_name: scope.model_name,
+      group: scope.group,
+      is_stream: scope.is_stream,
+      range: scope.range,
+      start_timestamp: scope.start_timestamp,
+      end_timestamp: scope.end_timestamp,
+      includeUser: false,
+      userIdOrKeyHashes: { userId, keyHashes: hashSet },
+    })
+    for (const it of result.items || []) {
+      if (it.keyHash && hashToName.has(it.keyHash)) it.token_name = hashToName.get(it.keyHash)
+      // Never expose diagnosis affordance to console clients
+      delete it.has_detail
+      delete it.diagnosis_id
+    }
     res.json(
       ok({
-        items: [],
-        total: 0,
-        note: '创建并使用 API 密钥后，将从 CPAMP 汇总与你密钥相关的调用。',
+        ...result,
+        source: 'site-usage',
+        note: '用量来自本站 BFF /v1 记录（按你的用户与密钥范围）。控制台不可查看请求诊断。',
       }),
     )
-    return
-  }
-  try {
-    const usage = await fetchCpampUsage(cpaCfg)
-    const named = flattenUsageForHashes(usage, hashSet, { limit: 500, nameMap: hashToName })
-    try {
-      groupStore.syncUsageFromLogs(req.auth.user.id, named)
-      // keep in-memory store counters loosely aligned for promotion metrics
-      const reqCount = named.length
-      const usedTokens = named.reduce(
-        (s, r) => s + (Number(r.total_tokens ?? (r.prompt_tokens || 0) + (r.completion_tokens || 0)) || 0),
-        0,
-      )
-      req.store.user.request_count = Math.max(Number(req.store.user.request_count || 0), reqCount)
-      req.store.user.used_quota = Math.max(Number(req.store.user.used_quota || 0), usedTokens)
-    } catch (e) {
-      console.error('[groups] sync usage failed', e?.message || e)
-    }
-    const startIdx = (p - 1) * page_size
-    res.json(ok({ items: named.slice(startIdx, startIdx + page_size), total: named.length, source: 'cpamp' }))
   } catch (err) {
-    console.error('[cpamp] usage failed', err?.message || err)
-    res.json(ok({ items: [], total: 0, limited: true, note: `用量查询受限：${err?.message || 'CPAMP 不可用'}` }))
+    console.error('[log/self]', err?.message || err)
+    res.json(ok({ items: [], total: 0, limited: true, note: `用量查询失败：${err?.message || 'error'}` }))
   }
+})
+
+app.get('/api/log/chart', requireAuth, (req, res) => {
+  try {
+    const scope = parseUsageQuery(req, { consoleScope: true })
+    const { userId, hashSet } = consoleUsageScope(req)
+    const scopedChart = siteUsage.chartData({
+      type: 2,
+      token_name: scope.token_name,
+      model_name: scope.model_name,
+      group: scope.group,
+      is_stream: scope.is_stream,
+      range: scope.range,
+      grain: scope.grain,
+      start_timestamp: scope.start_timestamp,
+      end_timestamp: scope.end_timestamp,
+      userIdOrKeyHashes: { userId, keyHashes: hashSet },
+    })
+    res.json(ok({ ...scopedChart, source: 'site-usage', scoped: true }))
+  } catch (err) {
+    console.error('[log/chart]', err?.message || err)
+    res.status(500).json(fail(err?.message || 'chart failed'))
+  }
+})
+
+app.get('/api/log/filters', requireAuth, (req, res) => {
+  try {
+    const { userId, hashSet, hashToName } = consoleUsageScope(req)
+    const data = siteUsage.logFilters({
+      range: 'all',
+      includeUsers: false,
+      userIdOrKeyHashes: { userId, keyHashes: hashSet },
+    })
+    res.json(
+      ok({
+        token_names: [...new Set([...(data.token_names || []), ...hashToName.values()].filter(Boolean))].sort(),
+        model_names: data.model_names || [],
+        usernames: [],
+        groups: data.groups || [],
+        source: 'site-usage',
+      }),
+    )
+  } catch (err) {
+    console.error('[log/filters]', err?.message || err)
+    res.status(500).json(fail(err?.message || 'filters failed'))
+  }
+})
+
+// Console must NEVER get diagnosis bodies
+app.get('/api/log/:id', requireAuth, (_req, res) => {
+  res.status(403).json(fail('诊断详情仅管理员可用'))
+})
+app.get('/api/diagnosis/:id', requireAuth, (_req, res) => {
+  res.status(403).json(fail('诊断详情仅管理员可用'))
+})
+app.get('/api/diagnosis/logs/:id', requireAuth, (_req, res) => {
+  res.status(403).json(fail('诊断详情仅管理员可用'))
 })
 
 
@@ -2303,9 +2445,10 @@ app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
   }
 })
 
-app.get('/api/admin/usage', requireAdmin, async (_req, res) => {
+app.get('/api/admin/usage', requireAdmin, async (req, res) => {
   try {
-    const summary = siteUsage.summarize({ period: 'all' })
+    const period = String(req.query.period || req.query.range || 'all')
+    const summary = siteUsage.summarize({ period })
     res.json(
       ok({
         ...summary,
@@ -2317,6 +2460,67 @@ app.get('/api/admin/usage', requireAdmin, async (_req, res) => {
   } catch (err) {
     console.error('[admin] usage', err?.message || err)
     res.status(502).json(fail(err?.message || 'usage failed'))
+  }
+})
+
+app.get('/api/admin/usage/logs', requireAdmin, (req, res) => {
+  try {
+    const q = parseUsageQuery(req, { consoleScope: false })
+    const type = req.query.type != null && req.query.type !== '' ? Number(req.query.type) : undefined
+    const result = siteUsage.listEvents({
+      p: q.p,
+      page_size: q.page_size || 20,
+      type,
+      token_name: q.token_name,
+      model_name: q.model_name,
+      group: q.group,
+      is_stream: q.is_stream,
+      range: q.range,
+      start_timestamp: q.start_timestamp,
+      end_timestamp: q.end_timestamp,
+      username: q.username,
+      includeUser: true,
+    })
+    res.json(ok({ ...result, source: 'site-usage' }))
+  } catch (err) {
+    console.error('[admin] usage/logs', err?.message || err)
+    res.status(500).json(fail(err?.message || 'usage logs failed'))
+  }
+})
+
+app.get('/api/admin/usage/chart', requireAdmin, (req, res) => {
+  try {
+    const q = parseUsageQuery(req, { consoleScope: false })
+    const chart = siteUsage.chartData({
+      type: req.query.type != null && req.query.type !== '' ? Number(req.query.type) : 2,
+      token_name: q.token_name,
+      model_name: q.model_name,
+      group: q.group,
+      is_stream: q.is_stream,
+      range: q.range,
+      grain: q.grain,
+      start_timestamp: q.start_timestamp,
+      end_timestamp: q.end_timestamp,
+      username: q.username,
+    })
+    res.json(ok({ ...chart, source: 'site-usage' }))
+  } catch (err) {
+    console.error('[admin] usage/chart', err?.message || err)
+    res.status(500).json(fail(err?.message || 'usage chart failed'))
+  }
+})
+
+app.get('/api/admin/usage/filters', requireAdmin, (req, res) => {
+  try {
+    const data = siteUsage.logFilters({
+      range: req.query.range || 'all',
+      username: req.query.username || '',
+      includeUsers: true,
+    })
+    res.json(ok({ ...data, source: 'site-usage' }))
+  } catch (err) {
+    console.error('[admin] usage/filters', err?.message || err)
+    res.status(500).json(fail(err?.message || 'usage filters failed'))
   }
 })
 

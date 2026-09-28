@@ -3273,3 +3273,72 @@ td.num {
   color: var(--ink);
   background: var(--panel);
 }
+
+/* ── Usage records (aily parity layout, openapi theme) ── */
+.usage-records { display: flex; flex-direction: column; gap: 14px; }
+.usage-toolbar { justify-content: space-between; }
+.usage-kpis .muted { font-size: 12px; margin-top: 4px; }
+.usage-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 12px 14px;
+}
+.usage-grow { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.usage-dash {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+.usage-dist-panel h3 { margin: 0; font-size: 14px; }
+.usage-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 8px;
+}
+.usage-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.usage-seg button {
+  border: 0; background: transparent; padding: 4px 10px; font-size: 12px; cursor: pointer; color: var(--muted);
+}
+.usage-seg button.on { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); }
+.usage-dist { display: flex; gap: 12px; align-items: center; }
+.usage-donut { width: 92px; height: 92px; flex: 0 0 auto; }
+.usage-fit { font-size: 12px; }
+.usage-fit .num, .usage-fit .fee { text-align: right; font-variant-numeric: tabular-nums; }
+.usage-tog { border: 0; background: transparent; cursor: pointer; padding: 0 4px; }
+.usage-dist-child td { opacity: 0.85; }
+.usage-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.usage-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+.usage-trend { width: 100%; height: auto; max-height: 220px; }
+.usage-subtabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.usage-subtabs button {
+  border: 1px solid var(--line); background: transparent; border-radius: 8px;
+  padding: 6px 12px; cursor: pointer; color: var(--muted);
+}
+.usage-subtabs button.on { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); border-color: var(--accent); }
+.usage-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.usage-fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.usage-fld input, .usage-fld select, .usage-bar select, .usage-bar input, .usage-pager select {
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+  background: var(--panel, var(--bg)); color: var(--text);
+}
+.usage-filter-actions { display: flex; align-items: end; gap: 6px; flex-wrap: wrap; }
+.usage-pager {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+  gap: 8px; margin-bottom: 10px; font-size: 13px; color: var(--muted);
+}
+.usage-nums { display: inline-flex; gap: 4px; align-items: center; }
+.usage-nums button {
+  min-width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 6px;
+  background: transparent; cursor: pointer; color: var(--text);
+}
+.usage-nums button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.usage-nums button:disabled { opacity: 0.4; cursor: not-allowed; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 12%, transparent); font-size: 12px; }
+.tag.stream { background: color-mix(in srgb, #22c55e 18%, transparent); }
+.toks .dn { color: #3b82f6; }
+.toks .up { color: #22c55e; }
+.toks .cache { color: #22d3ee; font-size: 12px; }
+.lat { font-size: 12px; color: var(--muted); line-height: 1.35; }
