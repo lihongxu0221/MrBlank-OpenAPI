@@ -88,10 +88,12 @@ export function createSiteUsageStore(filePath, opts = {}) {
     if (typeof writeTimer.unref === 'function') writeTimer.unref()
   }
 
-  /** @param {{ ts?: string, userId?: string|null, keyHash?: string|null, model?: string|null, endpoint?: string|null, success?: boolean, tokens?: number, prompt_tokens?: number, completion_tokens?: number }} evt */
+  /** @param {{ ts?: string, userId?: string|null, keyHash?: string|null, model?: string|null, endpoint?: string|null, success?: boolean, tokens?: number, prompt_tokens?: number, completion_tokens?: number, cache_tokens?: number, cache_write_tokens?: number }} evt */
   function recordEvent(evt) {
     const prompt = Number(evt.prompt_tokens) || 0
     const completion = Number(evt.completion_tokens) || 0
+    const cacheTokens = Number(evt.cache_tokens) || 0
+    const cacheWriteTokens = Number(evt.cache_write_tokens) || 0
     const tokens = Number(evt.tokens) || prompt + completion
     store.events.push({
       ts: evt.ts || new Date().toISOString(),
@@ -103,6 +105,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
       tokens,
       prompt_tokens: prompt,
       completion_tokens: completion,
+      cache_tokens: cacheTokens,
+      cache_write_tokens: cacheWriteTokens,
     })
     dirty = true
     if (store.events.length > maxEvents + 500) prune()
@@ -186,13 +190,21 @@ export function createSiteUsageStore(filePath, opts = {}) {
   }
 
   function activityByModel({ period = 'today' } = {}) {
-    /** @type {Map<string, { calls: number, successful: number, tokens: number, prompt_tokens: number, completion_tokens: number }>} */
+    /** @type {Map<string, { calls: number, successful: number, tokens: number, prompt_tokens: number, completion_tokens: number, cache_tokens: number, cache_write_tokens: number }>} */
     const byModel = new Map()
     for (const e of eventsInPeriod(period)) {
       const model = e.model || 'unknown'
       let row = byModel.get(model)
       if (!row) {
-        row = { calls: 0, successful: 0, tokens: 0, prompt_tokens: 0, completion_tokens: 0 }
+        row = {
+          calls: 0,
+          successful: 0,
+          tokens: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cache_tokens: 0,
+          cache_write_tokens: 0,
+        }
         byModel.set(model, row)
       }
       row.calls += 1
@@ -200,6 +212,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
       row.tokens += Number(e.tokens) || 0
       row.prompt_tokens += Number(e.prompt_tokens) || 0
       row.completion_tokens += Number(e.completion_tokens) || 0
+      row.cache_tokens += Number(e.cache_tokens) || 0
+      row.cache_write_tokens += Number(e.cache_write_tokens) || 0
     }
     return [...byModel.entries()]
       .map(([model, s]) => ({
@@ -209,6 +223,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
         tokens: s.tokens,
         prompt_tokens: s.prompt_tokens,
         completion_tokens: s.completion_tokens,
+        cache_tokens: s.cache_tokens,
+        cache_write_tokens: s.cache_write_tokens,
         credits: s.tokens,
       }))
       .sort((a, b) => b.calls - a.calls)
@@ -451,6 +467,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
     if (!raw || typeof raw !== 'object') return null
     const prompt = Number(raw.prompt_tokens) || 0
     const completion = Number(raw.completion_tokens) || 0
+    const cacheTokens = Number(raw.cache_tokens) || 0
+    const cacheWriteTokens = Number(raw.cache_write_tokens) || 0
     const tokens = Number(raw.tokens) || prompt + completion
     const ts = raw.ts ? String(raw.ts) : new Date().toISOString()
     if (!Date.parse(ts)) return null
@@ -464,6 +482,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
       tokens,
       prompt_tokens: prompt,
       completion_tokens: completion,
+      cache_tokens: cacheTokens,
+      cache_write_tokens: cacheWriteTokens,
     }
   }
 

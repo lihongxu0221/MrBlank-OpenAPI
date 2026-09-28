@@ -13,7 +13,7 @@ export class ApiError extends Error {
 
 async function request<T>(
   path: string,
-  init: RequestInit & { proof?: string; auth?: boolean; sessionHeader?: boolean } = {},
+  init: RequestInit & { proof?: string; auth?: boolean; sessionHeader?: boolean; timeoutMs?: number } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers || {})
   headers.set('Accept', 'application/json')
@@ -29,10 +29,11 @@ async function request<T>(
   }
 
   const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 20000)
+  const timer = setTimeout(() => ctrl.abort(), init.timeoutMs ?? 20000)
   try {
+    const { timeoutMs: _timeoutMs, proof: _proof, auth: _auth, sessionHeader: _sessionHeader, ...fetchInit } = init
     const res = await fetch(path, {
-      ...init,
+      ...fetchInit,
       headers,
       credentials: 'include',
       cache: 'no-store',
@@ -72,7 +73,7 @@ export const api = {
   post: <T>(
     path: string,
     body?: unknown,
-    extra?: { proof?: string; auth?: boolean; sessionHeader?: boolean },
+    extra?: { proof?: string; auth?: boolean; sessionHeader?: boolean; timeoutMs?: number },
   ) =>
     request<T>(path, {
       method: 'POST',

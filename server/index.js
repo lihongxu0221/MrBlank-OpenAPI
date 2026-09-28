@@ -997,6 +997,10 @@ app.use(
         try {
           const prompt = Number(usage?.prompt_tokens) || 0
           const completion = Number(usage?.completion_tokens) || 0
+          const cacheTokens =
+            Number(usage?.cache_tokens ?? usage?.prompt_tokens_details?.cached_tokens ?? 0) || 0
+          const cacheWriteTokens =
+            Number(usage?.cache_write_tokens ?? usage?.cache_creation_tokens ?? 0) || 0
           siteUsage.recordEvent({
             userId: userId || null,
             keyHash: apiKey ? hashApiKey(apiKey) : null,
@@ -1006,6 +1010,8 @@ app.use(
             tokens: prompt + completion,
             prompt_tokens: prompt,
             completion_tokens: completion,
+            cache_tokens: cacheTokens,
+            cache_write_tokens: cacheWriteTokens,
           })
         } catch (e) {
           console.error('[siteUsage] recordEvent failed', e?.message || e)
@@ -3565,11 +3571,53 @@ app.put('/api/admin/model-prices', requireAdmin, (req, res) => {
   }
 })
 
+app.post('/api/admin/model-prices/sync', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const overwriteManual = body.overwrite_manual === true || body.overwriteManual === true
+    const data = await modelPrices.syncOfficial({ overwriteManual })
+    res.json(
+      ok({
+        imported: data.imported,
+        updated: data.updated,
+        skipped: data.skipped,
+        failed_sources: data.failed_sources || [],
+        sources: data.sources || {},
+        total_prices: data.total_prices,
+        at: data.at,
+        updated_at: data.updated_at,
+        last_sync: data,
+      }),
+    )
+  } catch (err) {
+    console.error('[admin] model-prices/sync', err?.message || err)
+    res.status(err?.status || 500).json(fail(err?.message || 'model-prices sync failed'))
+  }
+})
+
 app.get('/api/admin/model-prices/runtime-models', requireAdmin, (req, res) => {
   try {
     const period = String(req.query?.period || 'all')
-    const models = siteUsage.distinctModels({ period })
-    res.json(ok({ models, period, source: 'site-usage' }))
+    const seen = new Set(siteUsage.distinctModels({ period }) || [])
+    try {
+      const routing = ailyModelRouting.get()
+      for (const id of exposedModelNames(routing) || []) {
+        const s = String(id || '').trim()
+        if (!s) continue
+        seen.add(s)
+        if (!isAilyPrefixed(s)) seen.add(`aily/${s}`)
+      }
+      for (const row of routing?.mappings || []) {
+        const from = String(row?.from || '').trim()
+        if (!from) continue
+        seen.add(from)
+        seen.add(isAilyPrefixed(from) ? from : `aily/${from}`)
+      }
+    } catch {
+      /* aily routing optional */
+    }
+    const models = [...seen].sort((a, b) => a.localeCompare(b))
+    res.json(ok({ models, period, source: 'site-usage+aily-routing' }))
   } catch (err) {
     res.status(500).json(fail(err?.message || 'runtime-models failed'))
   }
@@ -3758,6 +3806,17 @@ try {
   cpaCollector.start()
 } catch (err) {
   console.error('[cpaCollector] start failed', err?.message || err)
+}
+
+try {
+  const sched = modelPrices.startScheduledSync()
+  if (sched?.enabled) {
+    console.log(`[server] modelPrices sync scheduled every ${sched.interval_hours}h`)
+  } else {
+    console.log('[server] modelPrices sync schedule disabled')
+  }
+} catch (err) {
+  console.error('[modelPrices] schedule start failed', err?.message || err)
 }
 
 app.listen(PORT, HOST, () => {
