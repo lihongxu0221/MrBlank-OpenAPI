@@ -1,7 +1,7 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
 import { KeyRound, Plus } from 'lucide-react'
 import { api } from '../../lib/api'
-import { fmtUsd, quotaToUsd, setQuotaPerUnit, stName, usdToQuota } from '../../lib/format'
+import { formatCredits, pointsToQuota, quotaToPoints, setQuotaPerUnit, stName } from '../../lib/format'
 import { P } from '../../i18n'
 import { ConsoleLayout } from './ConsoleLayout'
 import { ConsoleHero } from '../../components/ConsoleHero'
@@ -52,15 +52,8 @@ const empty: KeyForm = {
   enabled: true,
 }
 
-function usdTip(n: number) {
-  const v = Number(n) || 0
-  return (
-    '$' +
-    v.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 6,
-    })
-  )
+function pointsTip(n: number) {
+  return formatCredits(Number(n) || 0) + ' 点'
 }
 
 function rateWindowsOf(t: Token): RateWindow[] {
@@ -84,7 +77,7 @@ export function RateBars({ windows }: { windows: RateWindow[] }) {
         const cls = !cap ? '' : pct >= 100 ? 'over' : pct >= 80 ? 'hot' : ''
         const label = cap ? String(pct).replace(/\.0$/, '') + '%' : '不限'
         return (
-          <div className="rate-bar" key={w.id} title={usdTip(used) + ' / ' + (cap ? usdTip(cap) : '不限')}>
+          <div className="rate-bar" key={w.id} title={pointsTip(used) + ' / ' + (cap ? pointsTip(cap) : '不限')}>
             <span className="rate-lab">{w.label}</span>
             <div className="rate-track">
               <i className={cls} style={{ width: pct + '%' }} />
@@ -150,11 +143,11 @@ export function KeysPage({ path }: { path: string }) {
       name: t.name,
       max_concurrency: t.max_concurrency || 0,
       unlimited_quota: !!t.unlimited_quota,
-      remain_quota: t.unlimited_quota ? 10 : quotaToUsd(t.remain_quota),
+      remain_quota: t.unlimited_quota ? 10 : quotaToPoints(t.remain_quota),
       rate_limit_enabled: !!t.rate_limit_enabled,
-      rate_limit_5h: t.rate_limit_5h || 0,
-      rate_limit_7d: t.rate_limit_7d || 0,
-      rate_limit_30d: t.rate_limit_30d || 0,
+      rate_limit_5h: quotaToPoints(t.rate_limit_5h || 0),
+      rate_limit_7d: quotaToPoints(t.rate_limit_7d || 0),
+      rate_limit_30d: quotaToPoints(t.rate_limit_30d || 0),
       enabled: t.status === 1,
     })
     setMsg(null)
@@ -165,11 +158,11 @@ export function KeysPage({ path }: { path: string }) {
       name: String(form.name).trim(),
       max_concurrency: Number(form.max_concurrency) || 0,
       unlimited_quota: form.unlimited_quota,
-      remain_quota: form.unlimited_quota ? 0 : usdToQuota(Number(form.remain_quota)),
+      remain_quota: form.unlimited_quota ? 0 : pointsToQuota(Number(form.remain_quota)),
       rate_limit_enabled: form.rate_limit_enabled,
-      rate_limit_5h: Number(form.rate_limit_5h) || 0,
-      rate_limit_7d: Number(form.rate_limit_7d) || 0,
-      rate_limit_30d: Number(form.rate_limit_30d) || 0,
+      rate_limit_5h: pointsToQuota(Number(form.rate_limit_5h)),
+      rate_limit_7d: pointsToQuota(Number(form.rate_limit_7d)),
+      rate_limit_30d: pointsToQuota(Number(form.rate_limit_30d)),
       status: form.enabled ? 1 : 2,
       expired_time: -1,
     }
@@ -305,8 +298,8 @@ export function KeysPage({ path }: { path: string }) {
                 <th>{P('状态')}</th>
                 <th>Key</th>
                 <th>{P('并发')}</th>
-                <th>{P('剩余额度')}</th>
-                <th>{P('已用金额')}</th>
+                <th>{P('剩余点数')}</th>
+                <th>{P('已用点数')}</th>
                 <th>{P('限速')}</th>
                 <th>{P('操作')}</th>
               </tr>
@@ -324,8 +317,8 @@ export function KeysPage({ path }: { path: string }) {
                     <code className="masked-key">{t.key}</code>
                   </td>
                   <td className="num">{t.max_concurrency || P('不限')}</td>
-                  <td className="num">{t.unlimited_quota ? P('无限') : fmtUsd(quotaToUsd(t.remain_quota))}</td>
-                  <td className="num">{fmtUsd(t.used_amount || 0)}</td>
+                  <td className="num">{t.unlimited_quota ? P('无限') : formatCredits(t.remain_quota) + ' ' + P('点')}</td>
+                  <td className="num">{formatCredits(t.used_quota || 0) + ' ' + P('点')}</td>
                   <td>
                     {t.rate_limit_enabled ? (
                       <div className="rate-cell">
@@ -367,10 +360,10 @@ export function KeysPage({ path }: { path: string }) {
             <input type="number" min={0} value={form.max_concurrency} onChange={set('max_concurrency')} />
           </div>
           <label className="chk">
-            <input type="checkbox" checked={form.unlimited_quota} onChange={set('unlimited_quota')} /> {P('无限额度')}
+            <input type="checkbox" checked={form.unlimited_quota} onChange={set('unlimited_quota')} /> {P('无限点数')}
           </label>
           <div className="field">
-            <label>{P('额度（美元）')}</label>
+            <label>{P('额度（点）')}</label>
             <input
               type="number"
               min={0}
@@ -386,19 +379,19 @@ export function KeysPage({ path }: { path: string }) {
           </label>
           {form.rate_limit_enabled ? (
             <>
-              <p className="field-note">{P('0 = 不限制。进度按当前窗口已用金额计算。')}</p>
+              <p className="field-note">{P('0 = 不限制。进度按当前窗口已用点数计算。')}</p>
               {windows.length ? <RateBars windows={windows} /> : null}
               <div className="rate-fields">
                 <label>
-                  {P('5小时（USD）')}
+                  {P('5小时（点）')}
                   <input type="number" min={0} step="0.01" value={form.rate_limit_5h} onChange={set('rate_limit_5h')} />
                 </label>
                 <label>
-                  {P('周（USD）')}
+                  {P('周（点）')}
                   <input type="number" min={0} step="0.01" value={form.rate_limit_7d} onChange={set('rate_limit_7d')} />
                 </label>
                 <label>
-                  {P('月（USD）')}
+                  {P('月（点）')}
                   <input
                     type="number"
                     min={0}

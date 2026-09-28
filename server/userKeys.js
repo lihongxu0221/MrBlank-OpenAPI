@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 
-/** new-api / aily: $1 = 500000 quota units */
+/** new-api / aily-compatible raw quota scale (display 点 are converted by the UI). */
 export const QUOTA_PER_USD = 500_000
 
 const STATUS_ENABLED = 1
@@ -29,10 +29,12 @@ function nowSec() {
   return Math.floor(Date.now() / 1000)
 }
 
-export function usdLimit(v) {
+export function quotaLimit(v) {
   const n = Number(v)
   return Number.isFinite(n) && n > 0 ? n : 0
 }
+
+export const usdLimit = quotaLimit
 
 export function maskKey(key) {
   const k = String(key || '')
@@ -80,10 +82,10 @@ function migrateToken(t) {
     used_amount: Number(t.used_amount) || 0,
     max_concurrency: Math.max(0, Number(t.max_concurrency) || 0),
     rate_limit_enabled: t.rate_limit_enabled === true,
-    rate_limit_5h: usdLimit(t.rate_limit_5h),
-    rate_limit_1d: usdLimit(t.rate_limit_1d),
-    rate_limit_7d: usdLimit(t.rate_limit_7d),
-    rate_limit_30d: usdLimit(t.rate_limit_30d),
+    rate_limit_5h: quotaLimit(t.rate_limit_5h),
+    rate_limit_1d: quotaLimit(t.rate_limit_1d),
+    rate_limit_7d: quotaLimit(t.rate_limit_7d),
+    rate_limit_30d: quotaLimit(t.rate_limit_30d),
     rate_limit_reset_at: Math.max(0, Number(t.rate_limit_reset_at) || 0),
     spend_log: pruneSpendLog(t.spend_log),
     model_limits: t.model_limits != null ? String(t.model_limits) : '',
@@ -112,7 +114,7 @@ function attachRateWindows(token) {
   if (!token || !token.rate_limit_enabled) return []
   const now = nowSec()
   return DISPLAY_RATE_WINDOWS.map((w) => {
-    const cap = usdLimit(token[w.field])
+    const cap = quotaLimit(token[w.field])
     const since = rateWindowSince(token, w.sec, now)
     const used = tokenSpendSince(token, since)
     const pct = cap > 0 ? Math.min(100, Math.round((used / cap) * 1000) / 10) : 0
@@ -230,10 +232,10 @@ export function createUserKeyStore(filePath) {
     if (patch.enabled === false) rec.status = STATUS_DISABLED
     if (patch.max_concurrency != null) rec.max_concurrency = Math.max(0, Number(patch.max_concurrency) || 0)
     if (patch.rate_limit_enabled != null) rec.rate_limit_enabled = !!patch.rate_limit_enabled
-    if (patch.rate_limit_5h != null) rec.rate_limit_5h = usdLimit(patch.rate_limit_5h)
-    if (patch.rate_limit_1d != null) rec.rate_limit_1d = usdLimit(patch.rate_limit_1d)
-    if (patch.rate_limit_7d != null) rec.rate_limit_7d = usdLimit(patch.rate_limit_7d)
-    if (patch.rate_limit_30d != null) rec.rate_limit_30d = usdLimit(patch.rate_limit_30d)
+    if (patch.rate_limit_5h != null) rec.rate_limit_5h = quotaLimit(patch.rate_limit_5h)
+    if (patch.rate_limit_1d != null) rec.rate_limit_1d = quotaLimit(patch.rate_limit_1d)
+    if (patch.rate_limit_7d != null) rec.rate_limit_7d = quotaLimit(patch.rate_limit_7d)
+    if (patch.rate_limit_30d != null) rec.rate_limit_30d = quotaLimit(patch.rate_limit_30d)
     if (patch.reset_rate_limit_usage === true) rec.rate_limit_reset_at = nowSec()
     if (patch.model_limits != null) rec.model_limits = String(patch.model_limits)
     if (patch.group != null) rec.group = String(patch.group)
@@ -293,10 +295,10 @@ export function createUserKeyStore(filePath) {
         used_amount: 0,
         max_concurrency: Math.max(0, Number(token?.max_concurrency) || 0),
         rate_limit_enabled: token?.rate_limit_enabled === true,
-        rate_limit_5h: usdLimit(token?.rate_limit_5h),
-        rate_limit_1d: usdLimit(token?.rate_limit_1d),
-        rate_limit_7d: usdLimit(token?.rate_limit_7d),
-        rate_limit_30d: usdLimit(token?.rate_limit_30d),
+        rate_limit_5h: quotaLimit(token?.rate_limit_5h),
+        rate_limit_1d: quotaLimit(token?.rate_limit_1d),
+        rate_limit_7d: quotaLimit(token?.rate_limit_7d),
+        rate_limit_30d: quotaLimit(token?.rate_limit_30d),
         rate_limit_reset_at: 0,
         spend_log: [],
         model_limits: token?.model_limits != null ? String(token.model_limits) : '',
@@ -439,7 +441,7 @@ export function createUserKeyStore(filePath) {
       if (!token || !token.rate_limit_enabled) return null
       const now = nowSec()
       for (const [field, sec, label] of RATE_WINDOWS_CHECK) {
-        const cap = usdLimit(token[field])
+        const cap = quotaLimit(token[field])
         if (!cap) continue
         if (tokenSpendSince(token, rateWindowSince(token, sec, now)) >= cap) {
           return { error: `该 API Key 已达到${label}限额`, code: 429 }
@@ -469,7 +471,7 @@ export function createUserKeyStore(filePath) {
     },
 
     /**
-     * Deduct key quota / record USD amount + spend_log for rate windows.
+     * Deduct key quota / record raw point-window usage.
      */
     consumeQuota(userId, tokenId, quota, amount) {
       const data = readAll()
@@ -482,7 +484,7 @@ export function createUserKeyStore(filePath) {
       t.used_quota = (t.used_quota || 0) + q
       t.used_amount = (t.used_amount || 0) + am
       t.accessed_time = nowSec()
-      t.spend_log = pruneSpendLog([...(t.spend_log || []), { sec: nowSec(), amount: am }])
+      t.spend_log = pruneSpendLog([...(t.spend_log || []), { sec: nowSec(), amount: q }])
       if (!t.unlimited_quota) {
         t.remain_quota = Math.max(0, (t.remain_quota || 0) - q)
         if (t.remain_quota <= 0) t.status = STATUS_EXHAUSTED
