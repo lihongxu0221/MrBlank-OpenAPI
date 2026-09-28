@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Plus, RefreshCw, Save, Trash2, Users } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { formatCredits } from '../../lib/format'
+import { getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
@@ -10,7 +10,7 @@ import { useAdminGate } from './useAdminGate'
 type Promotion = {
   min_account_days: number
   min_request_count: number
-  min_used_quota: number
+  min_used_quota: number // stored as 点 in UI state; converted to raw on save
   min_checkins: number
   notes?: string
 }
@@ -20,6 +20,7 @@ type Group = {
   name: string
   level: number
   description: string
+  /** UI state: quotas in 点 (display). Converted to raw on save. */
   quotas: { window_5h: number; week: number; month: number }
   model_ids: string[]
   promotion: Promotion
@@ -57,6 +58,38 @@ function blankGroup(level: number): Group {
   }
 }
 
+/** API raw → UI 点 */
+function fromApiGroup(g: Group, unit: number): Group {
+  return {
+    ...g,
+    quotas: {
+      window_5h: quotaToPoints(g.quotas?.window_5h || 0, unit),
+      week: quotaToPoints(g.quotas?.week || 0, unit),
+      month: quotaToPoints(g.quotas?.month || 0, unit),
+    },
+    promotion: {
+      ...g.promotion,
+      min_used_quota: quotaToPoints(g.promotion?.min_used_quota || 0, unit),
+    },
+  }
+}
+
+/** UI 点 → API raw */
+function toApiGroup(g: Group, unit: number): Group {
+  return {
+    ...g,
+    quotas: {
+      window_5h: pointsToQuota(g.quotas.window_5h, unit),
+      week: pointsToQuota(g.quotas.week, unit),
+      month: pointsToQuota(g.quotas.month, unit),
+    },
+    promotion: {
+      ...g.promotion,
+      min_used_quota: pointsToQuota(g.promotion.min_used_quota, unit),
+    },
+  }
+}
+
 export function AdminGroupsPage({ path }: { path: string }) {
   const gate = useAdminGate()
   const [groups, setGroups] = useState<Group[]>([])
@@ -67,17 +100,28 @@ export function AdminGroupsPage({ path }: { path: string }) {
   const [saving, setSaving] = useState(false)
   const [assignUserId, setAssignUserId] = useState('')
   const [assignGroupId, setAssignGroupId] = useState('')
+  const [quotaUnit, setQuotaUnitState] = useState(getQuotaPerUnit())
 
   async function load() {
     if (!gate.allowed) return
     setLoading(true)
     setErr(null)
     try {
+      const status = await api.get<{ quota_per_unit: number }>('/api/status', { auth: false })
+      const unit = Number(status.quota_per_unit) || 500000
+      setQuotaPerUnit(unit)
+      setQuotaUnitState(unit)
+
       const [g, m] = await Promise.all([
-        api.get<{ groups: Group[] }>('/api/admin/groups'),
+        api.get<{ groups: Group[]; quota_unit?: number; credit_unit?: { raw_per_point?: number } }>(
+          '/api/admin/groups',
+        ),
         api.get<{ members: Member[]; groups: Group[] }>('/api/admin/groups/members'),
       ])
-      setGroups(g.groups || [])
+      const u = Number(g.quota_unit || g.credit_unit?.raw_per_point || unit) || unit
+      setQuotaUnitState(u)
+      setQuotaPerUnit(u)
+      setGroups((g.groups || []).map((row) => fromApiGroup(row, u)))
       setMembers(m.members || [])
       if (!assignGroupId && g.groups?.[0]) setAssignGroupId(g.groups[0].id)
     } catch (e) {
@@ -97,9 +141,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
 
   function updateQuota(index: number, key: keyof Group['quotas'], value: number) {
     setGroups((prev) =>
-      prev.map((g, i) =>
-        i === index ? { ...g, quotas: { ...g.quotas, [key]: value } } : g,
-      ),
+      prev.map((g, i) => (i === index ? { ...g, quotas: { ...g.quotas, [key]: value } } : g)),
     )
   }
 
@@ -116,9 +158,14 @@ export function AdminGroupsPage({ path }: { path: string }) {
     setErr(null)
     setMsg(null)
     try {
-      const saved = await api.put<{ groups: Group[] }>('/api/admin/groups', { groups })
-      setGroups(saved.groups || [])
-      setMsg(P('用户组已保存。'))
+      const unit = quotaUnit || getQuotaPerUnit()
+      const payload = groups.map((g) => toApiGroup(g, unit))
+      const saved = await api.put<{ groups: Group[] }>('/api/admin/groups', { groups: payload })
+      setGroups((saved.groups || []).map((row) => fromApiGroup(row, unit)))
+      setMsg(
+        P('用户组已保存。') +
+          ` （${P('已按')} 1 ${P('点')}=${unit.toLocaleString('zh-CN')} ${P('内部单位')} ${P('换算入库')}）`,
+      )
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -149,10 +196,15 @@ export function AdminGroupsPage({ path }: { path: string }) {
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
       <ConsoleHero
         title={P('用户组')}
-        subtitle={P('类 Linux.do 信任等级：额度窗口、模型白名单与晋级条件。1 点 = 500000 内部单位；BFF /v1 强制滚动额度与模型白名单。')}
+        subtitle={P(
+          `类 Linux.do 信任等级：5h/周/月额度以「点」编辑，入库为内部单位（当前 1 点 = ${quotaUnit.toLocaleString('zh-CN')}）。计费扣减的 raw 额度计入滚动窗口。`,
+        )}
       />
       <div className="channels-toolbar">
-        <span className="muted">{loading ? P('加载中…') : `${groups.length} ${P('个用户组')}`}</span>
+        <span className="muted">
+          {loading ? P('加载中…') : `${groups.length} ${P('个用户组')}`} · 1 {P('点')} ={' '}
+          {quotaUnit.toLocaleString('zh-CN')} {P('内部单位')}
+        </span>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" className="button secondary compact" onClick={load} disabled={loading || saving}>
             <RefreshCw size={14} /> {P('刷新')}
@@ -201,31 +253,46 @@ export function AdminGroupsPage({ path }: { path: string }) {
               />
             </div>
             <div className="field">
-              <label>{P('5 小时额度')}</label>
+              <label>
+                {P('5 小时额度')}（{P('点')}）
+              </label>
               <input
                 type="number"
+                step="0.01"
                 value={g.quotas.window_5h}
                 onChange={(e) => updateQuota(index, 'window_5h', Number(e.target.value) || 0)}
               />
-              <div className="field-note">{formatCredits(g.quotas.window_5h)}</div>
+              <div className="field-note">
+                = {pointsToQuota(g.quotas.window_5h, quotaUnit).toLocaleString('zh-CN')} {P('内部单位')}
+              </div>
             </div>
             <div className="field">
-              <label>{P('周额度')}</label>
+              <label>
+                {P('周额度')}（{P('点')}）
+              </label>
               <input
                 type="number"
+                step="0.01"
                 value={g.quotas.week}
                 onChange={(e) => updateQuota(index, 'week', Number(e.target.value) || 0)}
               />
-              <div className="field-note">{formatCredits(g.quotas.week)}</div>
+              <div className="field-note">
+                = {pointsToQuota(g.quotas.week, quotaUnit).toLocaleString('zh-CN')} {P('内部单位')}
+              </div>
             </div>
             <div className="field">
-              <label>{P('月额度')}</label>
+              <label>
+                {P('月额度')}（{P('点')}）
+              </label>
               <input
                 type="number"
+                step="0.01"
                 value={g.quotas.month}
                 onChange={(e) => updateQuota(index, 'month', Number(e.target.value) || 0)}
               />
-              <div className="field-note">{formatCredits(g.quotas.month)}</div>
+              <div className="field-note">
+                = {pointsToQuota(g.quotas.month, quotaUnit).toLocaleString('zh-CN')} {P('内部单位')}
+              </div>
             </div>
             <div className="field">
               <label>{P('模型白名单（空=全部；逗号分隔 model id）')}</label>
@@ -259,12 +326,19 @@ export function AdminGroupsPage({ path }: { path: string }) {
               />
             </div>
             <div className="field">
-              <label>{P('累计用量额度 ≥')}</label>
+              <label>
+                {P('累计用量额度 ≥')}（{P('点')}）
+              </label>
               <input
                 type="number"
+                step="0.01"
                 value={g.promotion.min_used_quota}
                 onChange={(e) => updatePromo(index, 'min_used_quota', Number(e.target.value) || 0)}
               />
+              <div className="field-note">
+                = {pointsToQuota(g.promotion.min_used_quota, quotaUnit).toLocaleString('zh-CN')}{' '}
+                {P('内部单位')}
+              </div>
             </div>
             <div className="field">
               <label>{P('签到次数 ≥')}</label>

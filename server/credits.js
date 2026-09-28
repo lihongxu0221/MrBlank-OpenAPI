@@ -2,14 +2,16 @@
  * Phase F — site credit wallet + check-in + redeem codes.
  * Persisted at server/data/site-credits.json (override via SITE_CREDITS_PATH).
  *
- * Unit: same as Phase E — 1 点 = 500000 raw. Grants raise balance; /v1 success
- * consumes balance (alongside group rolling windows). Day boundary: Asia/Shanghai.
+ * Unit: same as Phase E / aily — 1 点 = quota_per_unit raw (default 500000).
+ * Grants raise balance; /v1 success consumes balance (alongside group rolling windows).
+ * Day boundary: Asia/Shanghai. Display conversion reads getQuotaUnit() dynamically.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { DEFAULT_QUOTA_PER_UNIT, buildCreditUnitInfo } from './quotaUnit.js'
 
-const Q = 500_000
+const Q = DEFAULT_QUOTA_PER_UNIT
 const TZ = 'Asia/Shanghai'
 
 function nowIso() {
@@ -33,7 +35,7 @@ function defaultConfig() {
     daily_grant_min: 2 * Q,
     daily_grant_max: 2 * Q,
     timezone: TZ,
-    note: '签到与兑换码发放本站额度（点）；1 点 = 500000 内部单位。日界 Asia/Shanghai。',
+    note: '签到与兑换码发放本站额度（点）；点数↔内部单位见 /api/status quota_per_unit（默认 500000）。日界 Asia/Shanghai。',
   }
 }
 
@@ -136,10 +138,17 @@ function pickGrantAmount(config) {
   return min + r
 }
 
-export function createCreditStore(filePath, { quotaUnit = Q } = {}) {
+export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}) {
   const dir = path.dirname(filePath)
   fs.mkdirSync(dir, { recursive: true })
-  const unit = quotaUnit || Q
+  const resolveUnit = () => {
+    if (typeof getQuotaUnit === 'function') {
+      const n = Number(getQuotaUnit())
+      if (Number.isFinite(n) && n > 0) return n
+    }
+    return quotaUnit || Q
+  }
+  const unit = resolveUnit()
 
   function read() {
     if (!fs.existsSync(filePath)) {
@@ -177,7 +186,10 @@ export function createCreditStore(filePath, { quotaUnit = Q } = {}) {
   }
 
   return {
-    quotaUnit: unit,
+    get quotaUnit() {
+      return resolveUnit()
+    },
+    creditUnitInfo: () => buildCreditUnitInfo(resolveUnit()),
     shanghaiDay,
     shanghaiMonth,
 
@@ -430,11 +442,7 @@ export function createCreditStore(filePath, { quotaUnit = Q } = {}) {
         codes: doc.codes,
         users,
         updated_at: doc.updated_at,
-        credit_unit: {
-          raw_per_point: unit,
-          display_name: '点',
-          note: '1 点 = 500000 内部额度单位（与 Phase E 一致）',
-        },
+        credit_unit: buildCreditUnitInfo(resolveUnit()),
       }
     },
   }

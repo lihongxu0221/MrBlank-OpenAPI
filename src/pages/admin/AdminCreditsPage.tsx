@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Gift, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { formatCredits, setQuotaPerUnit } from '../../lib/format'
+import { formatCredits, getQuotaPerUnit, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
@@ -40,12 +40,11 @@ type Summary = {
   credit_unit?: { raw_per_point: number; note?: string }
 }
 
-const Q = 500_000
-
 function blankCode(): RedeemCode {
+  const Q = getQuotaPerUnit()
   return {
     code: '',
-    quota: 5 * Q,
+    quota: 5 * getQuotaPerUnit(),
     max_uses: 0,
     used_count: 0,
     once_per_user: true,
@@ -142,7 +141,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
     try {
       await api.post('/api/admin/credits/grant', {
         user_id: grantUserId.trim(),
-        amount: Math.round(points * Q),
+        amount: Math.round(points * getQuotaPerUnit()),
         note: 'admin-grant',
       })
       setMsg(P('已发放额度'))
@@ -164,6 +163,15 @@ export function AdminCreditsPage({ path }: { path: string }) {
         subtitle={P('配置每日签到发放额度与兑换码；额度进入本站积分钱包，可在组额度用尽时继续调用。')}
       />
 
+      <div className="panel" style={{ marginTop: 12 }}>
+        <strong>{P('点数 ↔ 内部单位')}</strong>
+        <p className="muted" style={{ margin: '6px 0 0' }}>
+          {P('当前')}：1 {P('点')} = {getQuotaPerUnit().toLocaleString('zh-CN')} {P('内部单位')}
+          （{P('与 $1 同换算')}）。{P('修改入口在')}{' '}
+          <a href="/admin/model-prices">{P('模型价格')}</a>。
+        </p>
+      </div>
+
       {err ? <div className="alert-box">{err}</div> : null}
       {msg ? <div className="toast">{msg}</div> : null}
 
@@ -181,7 +189,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
         {config ? (
           <>
             <p className="muted" style={{ fontSize: 13 }}>
-              {config.note || data?.credit_unit?.note || P('1 点 = 500000 内部单位；日界 Asia/Shanghai。')}
+              {config.note || data?.credit_unit?.note || P('1 点 = N 内部单位（见上方 / 模型价格页）；日界 Asia/Shanghai。')}
             </p>
             <div className="stats-grid" style={{ marginTop: 8 }}>
               <div className="field">
@@ -200,11 +208,11 @@ export function AdminCreditsPage({ path }: { path: string }) {
                   type="number"
                   min={0}
                   step={0.1}
-                  value={config.daily_grant_min / Q}
+                  value={config.daily_grant_min / getQuotaPerUnit()}
                   onChange={(e) =>
                     setConfig({
                       ...config,
-                      daily_grant_min: Math.round(Number(e.target.value || 0) * Q),
+                      daily_grant_min: Math.round(Number(e.target.value || 0) * getQuotaPerUnit()),
                     })
                   }
                 />
@@ -215,11 +223,11 @@ export function AdminCreditsPage({ path }: { path: string }) {
                   type="number"
                   min={0}
                   step={0.1}
-                  value={config.daily_grant_max / Q}
+                  value={config.daily_grant_max / getQuotaPerUnit()}
                   onChange={(e) =>
                     setConfig({
                       ...config,
-                      daily_grant_max: Math.round(Number(e.target.value || 0) * Q),
+                      daily_grant_max: Math.round(Number(e.target.value || 0) * getQuotaPerUnit()),
                     })
                   }
                 />
@@ -281,9 +289,9 @@ export function AdminCreditsPage({ path }: { path: string }) {
                       type="number"
                       min={0}
                       step={0.1}
-                      value={c.quota / Q}
+                      value={c.quota / getQuotaPerUnit()}
                       onChange={(e) =>
-                        updateCode(i, { quota: Math.round(Number(e.target.value || 0) * Q) })
+                        updateCode(i, { quota: Math.round(Number(e.target.value || 0) * getQuotaPerUnit()) })
                       }
                       style={{ width: 80 }}
                     />

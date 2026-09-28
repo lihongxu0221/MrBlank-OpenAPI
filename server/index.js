@@ -63,6 +63,7 @@ import {
 } from './cpa.js'
 import { createSiteUsageStore } from './siteUsage.js'
 import { createModelPricesStore } from './modelPrices.js'
+import { createQuotaUnitStore, DEFAULT_QUOTA_PER_UNIT, buildCreditUnitInfo } from './quotaUnit.js'
 import { createApiKeyAliasesStore } from './apiKeyAliases.js'
 import { createAccountActionsStore } from './accountActions.js'
 import { createUsageImportSessions } from './usageImportSessions.js'
@@ -79,7 +80,7 @@ import {
   maskSecretValue,
 } from './admin.js'
 import { createSiteContentStore } from './siteContent.js'
-import { createGroupStore, CREDIT_UNIT_INFO } from './groups.js'
+import { createGroupStore } from './groups.js'
 import { createCreditStore, shanghaiDay } from './credits.js'
 import { createLocalUserStore } from './localUsers.js'
 import { createDiagnosisStore } from './diagnosis.js'
@@ -137,8 +138,19 @@ const userKeyStore = createUserKeyStore(
 const siteUsage = createSiteUsageStore(
   process.env.SITE_USAGE_PATH || path.join(__dirname, 'data', 'site-usage.json'),
 )
+const quotaUnitStore = createQuotaUnitStore(
+  process.env.QUOTA_UNIT_PATH || path.join(__dirname, 'data', 'quota-unit.json'),
+)
+
+/** Filled after aily/CPA stores are ready; used by price sync fail-closed filter. */
+let resolveSupportedModels = async () => []
+
 const modelPrices = createModelPricesStore(
   process.env.MODEL_PRICES_PATH || path.join(__dirname, 'data', 'model-prices.json'),
+  {
+    getQuotaUnit: () => quotaUnitStore.getUnit(),
+    getSupportedModels: () => resolveSupportedModels(),
+  },
 )
 const apiKeyAliases = createApiKeyAliasesStore(
   process.env.API_KEY_ALIASES_PATH || path.join(__dirname, 'data', 'api-key-aliases.json'),
@@ -238,18 +250,73 @@ const ailyUpstream = createAilyUpstream({
 })
 ailyManager.attachUpstream(ailyUpstream)
 
+/**
+ * Supported price-book catalog: CPA billing /v1/models + aily/{id} when routing enabled.
+ * Fail closed — auto-sync never imports the ~11k aggregator universe.
+ */
+resolveSupportedModels = async () => {
+  const ids = new Set()
+  try {
+    const cpaModels = await fetchCpaModels(cpaCfg)
+    for (const m of cpaModels || []) {
+      const id = String(m?.id || m?.name || '').trim()
+      if (id) ids.add(id)
+    }
+  } catch (err) {
+    console.warn('[modelPrices] supported CPA models:', err?.message || err)
+  }
+  try {
+    const routing = ailyModelRouting.get()
+    const exposed = exposedModelNames(routing) || []
+    const envRoutes = ailyManager.cfg?.modelRoutes || []
+    if (exposed.length || envRoutes.length) {
+      for (const id of exposed) {
+        const s = String(id || '').trim()
+        if (!s) continue
+        ids.add(s)
+        ids.add(isAilyPrefixed(s) ? s : `aily/${s}`)
+        const bare = stripAilyPrefix(s)
+        if (bare) ids.add(bare)
+      }
+      try {
+        const result = await ailyUpstream.listModels(false)
+        const catalog =
+          result?.data ||
+          (result?.models || []).map((id) => ({ id, object: 'model', owned_by: 'aily' }))
+        const pub = publicModelList(catalog, routing)
+        for (const m of pub || []) {
+          const id = String(m?.id || '').trim()
+          if (!id) continue
+          ids.add(id)
+          const bare = stripAilyPrefix(id)
+          if (bare) ids.add(bare)
+        }
+      } catch (e) {
+        console.warn('[modelPrices] aily catalog:', e?.message || e)
+      }
+    }
+  } catch (err) {
+    console.warn('[modelPrices] supported aily models:', err?.message || err)
+  }
+  return [...ids]
+}
+
+
 const COOKIE_NAME = 'mrblank_sid'
 const STATE_TTL_MS = 10 * 60 * 1000
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000
-const Q = 500_000
+const Q = DEFAULT_QUOTA_PER_UNIT
 const groupStore = createGroupStore(
   process.env.USER_GROUPS_PATH || path.join(__dirname, 'data', 'user-groups.json'),
-  { quotaUnit: Q },
+  { quotaUnit: Q, getQuotaUnit: () => quotaUnitStore.getUnit() },
 )
 const creditStore = createCreditStore(
   process.env.SITE_CREDITS_PATH || path.join(__dirname, 'data', 'site-credits.json'),
-  { quotaUnit: Q },
+  { quotaUnit: Q, getQuotaUnit: () => quotaUnitStore.getUnit() },
 )
+function creditUnitInfo() {
+  return quotaUnitStore.creditUnitInfo()
+}
 const localUserStore = createLocalUserStore(
   process.env.LOCAL_USERS_PATH || path.join(__dirname, 'data', 'local-users.json'),
   process.env,
@@ -801,7 +868,7 @@ async function buildPool() {
 
 function publicHandlers() {
   return {
-    status: () => ok({ quota_per_unit: Q, credit_unit: CREDIT_UNIT_INFO }),
+    status: () => ok({ quota_per_unit: quotaUnitStore.getUnit(), credit_unit: creditUnitInfo() }),
     config: () =>
       ok({
         loginEnabled: true,
@@ -994,7 +1061,7 @@ app.use(
                   group_id: groupInfo.group?.id,
                   remaining: quotaCheck.info?.remaining || groupInfo.remaining,
                   site_credits: siteBal,
-                  credit_unit: CREDIT_UNIT_INFO,
+                  credit_unit: creditUnitInfo(),
                 },
               }
             }
@@ -1109,18 +1176,28 @@ app.use(
         if (!userId || !isConsuming || !okStatus) return
         const promptTok = Number(usage?.prompt_tokens) || 0
         const completionTok = Number(usage?.completion_tokens) || 0
+        const cacheReadTok =
+          Number(usage?.cache_tokens ?? usage?.prompt_tokens_details?.cached_tokens ?? 0) || 0
+        const cacheWriteTok =
+          Number(usage?.cache_write_tokens ?? usage?.cache_creation_tokens ?? 0) || 0
         const tokens = promptTok + completionTok
-        const quota = Math.max(1, tokens) // at least 1 raw unit per successful call
-        // USD amount for key rate windows / used_amount (price book when available)
+        // Price-book USD → raw quota (aily: round(USD * quota_per_unit)); not 1 token = 1 raw
         let amountUsd = 0
+        let quota = 0
         try {
-          const prices = modelPrices.priceMap()
           const model = String(requestedModel || usage?.model || '').trim()
-          const price = prices.get(model) || null
-          amountUsd = modelPrices.costForTokens(price, promptTok, completionTok)
-          if (!amountUsd && tokens > 0) amountUsd = tokens / Q // fallback: 500k tokens ≈ $1
-        } catch {
-          amountUsd = tokens > 0 ? tokens / Q : 0
+          const price = modelPrices.lookupPrice(model)
+          amountUsd = modelPrices.costForTokens(price, promptTok, completionTok, {
+            cacheReadTokens: cacheReadTok,
+            cacheWriteTokens: cacheWriteTok,
+          })
+          quota = quotaUnitStore.dollarsToQuota(amountUsd)
+          // Unpriced successful call: charge minimal 1 raw so windows still move; prefer syncing prices
+          if (quota <= 0 && tokens > 0) quota = price ? 0 : 1
+        } catch (e) {
+          console.error('[billing] price quota failed', e?.message || e)
+          amountUsd = 0
+          quota = tokens > 0 ? 1 : 0
         }
         try {
           groupStore.recordUsage(userId, { quota, requests: 1 })
@@ -2216,7 +2293,7 @@ app.delete('/api/admin/keys', requireAdmin, async (req, res) => {
 
 
 app.get('/api/admin/groups', requireAdmin, (_req, res) => {
-  res.json(ok({ groups: groupStore.listGroups(), updated_at: null, quota_unit: Q, credit_unit: CREDIT_UNIT_INFO }))
+  res.json(ok({ groups: groupStore.listGroups(), updated_at: null, quota_unit: quotaUnitStore.getUnit(), credit_unit: creditUnitInfo() }))
 })
 
 app.put('/api/admin/groups', requireAdmin, (req, res) => {
@@ -3733,6 +3810,30 @@ app.post('/api/admin/account-actions/:id/resolve', requireAdmin, (req, res) => {
   }
 })
 
+app.get('/api/admin/quota-unit', requireAdmin, (_req, res) => {
+  try {
+    res.json(ok(quotaUnitStore.get()))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'quota-unit failed'))
+  }
+})
+
+app.put('/api/admin/quota-unit', requireAdmin, (req, res) => {
+  try {
+    const body = req.body || {}
+    const next = body.quota_per_unit ?? body.raw_per_point ?? body.value
+    const data = quotaUnitStore.setUnit(next)
+    try {
+      modelPrices.recomputeQuotaFields(data.quota_per_unit)
+    } catch (e) {
+      console.warn('[quota-unit] recompute price quota fields:', e?.message || e)
+    }
+    res.json(ok(data))
+  } catch (err) {
+    res.status(err?.status || 400).json(fail(err?.message || 'quota-unit put failed'))
+  }
+})
+
 app.get('/api/admin/model-prices', requireAdmin, (_req, res) => {
   try {
     res.json(ok(modelPrices.getPrices()))
@@ -3762,9 +3863,18 @@ app.post('/api/admin/model-prices/sync', requireAdmin, async (req, res) => {
         imported: data.imported,
         updated: data.updated,
         skipped: data.skipped,
+        skipped_unsupported: data.skipped_unsupported,
+        stale_removed: data.stale_removed,
         failed_sources: data.failed_sources || [],
         sources: data.sources || {},
         total_prices: data.total_prices,
+        supported_count: data.supported_count,
+        priced_count: data.priced_count,
+        priced_auto: data.priced_auto,
+        priced_manual: data.priced_manual,
+        unpriced_count: data.unpriced_count,
+        matched_from_sources: data.matched_from_sources,
+        quota_per_unit: data.quota_per_unit,
         at: data.at,
         updated_at: data.updated_at,
         last_sync: data,
@@ -3776,29 +3886,22 @@ app.post('/api/admin/model-prices/sync', requireAdmin, async (req, res) => {
   }
 })
 
-app.get('/api/admin/model-prices/runtime-models', requireAdmin, (req, res) => {
+app.get('/api/admin/model-prices/runtime-models', requireAdmin, async (req, res) => {
   try {
     const period = String(req.query?.period || 'all')
-    const seen = new Set(siteUsage.distinctModels({ period }) || [])
-    try {
-      const routing = ailyModelRouting.get()
-      for (const id of exposedModelNames(routing) || []) {
-        const s = String(id || '').trim()
-        if (!s) continue
-        seen.add(s)
-        if (!isAilyPrefixed(s)) seen.add(`aily/${s}`)
-      }
-      for (const row of routing?.mappings || []) {
-        const from = String(row?.from || '').trim()
-        if (!from) continue
-        seen.add(from)
-        seen.add(isAilyPrefixed(from) ? from : `aily/${from}`)
-      }
-    } catch {
-      /* aily routing optional */
-    }
-    const models = [...seen].sort((a, b) => a.localeCompare(b))
-    res.json(ok({ models, period, source: 'site-usage+aily-routing' }))
+    const supported = await resolveSupportedModels()
+    const usageSeen = new Set(siteUsage.distinctModels({ period }) || [])
+    const models = [...new Set(supported)].sort((a, b) => a.localeCompare(b))
+    res.json(
+      ok({
+        models,
+        supported: models,
+        usage_models: [...usageSeen].sort((a, b) => a.localeCompare(b)),
+        period,
+        source: 'cpa-/v1/models+aily-routing',
+        note: 'Canonical supported set for price sync (not historical site-usage).',
+      }),
+    )
   } catch (err) {
     res.status(500).json(fail(err?.message || 'runtime-models failed'))
   }

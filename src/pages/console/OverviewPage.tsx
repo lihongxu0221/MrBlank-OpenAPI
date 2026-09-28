@@ -85,8 +85,7 @@ export function OverviewPage({ path }: { path: string }) {
             {groupInfo.group.description || P('你的额度窗口与可用模型由用户组决定。')}
           </p>
           <p className="muted" style={{ fontSize: 12, marginTop: -4 }}>
-            {groupInfo.credit_unit?.note ||
-              P('额度单位：1 点 = 500000 内部单位；BFF /v1 滚动窗口按 token 计入。')}
+            {groupInfo.credit_unit?.note || P('额度单位见 /api/status quota_per_unit；滚动窗口按价格表 raw 额度计入。')}
           </p>
           <div className="stats-grid">
             <div className="stat-card">

@@ -8,7 +8,7 @@ export function getQuotaPerUnit() {
   return quotaPerUnit
 }
 
-/** aily / new-api: $1 = 500000 quota */
+/** Default aily / new-api: $1 = 1 点 = 500000 raw (overridden at runtime via /api/status). */
 export const QUOTA_PER_USD = 500_000
 
 export function formatCredits(raw: number, unit = quotaPerUnit): string {
@@ -36,12 +36,21 @@ export function fmtUsd(n: number) {
   )
 }
 
-export function quotaToUsd(q: number) {
-  return (Number(q) || 0) / QUOTA_PER_USD
+export function quotaToUsd(q: number, unit = quotaPerUnit) {
+  return (Number(q) || 0) / (unit || QUOTA_PER_USD)
 }
 
-export function usdToQuota(usd: number) {
-  return Math.round((Number(usd) || 0) * QUOTA_PER_USD)
+export function usdToQuota(usd: number, unit = quotaPerUnit) {
+  return Math.round((Number(usd) || 0) * (unit || QUOTA_PER_USD))
+}
+
+/** Display 点 → raw (same N as USD under aily parity). */
+export function pointsToQuota(points: number, unit = quotaPerUnit) {
+  return usdToQuota(points, unit)
+}
+
+export function quotaToPoints(q: number, unit = quotaPerUnit) {
+  return quotaToUsd(q, unit)
 }
 
 export function stName(s: number) {

@@ -3,25 +3,20 @@
  * Persisted at server/data/user-groups.json.
  *
  * Credit / quota unit:
- *   - Display「点」= raw / Q ; Q = 500_000 (≈ $1 presentation unit)
- *   - Rolling 5h / week / month quotas use raw units
- *   - BFF /v1 maps prompt+completion tokens → raw (MVP: 1 token ≈ 1 raw unit)
+ *   - Display「点」= raw / quota_per_unit (default 500_000 ≈ $1, aily parity)
+ *   - Rolling 5h / week / month quotas are STORED as raw units; admin UI edits in 点
+ *   - BFF /v1 deducts price-book raw quota into these windows (not 1 token = 1 raw)
  *   - Empty model_ids = all models; non-empty = allowlist (403 if violated)
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { DEFAULT_QUOTA_PER_UNIT, buildCreditUnitInfo } from './quotaUnit.js'
 
-const Q = 500_000
+const Q = DEFAULT_QUOTA_PER_UNIT
 
-/** Public description of the credit unit (API + docs). */
-export const CREDIT_UNIT_INFO = {
-  raw_per_point: Q,
-  display_name: '点',
-  note:
-    '1 点 = 500000 内部额度单位（约 $1 展示换算）。用户组 5h/周/月滚动额度按内部单位计量；BFF /v1 将 prompt+completion tokens 计入（MVP：1 token ≈ 1 内部单位）。',
-  windows: ['window_5h', 'week', 'month'],
-}
+/** Public description of the credit unit (API + docs). Prefer store.creditUnitInfo(). */
+export const CREDIT_UNIT_INFO = buildCreditUnitInfo(Q)
 
 const DEFAULT_GROUPS = [
   {
@@ -165,10 +160,17 @@ function meetsPromotion(metrics, rule) {
   )
 }
 
-export function createGroupStore(filePath, { quotaUnit = Q } = {}) {
+export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}) {
   const dir = path.dirname(filePath)
   fs.mkdirSync(dir, { recursive: true })
-  const unit = quotaUnit || Q
+  const resolveUnit = () => {
+    if (typeof getQuotaUnit === 'function') {
+      const n = Number(getQuotaUnit())
+      if (Number.isFinite(n) && n > 0) return n
+    }
+    return quotaUnit || Q
+  }
+  const unit = resolveUnit()
 
   function read() {
     if (!fs.existsSync(filePath)) {
@@ -378,8 +380,8 @@ export function createGroupStore(filePath, { quotaUnit = Q } = {}) {
           ? { id: next.id, name: next.name, level: next.level, promotion: next.promotion }
           : null,
         progress,
-        quota_unit: unit,
-        credit_unit: CREDIT_UNIT_INFO,
+        quota_unit: resolveUnit(),
+        credit_unit: buildCreditUnitInfo(resolveUnit()),
       }
     },
 
@@ -495,4 +497,4 @@ export function createGroupStore(filePath, { quotaUnit = Q } = {}) {
   }
 }
 
-export { Q as GROUP_QUOTA_UNIT, DEFAULT_GROUPS, CREDIT_UNIT_INFO as GROUP_CREDIT_UNIT }
+export { Q as GROUP_QUOTA_UNIT, DEFAULT_GROUPS, CREDIT_UNIT_INFO as GROUP_CREDIT_UNIT, buildCreditUnitInfo }

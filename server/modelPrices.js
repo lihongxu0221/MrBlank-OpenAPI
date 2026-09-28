@@ -1,17 +1,27 @@
 /**
- * Model price book for costed site-usage summaries (Wave B + official sync).
- * Persisted at server/data/model-prices.json (JSON file store — same pattern as other Wave B stores).
+ * Model price book for costed site-usage summaries + billing raw-quota conversion.
+ * Persisted at server/data/model-prices.json (JSON file store).
  *
  * Schema per model:
  *   model, input_per_mtok, output_per_mtok, cache_read_per_mtok?, cache_write_per_mtok?,
- *   currency (USD), note, manual, source, updated_at
+ *   input_quota_per_mtok, output_quota_per_mtok, cache_read_quota_per_mtok?, cache_write_quota_per_mtok?,
+ *   currency (USD), note, manual, source, updated_at, stale?
  *
  * aily/{model} inherits bare {model} pricing via lookupPrice (no duplicated rows).
+ *
+ * Auto-sync: FILTER to supported catalog only (CPA /v1/models + aily when routed).
+ * Rebuild automatic portion; preserve manual overrides; remove stale auto rows.
+ * Quota fields use aily formula: quota_per_mtok = round(usd_per_mtok * quota_per_unit).
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { stripAilyPrefix, isAilyPrefixed } from './ailyModelRouting.js'
 import { fetchOfficialPrices } from './modelPriceSync.js'
+import {
+  DEFAULT_QUOTA_PER_UNIT,
+  dollarsToQuota,
+  usdPerMtokToQuotaPerMtok,
+} from './quotaUnit.js'
 
 function ensureDir(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
@@ -49,7 +59,25 @@ function optionalNonNeg(raw) {
   return n
 }
 
-function normalizePrice(raw) {
+function attachQuotaFields(row, unit = DEFAULT_QUOTA_PER_UNIT) {
+  if (!row) return row
+  const u = Number(unit) > 0 ? Number(unit) : DEFAULT_QUOTA_PER_UNIT
+  row.input_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.input_per_mtok, u)
+  row.output_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.output_per_mtok, u)
+  if (row.cache_read_per_mtok != null) {
+    row.cache_read_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.cache_read_per_mtok, u)
+  } else {
+    delete row.cache_read_quota_per_mtok
+  }
+  if (row.cache_write_per_mtok != null) {
+    row.cache_write_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.cache_write_per_mtok, u)
+  } else {
+    delete row.cache_write_quota_per_mtok
+  }
+  return row
+}
+
+function normalizePrice(raw, unit = DEFAULT_QUOTA_PER_UNIT) {
   const model = String(raw?.model || '').trim()
   if (!model) return null
   const note = raw.note != null ? String(raw.note) : ''
@@ -76,6 +104,8 @@ function normalizePrice(raw) {
   }
   if (cacheRead != null) row.cache_read_per_mtok = cacheRead
   if (cacheWrite != null) row.cache_write_per_mtok = cacheWrite
+  if (raw.stale === true) row.stale = true
+  attachQuotaFields(row, unit)
   return row
 }
 
@@ -124,25 +154,68 @@ function costForTokens(price, promptTokens, completionTokens, opts = {}) {
 }
 
 /**
- * @param {string} filePath
+ * aily calculateQuota (tokenPrices path): USD then round(USD * QUOTA_PER_UNIT).
+ * @param {object|null} price
+ * @param {number} promptTokens
+ * @param {number} completionTokens
+ * @param {{ cacheReadTokens?: number, cacheWriteTokens?: number, quotaUnit?: number }} [opts]
  */
-export function createModelPricesStore(filePath) {
+function quotaForTokens(price, promptTokens, completionTokens, opts = {}) {
+  const usd = costForTokens(price, promptTokens, completionTokens, opts)
+  const unit = opts.quotaUnit != null ? Number(opts.quotaUnit) : DEFAULT_QUOTA_PER_UNIT
+  return dollarsToQuota(usd, unit)
+}
+
+/** Normalize supported catalog ids to bare keys used in the price book. */
+function bareSupportedSet(supportedModels) {
+  const set = new Set()
+  for (const raw of supportedModels || []) {
+    const id = String(raw || '').trim()
+    if (!id) continue
+    const bare = isAilyPrefixed(id) ? stripAilyPrefix(id) : id
+    if (bare) set.add(bare)
+    if (!isAilyPrefixed(id)) set.add(id)
+  }
+  return set
+}
+
+/**
+ * @param {string} filePath
+ * @param {{ getQuotaUnit?: () => number, getSupportedModels?: () => Promise<string[]>|string[] }} [deps]
+ */
+export function createModelPricesStore(filePath, deps = {}) {
   let store = readStore(filePath)
   /** @type {ReturnType<typeof setInterval>|null} */
   let syncTimer = null
   let syncInFlight = false
+
+  const resolveUnit = () => {
+    if (typeof deps.getQuotaUnit === 'function') {
+      const n = Number(deps.getQuotaUnit())
+      if (Number.isFinite(n) && n > 0) return n
+    }
+    return DEFAULT_QUOTA_PER_UNIT
+  }
 
   function persist() {
     store.updated_at = new Date().toISOString()
     writeStore(filePath, store)
   }
 
+  function recomputeQuotaFields(unit = resolveUnit()) {
+    store.prices = store.prices.map((p) => attachQuotaFields({ ...p }, unit))
+    persist()
+    return getPrices()
+  }
+
   function getPrices() {
+    const unit = resolveUnit()
     return {
       updated_at: store.updated_at,
       last_sync: store.last_sync || null,
-      prices: store.prices.slice(),
+      prices: store.prices.map((p) => attachQuotaFields({ ...p }, unit)),
       path: filePath,
+      quota_per_unit: unit,
     }
   }
 
@@ -152,8 +225,9 @@ export function createModelPricesStore(filePath) {
     if (!Array.isArray(list)) throw Object.assign(new Error('prices must be an array'), { status: 400 })
     const byModel = new Map()
     const now = new Date().toISOString()
+    const unit = resolveUnit()
     for (const raw of list) {
-      const p = normalizePrice(raw)
+      const p = normalizePrice(raw, unit)
       if (!p) continue
       if (!p.updated_at) p.updated_at = now
       byModel.set(p.model, p)
@@ -180,6 +254,12 @@ export function createModelPricesStore(filePath) {
       const bare = stripAilyPrefix(key)
       if (bare && map.has(bare)) return map.get(bare)
     }
+    // Also try last path segment for provider/model ids
+    const slash = key.lastIndexOf('/')
+    if (slash > 0) {
+      const bare = key.slice(slash + 1)
+      if (bare && map.has(bare)) return map.get(bare)
+    }
     return null
   }
 
@@ -195,8 +275,15 @@ export function createModelPricesStore(filePath) {
   }
 
   /**
-   * Merge official/aggregate prices into the book.
-   * @param {{ overwriteManual?: boolean, incoming?: object[] }} [opts]
+   * Merge official/aggregate prices into the book — FILTERED to supported catalog.
+   * Rebuilds automatic portion; preserves manuals; removes stale auto rows.
+   *
+   * @param {{
+   *   overwriteManual?: boolean,
+   *   incoming?: object[],
+   *   supportedModels?: string[],
+   *   allowEmptySupported?: boolean,
+   * }} [opts]
    */
   async function syncOfficial(opts = {}) {
     if (syncInFlight && !Array.isArray(opts.incoming)) {
@@ -205,10 +292,26 @@ export function createModelPricesStore(filePath) {
     syncInFlight = true
     try {
       const overwriteManual = opts.overwriteManual === true
+      const unit = resolveUnit()
+      let supportedList = opts.supportedModels
+      if (supportedList == null && typeof deps.getSupportedModels === 'function') {
+        supportedList = await deps.getSupportedModels()
+      }
+      if (!Array.isArray(supportedList)) supportedList = []
+      const supported = bareSupportedSet(supportedList)
+      if (supported.size === 0 && !opts.allowEmptySupported) {
+        throw Object.assign(
+          new Error(
+            'supported model catalog empty or unavailable — sync aborted (fail closed; will not import ~11k universe)',
+          ),
+          { status: 503 },
+        )
+      }
+
       let fetched
       if (Array.isArray(opts.incoming)) {
         fetched = {
-          prices: opts.incoming.map(normalizePrice).filter(Boolean),
+          prices: opts.incoming.map((r) => normalizePrice(r, unit)).filter(Boolean),
           sources: { local: { ok: true, count: opts.incoming.length } },
           failed_sources: [],
         }
@@ -216,27 +319,36 @@ export function createModelPricesStore(filePath) {
         fetched = await fetchOfficialPrices()
       }
 
-      const byModel = new Map(store.prices.map((p) => [p.model, p]))
+      const byModel = new Map(store.prices.map((p) => [p.model, { ...p }]))
       let imported = 0
       let updated = 0
       let skipped = 0
+      let skipped_unsupported = 0
+      let stale_removed = 0
       const now = new Date().toISOString()
+      const matchedSupported = new Set()
 
       for (const raw of fetched.prices) {
-        const next = normalizePrice({ ...raw, updated_at: now })
+        let next = normalizePrice({ ...raw, updated_at: now, stale: false }, unit)
         if (!next) continue
         // Never store aily/ duplicates from sync — bare only; lookup falls back
         if (isAilyPrefixed(next.model)) {
           skipped += 1
           continue
         }
+        if (supported.size && !supported.has(next.model)) {
+          skipped_unsupported += 1
+          continue
+        }
+        matchedSupported.add(next.model)
+        next = attachQuotaFields(next, unit)
         const prev = byModel.get(next.model)
         if (prev && isProtectedManual(prev) && !overwriteManual) {
           skipped += 1
           continue
         }
         if (!prev) {
-          byModel.set(next.model, next)
+          byModel.set(next.model, { ...next, manual: false, stale: false })
           imported += 1
           continue
         }
@@ -246,6 +358,7 @@ export function createModelPricesStore(filePath) {
             source: next.source || prev.source,
             note: prev.note || next.note,
             manual: prev.manual,
+            stale: false,
             updated_at: prev.updated_at || next.updated_at,
             ...(next.cache_read_per_mtok != null && prev.cache_read_per_mtok == null
               ? { cache_read_per_mtok: next.cache_read_per_mtok }
@@ -254,26 +367,53 @@ export function createModelPricesStore(filePath) {
               ? { cache_write_per_mtok: next.cache_write_per_mtok }
               : {}),
           })
+          attachQuotaFields(byModel.get(next.model), unit)
           skipped += 1
           continue
         }
         byModel.set(next.model, {
           ...next,
           manual: false,
+          stale: false,
           note: next.note || prev.note,
         })
         updated += 1
       }
 
-      store.prices = [...byModel.values()].sort((a, b) => a.model.localeCompare(b.model))
+      // Remove / mark stale auto rows not in supported catalog
+      for (const [model, prev] of [...byModel.entries()]) {
+        if (isProtectedManual(prev)) continue
+        if (supported.size && !supported.has(model)) {
+          byModel.delete(model)
+          stale_removed += 1
+        }
+      }
+
+      store.prices = [...byModel.values()]
+        .map((p) => attachQuotaFields({ ...p }, unit))
+        .sort((a, b) => a.model.localeCompare(b.model))
+
+      const priced_auto = store.prices.filter((p) => !isProtectedManual(p)).length
+      const priced_manual = store.prices.filter((p) => isProtectedManual(p)).length
+      const unpriced = [...supported].filter((id) => !byModel.has(id)).length
+
       const summary = {
         at: now,
         imported,
         updated,
         skipped,
+        skipped_unsupported,
+        stale_removed,
         failed_sources: fetched.failed_sources || [],
         sources: fetched.sources || {},
         total_prices: store.prices.length,
+        supported_count: supported.size,
+        priced_count: store.prices.length,
+        priced_auto,
+        priced_manual,
+        unpriced_count: unpriced,
+        matched_from_sources: matchedSupported.size,
+        quota_per_unit: unit,
       }
       store.last_sync = summary
       persist()
@@ -292,7 +432,9 @@ export function createModelPricesStore(filePath) {
       typeof siteUsage.activityByModel === 'function'
         ? siteUsage.activityByModel({ period })
         : []
+    const unit = resolveUnit()
     let totalCost = 0
+    let totalQuota = 0
     const rows = byModel.map((row) => {
       const price = lookupPrice(row.model)
       const prompt = Number(row.prompt_tokens) || 0
@@ -306,7 +448,9 @@ export function createModelPricesStore(filePath) {
         cacheReadTokens: cacheRead,
         cacheWriteTokens: cacheWrite,
       })
+      const quota = dollarsToQuota(cost, unit)
       totalCost += cost
+      totalQuota += quota
       const resolvedVia =
         price && isAilyPrefixed(row.model) && price.model !== row.model ? price.model : null
       return {
@@ -322,8 +466,12 @@ export function createModelPricesStore(filePath) {
         output_per_mtok: price?.output_per_mtok ?? null,
         cache_read_per_mtok: price?.cache_read_per_mtok ?? null,
         cache_write_per_mtok: price?.cache_write_per_mtok ?? null,
+        input_quota_per_mtok: price?.input_quota_per_mtok ?? null,
+        output_quota_per_mtok: price?.output_quota_per_mtok ?? null,
         currency: price?.currency || 'USD',
         cost: Math.round(cost * 1e6) / 1e6,
+        quota_raw: quota,
+        quota_points: quota / unit,
         priced: !!price,
         price_model: price?.model || null,
         resolved_via: resolvedVia,
@@ -332,11 +480,14 @@ export function createModelPricesStore(filePath) {
     return {
       period,
       total_cost: Math.round(totalCost * 1e6) / 1e6,
+      total_quota_raw: totalQuota,
+      total_quota_points: totalQuota / unit,
       currency: 'USD',
+      quota_per_unit: unit,
       by_model: rows.sort((a, b) => b.cost - a.cost || b.tokens - a.tokens),
       priced_models: store.prices.length,
       note:
-        'Cost = site-usage tokens × local price book (per MTok). Cache-read tokens billed at cache_read_per_mtok when present. aily/{model} inherits bare {model} price. Unpriced models show cost 0.',
+        'Cost = site-usage tokens × local price book (per MTok). Raw quota = round(USD × quota_per_unit). Cache-read tokens billed at cache_read_per_mtok when present. aily/{model} inherits bare {model} price. Unpriced models show cost 0.',
     }
   }
 
@@ -363,7 +514,7 @@ export function createModelPricesStore(filePath) {
         log(`[modelPrices] sync start (${reason})`)
         const result = await syncOfficial()
         log(
-          `[modelPrices] sync done imported=${result.imported} updated=${result.updated} skipped=${result.skipped} total=${result.total_prices} failed=${(result.failed_sources || []).join(',') || 'none'}`,
+          `[modelPrices] sync done imported=${result.imported} updated=${result.updated} skipped=${result.skipped} stale_removed=${result.stale_removed} supported=${result.supported_count} priced=${result.priced_count} unpriced=${result.unpriced_count} failed=${(result.failed_sources || []).join(',') || 'none'}`,
         )
       } catch (err) {
         console.error('[modelPrices] sync failed', err?.message || err)
@@ -400,9 +551,13 @@ export function createModelPricesStore(filePath) {
     priceMap,
     lookupPrice,
     costForTokens,
+    quotaForTokens: (price, prompt, completion, opts = {}) =>
+      quotaForTokens(price, prompt, completion, { ...opts, quotaUnit: resolveUnit() }),
     isProtectedManual,
+    recomputeQuotaFields,
     startScheduledSync,
     stopScheduledSync,
+    getQuotaUnit: resolveUnit,
   }
 }
 
@@ -426,8 +581,13 @@ function parseSyncIntervalHours(intervalEnv, cronEnv) {
 
 export {
   costForTokens,
+  quotaForTokens,
   normalizePrice,
   isProtectedManual,
   stripAilyPrefix,
   parseSyncIntervalHours,
+  attachQuotaFields,
+  bareSupportedSet,
+  dollarsToQuota,
+  usdPerMtokToQuotaPerMtok,
 }

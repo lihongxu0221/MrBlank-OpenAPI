@@ -48,6 +48,7 @@ test('syncOfficial merges without overwriting manual; stores cache rates', async
     { model: 'auto-me', input_per_mtok: 1, output_per_mtok: 1, source: 'models.dev' },
   ])
   const result = await prices.syncOfficial({
+    supportedModels: ['keep-me', 'auto-me', 'new-me'],
     incoming: [
       { model: 'keep-me', input_per_mtok: 0.1, output_per_mtok: 0.1, source: 'models.dev' },
       {
@@ -60,6 +61,7 @@ test('syncOfficial merges without overwriting manual; stores cache rates', async
       },
       { model: 'new-me', input_per_mtok: 4, output_per_mtok: 5, cache_read_per_mtok: 0.4, source: 'openrouter' },
       { model: 'aily/should-skip', input_per_mtok: 1, output_per_mtok: 1, source: 'models.dev' },
+      { model: 'universe-noise', input_per_mtok: 9, output_per_mtok: 9, source: 'openrouter' },
     ],
   })
   assert.equal(result.imported, 1)
@@ -77,6 +79,8 @@ test('syncOfficial merges without overwriting manual; stores cache rates', async
   const neu = book.find((p) => p.model === 'new-me')
   assert.equal(neu.cache_read_per_mtok, 0.4)
   assert.ok(!book.find((p) => p.model === 'aily/should-skip'))
+  assert.ok(!book.find((p) => p.model === 'universe-noise'))
+  assert.equal(result.supported_count, 3)
   assert.ok(prices.getPrices().last_sync)
 
   fs.rmSync(dir, { recursive: true, force: true })
