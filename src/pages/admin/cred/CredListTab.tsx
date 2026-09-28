@@ -23,6 +23,7 @@ import {
   fmtCompact,
   fmtMoney,
   fmtPct,
+  fmtResetRelative,
   fmtTimeShort,
   healthBadge,
   maskEmail,
@@ -657,7 +658,7 @@ function CredRow({
 
       <div className="cred-cell-quota">
         {windows.length ? (
-          <div className={`cred-quota-grid cols-${Math.min(2, windows.length)}`}>
+          <div className={`cred-quota-grid cols-${windows.length >= 2 ? 2 : 1}`}>
             {windows.slice(0, 4).map((w, i) => {
               const ratio = w.remaining_ratio
               const pct = ratio != null && Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : null
@@ -668,29 +669,34 @@ function CredRow({
                   : risk === 'low' || risk === 'critical' || (pct != null && pct < 0.5)
                     ? 'warn'
                     : 'good'
+              const extraBits: string[] = []
+              if (w.used_cost != null && Number.isFinite(Number(w.used_cost))) {
+                extraBits.push(fmtMoney(w.used_cost))
+              }
+              if (w.used_tokens != null && Number.isFinite(Number(w.used_tokens))) {
+                extraBits.push(fmtCompact(w.used_tokens))
+              }
               return (
                 <div key={i} className="cred-quota-window">
                   <div className="cred-quota-window-head">
-                    <span>{w.label}</span>
+                    <span title={w.label}>{w.label}</span>
                     <span>{pct != null ? `${P('剩余')} ${Math.round(pct * 100)}%` : P('额度未知')}</span>
                   </div>
                   <div className="cred-quota-track">
                     <i className={barCls} style={{ width: pct != null ? `${pct * 100}%` : '0%' }} />
                   </div>
-                  <div className="cred-quota-window-meta muted">
-                    {w.resets_at ? fmtTimeShort(w.resets_at) : '—'}
+                  {extraBits.length ? (
+                    <div className="cred-quota-window-extra">{extraBits.join(' / ')}</div>
+                  ) : null}
+                  <div className="cred-quota-window-meta">
+                    {w.resets_at ? fmtResetRelative(w.resets_at) : '—'}
                   </div>
                 </div>
               )
             })}
           </div>
         ) : (
-          <div className="cred-quota-empty">
-            <div className="cred-quota-track">
-              <i className="neutral" style={{ width: '0%' }} />
-            </div>
-            <span className="muted">{P('暂无额度数据')}</span>
-          </div>
+          <div className="cred-quota-empty">{P('暂无额度数据')}</div>
         )}
       </div>
 

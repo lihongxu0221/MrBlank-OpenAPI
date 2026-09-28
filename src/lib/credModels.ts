@@ -186,3 +186,39 @@ function wildcardMatch(pattern: string, value: string): boolean {
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
+
+
+/** After models fetch: keep local draft when API returns empty/stale post-save. */
+export function reconcileExcludedAfterFetch(opts: {
+  wasDirty: boolean
+  localDraft: string[]
+  apiExcluded: unknown
+  apiDefined?: boolean
+  preferLocalIfApiEmpty?: boolean
+}): { rules: string[]; applyToDraft: boolean } {
+  const wasDirty = !!opts?.wasDirty
+  const local = parseExcludedModels(opts?.localDraft)
+  const apiDefined = opts?.apiDefined !== false && opts?.apiExcluded !== undefined
+  const api = apiDefined ? parseExcludedModels(opts.apiExcluded) : local
+  const preferLocalIfApiEmpty = opts?.preferLocalIfApiEmpty !== false
+
+  if (wasDirty) {
+    return { rules: local, applyToDraft: false }
+  }
+  if (!apiDefined) {
+    return { rules: local, applyToDraft: false }
+  }
+  if (preferLocalIfApiEmpty && api.length === 0 && local.length > 0) {
+    return { rules: local, applyToDraft: false }
+  }
+  return { rules: api, applyToDraft: true }
+}
+
+/** Toggle A then B → save payload contains both ids. */
+export function buildExcludedSavePayload(draft: string[], toDisable: string[] = []): string[] {
+  let next = parseExcludedModels(draft)
+  for (const id of toDisable) {
+    next = toggleExcludedModel(next, id, true)
+  }
+  return next
+}

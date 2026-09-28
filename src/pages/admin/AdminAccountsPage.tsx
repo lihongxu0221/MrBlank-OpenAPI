@@ -35,6 +35,7 @@ import {
   computeModelFilterCounts,
   toggleExcludedModel,
   excludedListsEqual,
+  reconcileExcludedAfterFetch,
 } from '../../lib/credModels'
 import { CredListTab } from './cred/CredListTab'
 import type { Account as CredAccount } from './cred/types'
@@ -695,19 +696,23 @@ export function AdminAccountsPage({ path }: { path: string }) {
     setDetailModelsErr(null)
     setDetailModelsLoading(true)
     const wasDirty = !excludedListsEqual(excludedDraft, excludedBaseline)
+    const localSnapshot = [...excludedDraft]
     try {
       const d = await api.get<{ models: unknown; excluded_models?: unknown }>(
         `/api/admin/accounts/models?name=${encodeURIComponent(name)}`,
       )
-      const exFromApi =
-        d.excluded_models !== undefined ? parseExcludedModels(d.excluded_models) : excludedDraft
-      const rules = !wasDirty && d.excluded_models !== undefined ? exFromApi : excludedDraft
+      const { rules, applyToDraft } = reconcileExcludedAfterFetch({
+        wasDirty,
+        localDraft: localSnapshot,
+        apiExcluded: d.excluded_models,
+        apiDefined: d.excluded_models !== undefined,
+        preferLocalIfApiEmpty: true,
+      })
       setDetailModels(mergeExcludedIntoModels(normalizeAuthFileModels(d.models), rules))
-      if (!wasDirty && d.excluded_models !== undefined) {
-        const ex = parseExcludedModels(d.excluded_models)
-        setExcludedDraft(ex)
-        setExcludedBaseline(ex)
-        setConfigDraft((c) => ({ ...c, excluded_models_text: ex.join('\n') }))
+      if (applyToDraft) {
+        setExcludedDraft(rules)
+        setExcludedBaseline(rules)
+        setConfigDraft((c) => ({ ...c, excluded_models_text: rules.join('\n') }))
       }
     } catch (e) {
       setDetailModelsErr((e as Error).message)
@@ -734,15 +739,17 @@ export function AdminAccountsPage({ path }: { path: string }) {
     }
   }
 
+  const detailAccountName = detail ? accountName(detail) : ''
   useEffect(() => {
-    if (detail && detailTab === 'models') {
-      void loadDetailModels(accountName(detail))
+    if (detailAccountName && detailTab === 'models') {
+      void loadDetailModels(detailAccountName)
     }
-    if (detail && detailTab === 'diagnosis') {
-      void loadDetailDiagnosis(accountName(detail))
+    if (detailAccountName && detailTab === 'diagnosis') {
+      void loadDetailDiagnosis(detailAccountName)
     }
+    // Depend on account name + tab only — setDetail after save must not retrigger wipe
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail, detailTab])
+  }, [detailAccountName, detailTab])
 
   const modelsDirty = !excludedListsEqual(excludedDraft, excludedBaseline)
   const modelsForUi = useMemo(
@@ -768,14 +775,19 @@ export function AdminAccountsPage({ path }: { path: string }) {
   async function saveExcludedModels() {
     if (!detail || !modelsDirty) return
     const name = accountName(detail)
+    const saved = [...excludedDraft]
     setModelsSaving(true)
     try {
-      await api.patch('/api/admin/accounts/fields', { name, excluded_models: excludedDraft })
-      setExcludedBaseline([...excludedDraft])
-      setConfigDraft((c) => ({ ...c, excluded_models_text: excludedDraft.join('\n') }))
-      setDetail((d) => (d ? { ...d, excluded_models: [...excludedDraft] } : d))
+      await api.patch('/api/admin/accounts/fields', { name, excluded_models: saved })
+      // Local draft/baseline remain source of truth until a fresh read confirms
+      setExcludedDraft(saved)
+      setExcludedBaseline(saved)
+      setConfigDraft((c) => ({ ...c, excluded_models_text: saved.join('\n') }))
+      setDetailModels((models) => mergeExcludedIntoModels(models, saved))
+      setDetail((d) => (d ? { ...d, excluded_models: saved } : d))
       showToast(P('模型规则已保存'))
-      await load()
+      // Refresh list quietly; detailAccountName unchanged → no models reload wipe
+      void load()
     } catch (e) {
       showToast((e as Error).message)
     } finally {

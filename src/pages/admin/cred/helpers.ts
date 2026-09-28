@@ -101,12 +101,17 @@ export function sparkSegments(a: Account, slots = 10): number[] {
 }
 
 export function quotaWindows(a: Account): QuotaWindow[] {
-  if (Array.isArray(a.quota_windows) && a.quota_windows.length) return a.quota_windows
+  if (Array.isArray(a.quota_windows) && a.quota_windows.length) {
+    return a.quota_windows.map((w) => ({
+      ...w,
+      label: w.label || windowLabel(w.label, a.provider),
+    }))
+  }
   const q = a.quota
   if (!q) return []
   return [
     {
-      label: windowLabel(q.window),
+      label: windowLabel(q.window, a.provider),
       remaining_ratio: q.remaining_ratio ?? null,
       remaining: q.remaining ?? null,
       limit: q.limit ?? null,
@@ -116,14 +121,36 @@ export function quotaWindows(a: Account): QuotaWindow[] {
   ]
 }
 
-function windowLabel(w?: string | null) {
-  const s = String(w || '').toLowerCase()
-  if (!s) return P('额度')
-  if (/5h|five.?hour|5.?hour/.test(s)) return '5h'
-  if (/week|weekly|7d/.test(s)) return P('周额度')
-  if (/month|monthly|30d/.test(s)) return P('月额度')
-  if (/day|24h|daily/.test(s)) return P('日额度')
-  return w || P('额度')
+function windowLabel(w?: string | null, provider?: string | null) {
+  const s = String(w || '').trim()
+  const lower = s.toLowerCase()
+  const prov = providerLabel(String(provider || '')).replace(/cli/i, '').trim()
+  let kind = ''
+  if (/5h|five.?hour|5.?hour/.test(lower)) kind = '5h'
+  else if (/week|weekly|7d|周/.test(lower)) kind = P('周额度')
+  else if (/month|monthly|30d|月/.test(lower)) kind = P('月额度')
+  else if (/day|24h|daily|日/.test(lower)) kind = P('日额度')
+  else if (s) return s
+  else kind = P('额度')
+  // Prefer existing "Claude 5h" style labels as-is
+  if (/claude|gemini|codex|gpt|antigravity|xai|grok/i.test(s)) return s
+  if (prov && kind) return `${prov} ${kind}`
+  return kind
+}
+
+/** CPAMP-style short reset: "4 小时后" / "6 天后" */
+export function fmtResetRelative(iso?: string | null) {
+  if (!iso) return '—'
+  const t = Date.parse(String(iso))
+  if (!Number.isFinite(t)) return fmtTimeShort(iso)
+  const diffMs = t - Date.now()
+  if (diffMs <= 0) return P('已重置')
+  const mins = Math.round(diffMs / 60000)
+  if (mins < 60) return `${mins} ${P('分钟后')}`
+  const hours = Math.round(mins / 60)
+  if (hours < 48) return `${hours} ${P('小时后')}`
+  const days = Math.round(hours / 24)
+  return `${days} ${P('天后')}`
 }
 
 export function deriveListMetrics(items: Account[]) {

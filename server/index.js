@@ -58,6 +58,8 @@ import {
   fetchCpaPlugins,
   setCpaPlugins,
   fetchCpaLogs,
+  invalidateCpaAuthFilesCache,
+  normalizeAuthFilePatchFields,
 } from './cpa.js'
 import { createSiteUsageStore } from './siteUsage.js'
 import { createModelPricesStore } from './modelPrices.js'
@@ -1817,19 +1819,23 @@ app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
       const key = a.name || a.id
       const snap = key ? quotaByAccount[key] : null
       if (!snap) return a
+      const snapQuota = {
+        remaining_ratio: snap.remaining_ratio,
+        remaining: snap.remaining,
+        limit: snap.limit,
+        window: snap.window,
+        resets_at: snap.resets_at,
+        risk: snap.risk,
+        plan_type: snap.plan_type || a.plan_type,
+        observed_at_ms: snap.observed_at_ms,
+        source: 'site:quota-snapshots',
+      }
       return {
         ...a,
-        quota: {
-          remaining_ratio: snap.remaining_ratio,
-          remaining: snap.remaining,
-          limit: snap.limit,
-          window: snap.window,
-          resets_at: snap.resets_at,
-          risk: snap.risk,
-          plan_type: snap.plan_type || a.plan_type,
-          observed_at_ms: snap.observed_at_ms,
-          source: 'site:quota-snapshots',
-        },
+        plan_type: a.plan_type || snap.plan_type || null,
+        // Prefer site snapshot when present; keep auth-file windows if snapshot has none
+        quota: snapQuota,
+        quota_windows: Array.isArray(a.quota_windows) && a.quota_windows.length ? a.quota_windows : a.quota_windows,
       }
     })
     const pool = summarizeAccounts(enriched)
@@ -2788,13 +2794,34 @@ app.patch('/api/admin/accounts/fields', requireAdmin, async (req, res) => {
     if (req.body?.websockets !== undefined) fields.websockets = !!req.body.websockets
     if (req.body?.cooling !== undefined) fields.cooling = req.body.cooling
     if (req.body?.excluded_models !== undefined) fields.excluded_models = req.body.excluded_models
+    if (req.body?.['excluded-models'] !== undefined) fields['excluded-models'] = req.body['excluded-models']
     const result = await patchAuthFileFields(cpaCfg, name, fields)
+    try {
+      invalidateCpaAuthFilesCache()
+    } catch {
+      /* ignore */
+    }
     try {
       await cpaCollector.refresh({ force: true })
     } catch {
       /* ignore */
     }
-    res.json(ok({ name, fields, result, source: 'cpa' }))
+    // Echo normalized excluded so UI can trust PATCH response
+    const echoedExcluded =
+      fields['excluded-models'] !== undefined
+        ? fields['excluded-models']
+        : fields.excluded_models !== undefined
+          ? fields.excluded_models
+          : undefined
+    res.json(
+      ok({
+        name,
+        fields,
+        result,
+        excluded_models: echoedExcluded,
+        source: 'cpa',
+      }),
+    )
   } catch (err) {
     res.status(err?.status || 502).json(fail(err?.message || 'account fields update failed'))
   }
@@ -2980,14 +3007,22 @@ app.get('/api/admin/accounts/models', requireAdmin, async (req, res) => {
     const models = normalizeAuthFileModels(data)
     let excluded_models = []
     try {
-      const filesPayload =
-        cpaCollector.getAuthFilesPayload?.() ||
-        (await fetchCpaAuthFilesCached(cpaCfg).catch(() => null))
+      // Prefer fresh CPA read after fields PATCH — never serve stale TTL cache for excludes
+      let filesPayload = null
+      try {
+        filesPayload = await fetchCpaAuthFilesCached(cpaCfg, { force: true })
+      } catch {
+        filesPayload = cpaCollector.getAuthFilesPayload?.() || null
+      }
       const files = Array.isArray(filesPayload?.files) ? filesPayload.files : []
       const hit = files.find((f) => String(f?.name || '') === name)
       if (hit) {
         excluded_models = parseExcludedModels(
-          hit.excluded_models ?? hit['excluded-models'] ?? hit.excludedModels ?? hit.attributes?.excluded_models,
+          hit.excluded_models ??
+            hit['excluded-models'] ??
+            hit.excludedModels ??
+            hit.attributes?.excluded_models ??
+            hit.attributes?.['excluded-models'],
         )
       }
     } catch {

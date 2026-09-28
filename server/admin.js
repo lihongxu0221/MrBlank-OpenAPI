@@ -173,6 +173,171 @@ function attr(f, key, fallback = null) {
   return fallback
 }
 
+
+function decodeJwtPayload(token) {
+  if (!token) return null
+  if (typeof token === 'object' && !Array.isArray(token)) return token
+  if (typeof token !== 'string') return null
+  const t = token.trim()
+  if (!t) return null
+  try {
+    const asJson = JSON.parse(t)
+    if (asJson && typeof asJson === 'object') return asJson
+  } catch {
+    /* not json */
+  }
+  const parts = t.split('.')
+  if (parts.length < 2) return null
+  try {
+    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const pad = b64.length % 4
+    if (pad) b64 += '='.repeat(4 - pad)
+    const json = Buffer.from(b64, 'base64').toString('utf8')
+    const obj = JSON.parse(json)
+    return obj && typeof obj === 'object' ? obj : null
+  } catch {
+    return null
+  }
+}
+
+function normalizePlanType(raw) {
+  if (raw == null) return null
+  const s = String(raw).trim()
+  return s ? s.toLowerCase() : null
+}
+
+/** CPAMP gu() — plan from file / attributes / id_token JWT. */
+export function resolvePlanType(f) {
+  if (!f || typeof f !== 'object') return null
+  const metadata = f.metadata && typeof f.metadata === 'object' ? f.metadata : null
+  const attributes = f.attributes && typeof f.attributes === 'object' ? f.attributes : null
+  const idTokObj = f.id_token && typeof f.id_token === 'object' ? f.id_token : null
+  const metaIdTok = metadata?.id_token && typeof metadata.id_token === 'object' ? metadata.id_token : null
+  const fromJwt = (tok) => {
+    const payload = decodeJwtPayload(tok)
+    return payload ? normalizePlanType(payload.plan_type ?? payload.planType) : null
+  }
+  const candidates = [
+    f.plan_type,
+    f.planType,
+    f.plan,
+    f.chatgpt_plan_type,
+    fromJwt(f.id_token),
+    idTokObj?.plan_type,
+    idTokObj?.planType,
+    metadata?.plan_type,
+    metadata?.planType,
+    fromJwt(metadata?.id_token),
+    metaIdTok?.plan_type,
+    metaIdTok?.planType,
+    attributes?.plan_type,
+    attributes?.planType,
+    attributes?.plan,
+    fromJwt(attributes?.id_token),
+  ]
+  for (const c of candidates) {
+    const n = normalizePlanType(c)
+    if (n) return n
+  }
+  return null
+}
+
+function numOrNull(v) {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Best-effort quota from CPA auth-file fields (no extra probe).
+ * Returns { quota, quota_windows } or nulls.
+ */
+export function extractAuthFileQuota(f) {
+  if (!f || typeof f !== 'object') return { quota: null, quota_windows: null }
+  const attrs = f.attributes && typeof f.attributes === 'object' ? f.attributes : {}
+  const pick = (...keys) => {
+    for (const k of keys) {
+      if (f[k] != null) return f[k]
+      if (attrs[k] != null) return attrs[k]
+    }
+    return null
+  }
+
+  let windows = []
+  const rawWindows = pick('quota_windows', 'quotaWindows', 'quotas')
+  if (Array.isArray(rawWindows)) {
+    windows = rawWindows
+      .map((w) => {
+        if (!w || typeof w !== 'object') return null
+        const usedPct = numOrNull(w.used_percent ?? w.usedPercent ?? w.header_quota_used_percent)
+        let remaining_ratio = numOrNull(w.remaining_ratio ?? w.remainingRatio)
+        if (remaining_ratio == null && usedPct != null) remaining_ratio = Math.max(0, Math.min(1, 1 - usedPct / 100))
+        const remaining = numOrNull(w.remaining)
+        const limit = numOrNull(w.limit)
+        if (remaining_ratio == null && remaining != null && limit != null && limit > 0) {
+          remaining_ratio = Math.max(0, Math.min(1, remaining / limit))
+        }
+        if (remaining_ratio == null && remaining == null && limit == null && usedPct == null) return null
+        const risk =
+          remaining_ratio == null
+            ? null
+            : remaining_ratio <= 0
+              ? 'exhausted'
+              : remaining_ratio < 0.2
+                ? 'critical'
+                : remaining_ratio < 0.5
+                  ? 'low'
+                  : 'ok'
+        return {
+          label: String(w.label || w.window || w.name || w.model || '额度'),
+          window: w.window != null ? String(w.window) : w.name != null ? String(w.name) : null,
+          remaining_ratio,
+          remaining,
+          limit,
+          resets_at: w.resets_at != null ? String(w.resets_at) : w.reset_at != null ? String(w.reset_at) : null,
+          risk,
+        }
+      })
+      .filter(Boolean)
+  }
+
+  const usedPct = numOrNull(
+    pick('used_percent', 'usedPercent', 'header_quota_used_percent', 'quota_used_percent'),
+  )
+  let remaining_ratio = numOrNull(pick('remaining_ratio', 'remainingRatio', 'quota_remaining_ratio'))
+  if (remaining_ratio == null && usedPct != null) remaining_ratio = Math.max(0, Math.min(1, 1 - usedPct / 100))
+  const remaining = numOrNull(pick('remaining', 'quota_remaining'))
+  const limit = numOrNull(pick('limit', 'quota_limit'))
+  if (remaining_ratio == null && remaining != null && limit != null && limit > 0) {
+    remaining_ratio = Math.max(0, Math.min(1, remaining / limit))
+  }
+  const resets_at = pick('resets_at', 'reset_at', 'quota_resets_at')
+  const window = pick('window', 'quota_window')
+
+  let quota = null
+  if (remaining_ratio != null || remaining != null || limit != null || windows.length) {
+    const primary = windows[0]
+    const ratio = remaining_ratio ?? primary?.remaining_ratio ?? null
+    const risk =
+      ratio == null ? null : ratio <= 0 ? 'exhausted' : ratio < 0.2 ? 'critical' : ratio < 0.5 ? 'low' : 'ok'
+    quota = {
+      remaining_ratio: ratio,
+      remaining: remaining ?? primary?.remaining ?? null,
+      limit: limit ?? primary?.limit ?? null,
+      window: window != null ? String(window) : primary?.window || null,
+      resets_at: resets_at != null ? String(resets_at) : primary?.resets_at || null,
+      risk: risk || primary?.risk || null,
+      plan_type: resolvePlanType(f),
+      source: 'cpa:auth-files',
+    }
+  }
+
+  return {
+    quota,
+    quota_windows: windows.length ? windows : null,
+  }
+}
+
 export function deriveDisplayStatus(f) {
   if (f?.disabled) return 'disabled'
   const st = String(f?.status || f?.display_status || '').toLowerCase()
@@ -199,6 +364,8 @@ export function mapAdminAccounts(authFilesPayload) {
     const disabled = !!f.disabled
     const unavailable = !!f.unavailable
     const display_status = deriveDisplayStatus(f)
+    const plan_type = resolvePlanType(f)
+    const { quota, quota_windows } = extractAuthFileQuota(f)
     return {
       id: f.id || f.name || f.auth_index,
       name: f.name || f.id || null,
@@ -224,9 +391,12 @@ export function mapAdminAccounts(authFilesPayload) {
       prefix: attr(f, 'prefix', null),
       websockets: attr(f, 'websockets', null),
       cooling: attr(f, 'cooling', null),
-      excluded_models: attr(f, 'excluded_models', null),
-      plan_type: f.plan_type || f.plan || attr(f, 'plan_type', null),
+      excluded_models:
+        attr(f, 'excluded_models', null) ?? f.excludedModels ?? f['excluded-models'] ?? null,
+      plan_type,
       recent_requests: recent.slice(-12),
+      ...(quota ? { quota } : {}),
+      ...(quota_windows ? { quota_windows } : {}),
     }
   })
 }

@@ -565,6 +565,37 @@ export async function fetchCpaAuthFiles(cfg) {
   return cpaFetch(cfg, '/v0/management/auth-files')
 }
 
+export function invalidateCpaAuthFilesCache() {
+  cpaAuthFilesCache.clear()
+}
+
+/** CPA auth-files/fields expect kebab keys (CPAMP patchFields). */
+export function normalizeAuthFilePatchFields(fields = {}) {
+  const src = fields && typeof fields === 'object' ? fields : {}
+  const out = {}
+  const map = {
+    excluded_models: 'excluded-models',
+    excludedModels: 'excluded-models',
+    proxy_url: 'proxy-url',
+    proxyUrl: 'proxy-url',
+    disable_cooling: 'disable-cooling',
+    disableCooling: 'disable-cooling',
+    base_url: 'base-url',
+    baseUrl: 'base-url',
+  }
+  for (const [k, v] of Object.entries(src)) {
+    if (v === undefined) continue
+    const key = map[k] || k
+    if (key === 'excluded-models') {
+      // Always emit kebab; empty array clears credential excludes
+      out[key] = Array.isArray(v) ? v : v
+      continue
+    }
+    out[key] = v
+  }
+  return out
+}
+
 export async function fetchCpaAuthFilesCached(cfg, { force = false } = {}) {
   if (!force) {
     const hit = cpaAuthFilesCache.get()
@@ -918,11 +949,14 @@ export async function patchAuthFileFields(cfg, name, fields = {}) {
   requireMgmt(cfg)
   const n = String(name || '').trim()
   if (!n) throw Object.assign(new Error('name required'), { status: 400 })
-  const body = { name: n, ...fields }
-  return cpaFetch(cfg, '/v0/management/auth-files/fields', {
+  const normalized = normalizeAuthFilePatchFields(fields)
+  const body = { name: n, ...normalized }
+  const result = await cpaFetch(cfg, '/v0/management/auth-files/fields', {
     method: 'PATCH',
     body,
   })
+  invalidateCpaAuthFilesCache()
+  return result
 }
 
 export async function refreshAuthFile(cfg, name) {

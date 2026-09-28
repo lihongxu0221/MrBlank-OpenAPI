@@ -220,3 +220,49 @@ function wildcardMatch(pattern, value) {
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
+
+/**
+ * After models fetch: decide which excluded list to keep.
+ * Never replace a non-empty local draft with an empty/stale API list right after save
+ * (or when local was just committed). Keeps 已禁用 visible.
+ *
+ * @param {{
+ *   wasDirty: boolean,
+ *   localDraft: string[],
+ *   apiExcluded: unknown,
+ *   apiDefined?: boolean,
+ *   preferLocalIfApiEmpty?: boolean,
+ * }} opts
+ * @returns {{ rules: string[], applyToDraft: boolean }}
+ */
+export function reconcileExcludedAfterFetch(opts) {
+  const wasDirty = !!opts?.wasDirty
+  const local = parseExcludedModels(opts?.localDraft)
+  const apiDefined = opts?.apiDefined !== false && opts?.apiExcluded !== undefined
+  const api = apiDefined ? parseExcludedModels(opts.apiExcluded) : local
+  const preferLocalIfApiEmpty = opts?.preferLocalIfApiEmpty !== false
+
+  if (wasDirty) {
+    return { rules: local, applyToDraft: false }
+  }
+  if (!apiDefined) {
+    return { rules: local, applyToDraft: false }
+  }
+  if (preferLocalIfApiEmpty && api.length === 0 && local.length > 0) {
+    return { rules: local, applyToDraft: false }
+  }
+  return { rules: api, applyToDraft: true }
+}
+
+/**
+ * Toggle A then B → payload must contain both (save body shape).
+ * @param {string[]} draft
+ * @param {string[]} toDisable
+ */
+export function buildExcludedSavePayload(draft, toDisable = []) {
+  let next = parseExcludedModels(draft)
+  for (const id of toDisable) {
+    next = toggleExcludedModel(next, id, true)
+  }
+  return next
+}
