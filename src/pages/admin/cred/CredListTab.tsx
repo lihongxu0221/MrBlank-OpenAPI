@@ -675,16 +675,7 @@ function RowActions({
   const name = accountName(a)
   return (
     <div className="cred-row-actions">
-      <label className="cred-switch" title={a.disabled ? P('启用') : P('禁用')}>
-        <input
-          type="checkbox"
-          checked={!a.disabled}
-          disabled={busy}
-          onChange={(e) => onSetDisabled(name, !e.target.checked)}
-        />
-        <span />
-      </label>
-      <div className="cred-icon-grid">
+      <div className="cred-icon-grid" aria-label={P('操作')}>
         <button type="button" className="cred-icon-btn" disabled={busy} title={P('刷新')} onClick={() => onForceRefresh(name)}>
           <RotateCw size={14} />
         </button>
@@ -701,9 +692,20 @@ function RowActions({
           <Trash2 size={14} />
         </button>
       </div>
-      <button type="button" className="cred-detail-btn" onClick={() => onOpenDetail(a)}>
-        {P('详情')}
-      </button>
+      <div className="cred-row-actions-side">
+        <label className="cred-switch" title={a.disabled ? P('启用') : P('禁用')}>
+          <input
+            type="checkbox"
+            checked={!a.disabled}
+            disabled={busy}
+            onChange={(e) => onSetDisabled(name, !e.target.checked)}
+          />
+          <span />
+        </label>
+        <button type="button" className="cred-detail-link" onClick={() => onOpenDetail(a)}>
+          {P('详情')}
+        </button>
+      </div>
     </div>
   )
 }
@@ -855,7 +857,7 @@ function CredGridCard({
           }
         }}
       >
-        <QuotaBars windows={windows} layout="stack" />
+        <QuotaBars windows={windows} layout="grid" />
       </div>
 
       <div className="cred-grid-card-footer" onClick={(e) => e.stopPropagation()}>
@@ -965,20 +967,45 @@ function QuotaBars({ windows, layout }: { windows: QuotaWindow[]; layout: 'grid'
             : risk === 'low' || risk === 'critical' || (pct != null && pct < 0.5)
               ? 'warn'
               : 'good'
-        const extraBits: string[] = []
-        if (w.used_cost != null && Number.isFinite(Number(w.used_cost))) extraBits.push(fmtMoney(w.used_cost))
-        if (w.used_tokens != null && Number.isFinite(Number(w.used_tokens))) extraBits.push(fmtCompact(w.used_tokens))
+        const hasCost = w.used_cost != null && Number.isFinite(Number(w.used_cost))
+        const hasTokens = w.used_tokens != null && Number.isFinite(Number(w.used_tokens))
+        const showGeminiMeta = hasCost || hasTokens || /gemini/i.test(w.label || '')
+        const resetLabel = w.resets_at ? fmtResetRelative(w.resets_at) : ''
         return (
           <div key={i} className="cred-quota-window">
             <div className="cred-quota-window-head">
-              <span title={w.label}>{w.label}</span>
-              <span>{pct != null ? `${P('剩余')} ${Math.round(pct * 100)}%` : P('额度未知')}</span>
+              <span className="cred-quota-pill" title={w.label}>
+                {w.label}
+              </span>
+              <span className="cred-quota-remaining">
+                {pct != null ? (
+                  <>
+                    <span className="cred-quota-remaining-prefix">{P('剩余')}</span>{' '}
+                    <strong>{Math.round(pct * 100)}%</strong>
+                  </>
+                ) : (
+                  P('额度未知')
+                )}
+              </span>
             </div>
             <div className="cred-quota-track">
               <i className={barCls} style={{ width: pct != null ? `${pct * 100}%` : '0%' }} />
             </div>
-            {extraBits.length ? <div className="cred-quota-window-extra">{extraBits.join(' / ')}</div> : null}
-            <div className="cred-quota-window-meta">{w.resets_at ? fmtResetRelative(w.resets_at) : '—'}</div>
+            <div className="cred-quota-window-foot">
+              {showGeminiMeta ? (
+                <div className="cred-quota-window-extra">
+                  <span className="cred-quota-extra-bit is-cost" title={P('费用')}>
+                    <i aria-hidden />
+                    {fmtMoney(hasCost ? w.used_cost : 0)}
+                    {' / '}
+                    {hasTokens ? fmtCompact(w.used_tokens) : '—'}
+                  </span>
+                </div>
+              ) : (
+                <span className="cred-quota-window-extra-spacer" />
+              )}
+              <div className="cred-quota-window-meta">{resetLabel || '—'}</div>
+            </div>
           </div>
         )
       })}

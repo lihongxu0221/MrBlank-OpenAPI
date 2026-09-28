@@ -206,13 +206,31 @@ function normalizePlanType(raw) {
   return s ? s.toLowerCase() : null
 }
 
-/** CPAMP gu() — plan from file / attributes / id_token JWT. */
-export function resolvePlanType(f) {
+function asPlanObject(v) {
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : null
+}
+
+function isUnknownPlan(raw) {
+  return normalizePlanType(raw) === 'unknown'
+}
+
+/** First non-null trim; prefer non-"unknown" when present (CPAMP sE). */
+function pickPlanCandidate(list) {
+  const vals = (Array.isArray(list) ? list : [])
+    .map((v) => (v == null ? null : String(v).trim() || null))
+    .filter((v) => v != null)
+  if (!vals.length) return null
+  const preferred = vals.find((v) => !isUnknownPlan(v))
+  return preferred ?? vals[0]
+}
+
+/** CPAMP gu() — plan from file / attributes / id_token JWT (codex-oriented). */
+export function resolvePlanTypeGu(f) {
   if (!f || typeof f !== 'object') return null
-  const metadata = f.metadata && typeof f.metadata === 'object' ? f.metadata : null
-  const attributes = f.attributes && typeof f.attributes === 'object' ? f.attributes : null
-  const idTokObj = f.id_token && typeof f.id_token === 'object' ? f.id_token : null
-  const metaIdTok = metadata?.id_token && typeof metadata.id_token === 'object' ? metadata.id_token : null
+  const metadata = asPlanObject(f.metadata)
+  const attributes = asPlanObject(f.attributes)
+  const idTokObj = asPlanObject(f.id_token)
+  const metaIdTok = metadata ? asPlanObject(metadata.id_token) : null
   const fromJwt = (tok) => {
     const payload = decodeJwtPayload(tok)
     return payload ? normalizePlanType(payload.plan_type ?? payload.planType) : null
@@ -220,8 +238,8 @@ export function resolvePlanType(f) {
   const candidates = [
     f.plan_type,
     f.planType,
-    f.plan,
-    f.chatgpt_plan_type,
+    f.plan_type,
+    f.planType,
     fromJwt(f.id_token),
     idTokObj?.plan_type,
     idTokObj?.planType,
@@ -232,7 +250,6 @@ export function resolvePlanType(f) {
     metaIdTok?.planType,
     attributes?.plan_type,
     attributes?.planType,
-    attributes?.plan,
     fromJwt(attributes?.id_token),
   ]
   for (const c of candidates) {
@@ -240,6 +257,92 @@ export function resolvePlanType(f) {
     if (n) return n
   }
   return null
+}
+
+/** CPAMP cE() — subscription object → plan/tierName/tierId. */
+export function planFromSubscription(sub) {
+  const obj = asPlanObject(sub)
+  if (obj) return pickPlanCandidate([obj.plan, obj.tierName, obj.tierId])
+  return sub == null ? null : String(sub).trim() || null
+}
+
+/**
+ * CPAMP iE() — antigravity subscription prefers plan, else fallback, else tierName/tierId.
+ * Returns raw plan string (not normalized) for display mapping.
+ */
+export function planFromAntigravitySubscription(sub, fallbackPlan = null) {
+  const obj = asPlanObject(sub)
+  const norm = (v) => {
+    if (v == null) return null
+    const s = typeof v === 'string' ? v.trim() : typeof v === 'number' && Number.isFinite(v) ? String(v) : null
+    if (!s) return null
+    return { raw: s, normalized: s.toLowerCase() }
+  }
+  const plan = norm(obj ? obj.plan : sub)
+  const fb = norm(fallbackPlan)
+  const tiers = [norm(obj?.tierName), norm(obj?.tierId)].filter(Boolean)
+  if (plan && plan.normalized !== 'unknown') return plan.raw
+  if (fb && fb.normalized !== 'unknown') return fb.raw
+  const hit = [plan, ...tiers, fb].find((x) => x && x.normalized !== 'unknown')
+  return hit?.raw ?? plan?.raw ?? tiers[0]?.raw ?? fb?.raw ?? null
+}
+
+/**
+ * CPAMP lE() — full plan resolver used by account list (oCe).
+ * Codex: gu() first. Else JWT → plan_type/tier fields → subscription.
+ */
+export function resolvePlanType(f) {
+  if (!f || typeof f !== 'object') return null
+  const provider = String(f.provider ?? f.type ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '-')
+  const metadata = asPlanObject(f.metadata)
+  const attributes = asPlanObject(f.attributes)
+
+  if (provider === 'codex') {
+    const codex = resolvePlanTypeGu(f)
+    if (codex && !isUnknownPlan(codex)) return codex
+  }
+
+  const fromJwtTok = (tok) => {
+    const payload = decodeJwtPayload(tok)
+    return payload ? pickPlanCandidate([payload.plan_type, payload.planType]) : null
+  }
+  const jwtPlan = pickPlanCandidate(
+    [f.id_token, metadata?.id_token, attributes?.id_token].map(fromJwtTok),
+  )
+  if (jwtPlan && !isUnknownPlan(jwtPlan)) return normalizePlanType(jwtPlan)
+
+  const fieldPlan = pickPlanCandidate([
+    f.plan_type,
+    f.planType,
+    metadata?.plan_type,
+    metadata?.planType,
+    attributes?.plan_type,
+    attributes?.planType,
+    f.tier,
+    f.tierName,
+    f.tierId,
+    f.subscriptionType,
+    f.accountType,
+    f.chatgpt_plan_type,
+    f.plan,
+  ])
+  if (fieldPlan && !isUnknownPlan(fieldPlan)) return normalizePlanType(fieldPlan)
+
+  const subPlan =
+    provider === 'antigravity'
+      ? planFromAntigravitySubscription(f.subscription)
+      : planFromSubscription(f.subscription)
+  const metaSub = planFromSubscription(metadata?.subscription)
+  const attrSub = planFromSubscription(attributes?.subscription)
+  const fromSub = pickPlanCandidate([subPlan, metaSub, attrSub])
+  if (fromSub) return normalizePlanType(fromSub)
+
+  // Fallbacks already tried above; keep gu() as last resort for non-codex
+  const gu = resolvePlanTypeGu(f)
+  return gu && !isUnknownPlan(gu) ? gu : normalizePlanType(jwtPlan || fieldPlan || fromSub || gu)
 }
 
 function numOrNull(v) {

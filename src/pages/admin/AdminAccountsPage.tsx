@@ -39,6 +39,7 @@ import {
 } from '../../lib/credModels'
 import { CredListTab } from './cred/CredListTab'
 import type { Account as CredAccount } from './cred/types'
+import { formatPlanType } from './cred/helpers'
 
 type QuotaSnap = {
   remaining_ratio?: number | null
@@ -1412,7 +1413,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
                       {detail.success ?? 0} / {detail.failed ?? 0}
                     </span>
                     <span className="k">{P('套餐')}</span>
-                    <span>{detail.plan_type || detail.quota?.plan_type || '—'}</span>
+                    <span>{formatPlanType(detail.plan_type || detail.quota?.plan_type) || '—'}</span>
                     <span className="k">{P('最近刷新')}</span>
                     <span>{fmtTime(detail.last_refresh)}</span>
                     <span className="k">{P('更新时间')}</span>
@@ -1488,7 +1489,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
                       <span className="k">{P('窗口')}</span>
                       <span>{detail.quota.window || '—'}</span>
                       <span className="k">{P('套餐')}</span>
-                      <span>{detail.quota.plan_type || detail.plan_type || '—'}</span>
+                      <span>{formatPlanType(detail.quota.plan_type || detail.plan_type) || '—'}</span>
                       <span className="k">{P('重置')}</span>
                       <span>{detail.quota.resets_at || '—'}</span>
                       <span className="k">{P('来源')}</span>

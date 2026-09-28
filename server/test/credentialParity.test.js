@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { convertPasteToAuthFiles } from '../authFileConvert.js'
 import { createQuotaSnapshotStore } from '../quotaSnapshots.js'
-import { deriveDisplayStatus, mapAdminAccounts, summarizeAccounts, resolvePlanType, extractAuthFileQuota } from '../admin.js'
+import { deriveDisplayStatus, mapAdminAccounts, summarizeAccounts, resolvePlanType, extractAuthFileQuota, planFromAntigravitySubscription } from '../admin.js'
 import {
   normalizeAuthFileModels,
   parseExcludedModels,
@@ -29,6 +29,7 @@ import {
   parseAntigravityQuotaGroups,
   mapAntigravityGroupsToWindows,
   isListQuotaWindow,
+  parseAntigravitySubscription,
 } from '../cpampQuota.js'
 
 test('deriveDisplayStatus maps reauth / disabled / running', () => {
@@ -461,4 +462,44 @@ test('mapCpampWindow risk from remaining_percent', () => {
   })
   assert.equal(w.risk, 'critical')
   assert.ok(w.resets_at)
+})
+
+test('parseAntigravitySubscription maps loadCodeAssist tiers (CPAMP Cce/vce)', () => {
+  const sub = parseAntigravitySubscription({
+    currentTier: { id: 'free-tier', name: 'Antigravity' },
+    paidTier: { id: 'g1-pro-tier', name: 'Google AI Pro' },
+  })
+  assert.equal(sub.plan, 'pro')
+  assert.equal(sub.tierId, 'g1-pro-tier')
+  assert.equal(sub.source, 'paid')
+
+  const freeOnly = parseAntigravitySubscription({
+    currentTier: { id: 'free-tier', name: 'Antigravity' },
+  })
+  assert.equal(freeOnly.plan, 'free')
+  assert.equal(freeOnly.source, 'current')
+})
+
+test('resolvePlanType reads antigravity subscription (CPAMP lE)', () => {
+  assert.equal(
+    resolvePlanType({
+      provider: 'antigravity',
+      subscription: { plan: 'ultra', tierId: 'g1-ultra-tier', tierName: 'Google AI Ultra' },
+    }),
+    'ultra',
+  )
+  assert.equal(
+    resolvePlanType({
+      provider: 'antigravity',
+      attributes: { subscription: { plan: 'pro', tierName: 'Google AI Pro' } },
+    }),
+    'pro',
+  )
+  assert.equal(planFromAntigravitySubscription({ plan: 'free', tierId: 'free-tier' }), 'free')
+})
+
+test('mergeCpampQuotaIntoAccounts keeps plan_type from hit without windows', () => {
+  const byKey = new Map([['a.json', { plan_type: 'pro', quota_windows: null, quota: null }]])
+  const items = mergeCpampQuotaIntoAccounts([{ name: 'a.json', provider: 'antigravity', plan_type: null }], byKey)
+  assert.equal(items[0].plan_type, 'pro')
 })

@@ -91,10 +91,12 @@ import { createAilyAccountsStore } from './ailyAccounts.js'
 import { createAilyCompat } from './ailyCompat.js'
 import { createAilyOauth } from './ailyOauth.js'
 import { createQuotaSnapshotStore } from './quotaSnapshots.js'
+import { createSessionStore } from './sessions.js'
 import {
   fetchCpampAccountQuotas,
   mergeCpampQuotaIntoAccounts,
   refreshAccountQuotas,
+  enrichAntigravityPlans,
 } from './cpampQuota.js'
 import { normalizeAuthFileModels, parseExcludedModels } from './credModels.js'
 import { convertPasteToAuthFiles } from './authFileConvert.js'
@@ -273,7 +275,13 @@ if (!SESSION_SECRET || SESSION_SECRET.length < 16) {
 }
 
 const oauthStates = new Map() // flow_token -> { createdAt, intent }
-const sessions = new Map() // sid -> session record
+const sessionStore = createSessionStore(
+  process.env.SESSIONS_PATH || path.join(__dirname, 'data', 'sessions.json'),
+  { ttlMs: SESSION_TTL_MS, debounceMs: 250 },
+)
+console.log(
+  `[server] sessions loaded path=${sessionStore.path} count=${sessionStore.size()} pruned=${sessionStore.boot?.pruned || 0}`,
+)
 /** @type {Map<string|number, any>} */
 const userStores = new Map()
 
@@ -347,9 +355,7 @@ function pruneMaps() {
   for (const [k, v] of oauthStates) {
     if (now - v.createdAt > STATE_TTL_MS) oauthStates.delete(k)
   }
-  for (const [k, v] of sessions) {
-    if (now - v.createdAt > SESSION_TTL_MS) sessions.delete(k)
-  }
+  sessionStore.prune(now)
 }
 setInterval(pruneMaps, 60_000).unref?.()
 
@@ -359,28 +365,18 @@ function readSid(req) {
 }
 
 function findSessionByAccessToken(token) {
-  const t = String(token || '').trim()
-  if (!t || t.length < 8) return null
-  for (const rec of sessions.values()) {
-    if (rec.access_token === t) return rec
-  }
-  return null
+  return sessionStore.findByAccessToken(token)
 }
 
 function getSession(req) {
   const sid = readSid(req)
-  let rec = sid ? sessions.get(sid) : null
+  let rec = sid ? sessionStore.get(sid) : null
   if (!rec) {
     const auth = String(req.headers.authorization || '')
     const m = /^Bearer\s+(.+)$/i.exec(auth)
     if (m) rec = findSessionByAccessToken(m[1])
   }
-  if (!rec) return null
-  if (Date.now() - rec.createdAt > SESSION_TTL_MS) {
-    sessions.delete(rec.sid)
-    return null
-  }
-  return rec
+  return rec || null
 }
 
 function requireAuth(req, res, next) {
@@ -458,7 +454,7 @@ function createUserSession(user) {
     expiresAt,
     user,
   }
-  sessions.set(sid, rec)
+  sessionStore.set(rec)
   getOrCreateUserStore(user)
   try {
     const existing = userKeyStore.getProfile(user.id)
@@ -692,7 +688,7 @@ function enrichHashToUserMap(hashMap) {
       })
     }
   }
-  for (const rec of sessions.values()) {
+  for (const rec of sessionStore.values()) {
     const uid = String(rec.user?.id || '')
     if (!uid) continue
     for (const [h, meta] of hashMap) {
@@ -1357,7 +1353,7 @@ app.post('/api/auth/register', (req, res) => {
 
 app.post('/api/user/auth/logout', (req, res) => {
   const sid = readSid(req)
-  if (sid) sessions.delete(sid)
+  if (sid) sessionStore.delete(sid)
   clearSessionCookie(res)
   res.json(ok(true))
 })
@@ -1853,6 +1849,23 @@ app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
         /* keep items */
       }
     }
+    // CPAMP Fle subscription: loadCodeAssist for antigravity rows missing plan_type
+    let planMeta = { ok: false, source: 'cpa:api-call:loadCodeAssist' }
+    try {
+      const needPlan = enriched.some(
+        (a) => String(a?.provider || '').toLowerCase() === 'antigravity' && !a.plan_type && !a.quota?.plan_type,
+      )
+      if (needPlan) {
+        const { items: withPlans, meta } = await enrichAntigravityPlans(cpaCfg, enriched, auth)
+        enriched = withPlans
+        planMeta = { ok: true, ...meta }
+      } else {
+        planMeta = { ok: true, skipped: true, reason: 'all_have_plan_or_none_antigravity' }
+      }
+    } catch (err) {
+      planMeta = { ok: false, error: err?.message || String(err), source: 'cpa:api-call:loadCodeAssist' }
+    }
+
     const pool = summarizeAccounts(enriched)
     const quota_risk = enriched.filter((a) => a.quota && ['low', 'critical', 'exhausted'].includes(a.quota.risk)).length
     pool.quota_risk = quota_risk
@@ -1862,10 +1875,11 @@ app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
         observed_at: auth?.observed_at || cpaCollector.getStatus().lastSync || null,
         items: enriched,
         pool,
-        source: 'cpa:auth-files+cpamp:quota-snapshots',
+        source: 'cpa:auth-files+cpamp:quota-snapshots+loadCodeAssist',
         collector: cpaCollector.getStatus(),
         quota_snapshots: quotaSnapshots.stats(),
         quota: quotaMeta,
+        plan: planMeta,
       }),
     )
   } catch (err) {
@@ -3100,6 +3114,7 @@ app.post('/api/admin/accounts/refresh-quota', requireAdmin, async (req, res) => 
             window: w.window || w.label,
             resets_at: w.resets_at,
             risk: w.risk,
+            plan_type: r.plan_type || null,
             source: 'cpa:api-call',
             meta: { label: w.label },
           })

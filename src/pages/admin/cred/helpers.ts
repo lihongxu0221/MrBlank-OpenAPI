@@ -194,8 +194,8 @@ export function deriveListMetrics(items: Account[]) {
 
 export function formatPlanType(raw?: string | null) {
   const s = String(raw || '').trim()
-  if (!s || s === '-' || s === '—') return ''
-  const lower = s.toLowerCase()
+  if (!s || s === '-' || s === '—' || s.toLowerCase() === 'unknown') return ''
+  const lower = s.toLowerCase().replace(/\s+/g, '_')
   const known: Record<string, string> = {
     free: 'Free',
     pro: 'Pro',
@@ -203,7 +203,19 @@ export function formatPlanType(raw?: string | null) {
     team: 'Team',
     enterprise: 'Enterprise',
     ultra: 'Ultra',
+    'ultra-lite': 'Ultra Lite',
+    ultra_lite: 'Ultra Lite',
     go: 'Go',
+    max: 'Max',
+    max_5x: 'Max 5x',
+    max5: 'Max 5x',
+    max_20x: 'Max 20x',
+    max20: 'Max 20x',
+    pro_5x: 'Pro 5x',
+    pro_20x: 'Pro 20x',
+    prolite: 'Pro 5x',
+    'pro-lite': 'Pro 5x',
+    pro_lite: 'Pro 5x',
   }
   if (known[lower]) return known[lower]
   return s.charAt(0).toUpperCase() + s.slice(1)

@@ -22,6 +22,23 @@ const ANTIGRAVITY_MODEL_URLS = [
   'https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
 ]
 
+/** CPAMP goe — loadCodeAssist for antigravity subscription / plan (Fle + wce). */
+const ANTIGRAVITY_LOAD_CODE_ASSIST_URLS = [
+  'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+  'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+]
+
+/** CPAMP _ce body for loadCodeAssist. */
+const LOAD_CODE_ASSIST_BODY = JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY' } })
+
+/** CPAMP vce — tier id → plan. */
+const ANTIGRAVITY_TIER_TO_PLAN = new Map([
+  ['free-tier', 'free'],
+  ['g1-pro-tier', 'pro'],
+  ['g1-ultra-tier', 'ultra'],
+  ['g1-ultra-lite-tier', 'ultra-lite'],
+])
+
 const ANTIGRAVITY_HEADERS = {
   Authorization: 'Bearer $TOKEN$',
   'Content-Type': 'application/json',
@@ -229,11 +246,22 @@ export function mergeCpampQuotaIntoAccounts(accounts, quotaByKey) {
   return items.map((a) => {
     const key = String(a?.name || a?.id || '').trim()
     const hit = key ? quotaByKey.get(key) : null
-    if (!hit || !hit.quota_windows?.length) return a
+    if (!hit) return a
+    const plan_type = a.plan_type || hit.plan_type || null
+    if (!hit.quota_windows?.length) {
+      if (!plan_type || plan_type === a.plan_type) return a
+      return {
+        ...a,
+        plan_type,
+        quota: a.quota ? { ...a.quota, plan_type: a.quota.plan_type || plan_type } : a.quota,
+      }
+    }
     return {
       ...a,
-      plan_type: a.plan_type || hit.plan_type || null,
-      quota: hit.quota || a.quota || null,
+      plan_type,
+      quota: hit.quota
+        ? { ...hit.quota, plan_type: hit.quota.plan_type || plan_type }
+        : a.quota || null,
       quota_windows: hit.quota_windows,
     }
   })
@@ -369,6 +397,157 @@ function tryIso(v) {
 }
 
 /**
+ * CPAMP Cce() — parse loadCodeAssist body → { plan, tierId, tierName, source }.
+ * Prefers paidTier when present (same as SPA).
+ */
+export function parseAntigravitySubscription(body) {
+  const raw = typeof body === 'string' ? safeJson(body) : body
+  if (!raw || typeof raw !== 'object') return null
+  const current = raw.currentTier ?? raw.current_tier
+  const paid = raw.paidTier ?? raw.paid_tier
+  const pickTier = (t) => {
+    if (!t || typeof t !== 'object' || Array.isArray(t)) return null
+    const id = t.id != null ? String(t.id).trim() : ''
+    const name = t.name != null ? String(t.name).trim() : ''
+    if (!id && !name) return null
+    return { id: id || null, name: name || null }
+  }
+  const cur = pickTier(current)
+  const paidT = pickTier(paid)
+  const chosen = paidT?.id ? paidT : cur
+  if (!chosen?.id && !chosen?.name) return null
+  const tierId = chosen.id || ''
+  const plan = tierId ? ANTIGRAVITY_TIER_TO_PLAN.get(tierId) || 'unknown' : 'unknown'
+  return {
+    plan,
+    tierId: chosen.id,
+    tierName: chosen.name,
+    source: paidT?.id ? 'paid' : 'current',
+  }
+}
+
+/**
+ * CPAMP wce.get — fetch antigravity subscription via loadCodeAssist (CPA api-call).
+ */
+export async function fetchAntigravitySubscription(cfg, file) {
+  const authIndex = String(file?.auth_index ?? file?.authIndex ?? '').trim()
+  if (!authIndex) {
+    return { status: 'error', error: 'missing auth_index', name: file?.name, subscription: null }
+  }
+  let lastErr = 'unknown'
+  let lastStatus = null
+  for (const url of ANTIGRAVITY_LOAD_CODE_ASSIST_URLS) {
+    try {
+      const res = await cpaApiCall(cfg, {
+        authIndex,
+        method: 'POST',
+        url,
+        header: { ...ANTIGRAVITY_HEADERS },
+        data: LOAD_CODE_ASSIST_BODY,
+      })
+      const statusCode = Number(res?.status_code ?? res?.statusCode ?? 0)
+      if (statusCode < 200 || statusCode >= 300) {
+        lastStatus = statusCode
+        lastErr = `upstream ${statusCode}`
+        if (statusCode === 429) {
+          return {
+            status: 'error',
+            error: lastErr,
+            errorStatus: 429,
+            rateLimited: true,
+            name: file?.name,
+            subscription: null,
+          }
+        }
+        continue
+      }
+      const body = res?.body ?? res?.bodyText ?? res
+      const subscription = parseAntigravitySubscription(body)
+      if (!subscription) {
+        lastErr = 'empty_subscription'
+        continue
+      }
+      return {
+        status: 'success',
+        name: file?.name,
+        subscription,
+        plan_type: subscription.plan && subscription.plan !== 'unknown' ? subscription.plan : null,
+        source: 'cpa:api-call:loadCodeAssist',
+      }
+    } catch (err) {
+      lastErr = err?.message || String(err)
+      lastStatus = err?.status || lastStatus
+      if (lastStatus === 429 || /429/.test(lastErr)) {
+        return {
+          status: 'error',
+          error: lastErr,
+          errorStatus: 429,
+          rateLimited: true,
+          name: file?.name,
+          subscription: null,
+        }
+      }
+    }
+  }
+  return {
+    status: 'error',
+    error: lastErr,
+    errorStatus: lastStatus,
+    name: file?.name,
+    subscription: null,
+  }
+}
+
+/**
+ * Enrich antigravity account rows with plan from loadCodeAssist (CPAMP Fle subscription).
+ * Serial per account to avoid provider rate limits. Skips rows that already have plan_type.
+ */
+export async function enrichAntigravityPlans(cfg, accounts, authFilesPayload, { force = false } = {}) {
+  const files = Array.isArray(authFilesPayload?.files) ? authFilesPayload.files : []
+  const byName = new Map(files.map((f) => [String(f?.name || '').trim(), f]))
+  const items = Array.isArray(accounts) ? accounts : []
+  const out = []
+  let fetched = 0
+  let filled = 0
+  let rateLimited = false
+  for (const a of items) {
+    const provider = String(a?.provider || '').toLowerCase()
+    const existing = a?.plan_type || a?.quota?.plan_type || null
+    if (provider !== 'antigravity' || (existing && !force) || rateLimited) {
+      out.push(a)
+      continue
+    }
+    const name = String(a?.name || a?.id || '').trim()
+    const file = byName.get(name) || {
+      name,
+      auth_index: a?.auth_index,
+      provider: 'antigravity',
+      project_id: a?.project_id,
+    }
+    const r = await fetchAntigravitySubscription(cfg, file)
+    fetched += 1
+    if (r.rateLimited || r.errorStatus === 429) rateLimited = true
+    if (r.status === 'success' && r.plan_type) {
+      filled += 1
+      out.push({
+        ...a,
+        plan_type: r.plan_type,
+        subscription: r.subscription,
+        quota: a.quota
+          ? { ...a.quota, plan_type: a.quota.plan_type || r.plan_type }
+          : a.quota,
+      })
+    } else {
+      out.push(a)
+    }
+  }
+  return {
+    items: out,
+    meta: { fetched, filled, rateLimited, source: 'cpa:api-call:loadCodeAssist' },
+  }
+}
+
+/**
  * Refresh one antigravity account via CPA api-call (CPAMP Fle).
  * Limited URL fan-out; stops on first success.
  */
@@ -380,8 +559,11 @@ export async function refreshAntigravityQuota(cfg, file) {
   const project =
     String(file?.project_id || file?.projectId || '').trim() || 'aicode-consumers'
   const data = JSON.stringify({ project })
+  // CPAMP Fle: start loadCodeAssist (subscription) in parallel with quota summary
+  const subPromise = fetchAntigravitySubscription(cfg, file)
   let lastErr = 'unknown'
   let lastStatus = null
+  let sawOkHttp = false
   for (const url of [...ANTIGRAVITY_QUOTA_URLS, ...ANTIGRAVITY_MODEL_URLS]) {
     try {
       const res = await cpaApiCall(cfg, {
@@ -396,10 +578,20 @@ export async function refreshAntigravityQuota(cfg, file) {
         lastStatus = statusCode
         lastErr = `upstream ${statusCode}`
         if (statusCode === 429) {
-          return { status: 'error', error: lastErr, errorStatus: 429, rateLimited: true, name: file?.name }
+          const sub = await subPromise
+          return {
+            status: 'error',
+            error: lastErr,
+            errorStatus: 429,
+            rateLimited: true,
+            name: file?.name,
+            plan_type: sub?.plan_type || null,
+            subscription: sub?.subscription || null,
+          }
         }
         continue
       }
+      sawOkHttp = true
       const body = res?.body ?? res?.bodyText ?? res
       const groups = parseAntigravityQuotaGroups(body)
       if (!groups.length) {
@@ -407,23 +599,57 @@ export async function refreshAntigravityQuota(cfg, file) {
         continue
       }
       const windows = mapAntigravityGroupsToWindows(groups)
+      const sub = await subPromise
+      const plan_type = sub?.plan_type || null
       return {
         status: 'success',
         name: file?.name,
         provider: 'antigravity',
         quota_windows: windows,
         groups_count: groups.length,
+        plan_type,
+        subscription: sub?.subscription || null,
         source: 'cpa:api-call',
       }
     } catch (err) {
       lastErr = err?.message || String(err)
       lastStatus = err?.status || lastStatus
       if (lastStatus === 429 || /429/.test(lastErr)) {
-        return { status: 'error', error: lastErr, errorStatus: 429, rateLimited: true, name: file?.name }
+        const sub = await subPromise.catch(() => null)
+        return {
+          status: 'error',
+          error: lastErr,
+          errorStatus: 429,
+          rateLimited: true,
+          name: file?.name,
+          plan_type: sub?.plan_type || null,
+          subscription: sub?.subscription || null,
+        }
       }
     }
   }
-  return { status: 'error', error: lastErr, errorStatus: lastStatus, name: file?.name }
+  // Quota empty but HTTP may have succeeded — still return subscription if any (CPAMP Fle)
+  const sub = await subPromise.catch(() => null)
+  if (sawOkHttp && sub?.plan_type) {
+    return {
+      status: 'success',
+      name: file?.name,
+      provider: 'antigravity',
+      quota_windows: [],
+      groups_count: 0,
+      plan_type: sub.plan_type,
+      subscription: sub.subscription,
+      source: 'cpa:api-call',
+    }
+  }
+  return {
+    status: 'error',
+    error: lastErr,
+    errorStatus: lastStatus,
+    name: file?.name,
+    plan_type: sub?.plan_type || null,
+    subscription: sub?.subscription || null,
+  }
 }
 
 /**
@@ -464,26 +690,37 @@ export async function refreshAccountQuotas(cfg, authFilesPayload, { names = null
     cpamp = { byKey: new Map(), meta: { ok: false, error: err?.message || String(err) } }
   }
 
-  // Overlay successful api-call windows onto map (fresher than snapshot)
+  // Overlay successful api-call windows + plan onto map (fresher than snapshot)
   for (const r of results) {
-    if (r.status !== 'success' || !r.quota_windows?.length || !r.name) continue
-    const primary = r.quota_windows[0]
-    cpamp.byKey.set(r.name, {
-      quota_windows: r.quota_windows,
-      quota: {
-        remaining_ratio: primary.remaining_ratio,
-        remaining: null,
-        limit: null,
-        window: primary.window,
-        resets_at: primary.resets_at,
-        risk: primary.risk,
-        plan_type: null,
-        observed_at_ms: Date.now(),
-        source: 'cpa:api-call',
-      },
-      plan_type: null,
-      raw_window_count: r.quota_windows.length,
-    })
+    if (r.status !== 'success' || !r.name) continue
+    const plan_type = r.plan_type || null
+    if (r.quota_windows?.length) {
+      const primary = r.quota_windows[0]
+      const prev = cpamp.byKey.get(r.name)
+      cpamp.byKey.set(r.name, {
+        quota_windows: r.quota_windows,
+        quota: {
+          remaining_ratio: primary.remaining_ratio,
+          remaining: null,
+          limit: null,
+          window: primary.window,
+          resets_at: primary.resets_at,
+          risk: primary.risk,
+          plan_type,
+          observed_at_ms: Date.now(),
+          source: 'cpa:api-call',
+        },
+        plan_type,
+        raw_window_count: r.quota_windows.length,
+      })
+    } else if (plan_type) {
+      const prev = cpamp.byKey.get(r.name) || {}
+      cpamp.byKey.set(r.name, {
+        ...prev,
+        plan_type,
+        quota: prev.quota ? { ...prev.quota, plan_type: prev.quota.plan_type || plan_type } : prev.quota,
+      })
+    }
   }
 
   const success = results.filter((r) => r.status === 'success').length
