@@ -146,7 +146,7 @@ export function AdminConnectionPage({ path }: { path: string }) {
           admin={String(!!data?.secrets?.admin)}
         </p>
         <p className="muted">
-          {data?.note || P('CPA + billing 为主。配置请用「CPA 配置 / OpenAI 兼容 / 请求日志」页面。')}
+          {data?.note || P('CPA + billing 为主。配置请用「CPA 配置 / OpenAI 兼容 / 基础设置」页面。')}
         </p>
       </div>
 

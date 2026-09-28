@@ -13,7 +13,7 @@ import { P } from '../../i18n'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
-import { navigate } from '../../router/hash'
+import { navigate, navigateWithQuery } from '../../router/hash'
 
 type Overview = {
   checked_at?: string
@@ -119,7 +119,7 @@ export function AdminOverviewPage({ path }: { path: string }) {
           <button type="button" className="button secondary compact" onClick={() => navigate('/admin/model-prices')}>
             <Zap size={14} /> {P('模型价格')}
           </button>
-          <button type="button" className="button secondary compact" onClick={() => navigate('/admin/account-actions')}>
+          <button type="button" className="button secondary compact" onClick={() => navigateWithQuery('/admin/accounts', { tab: 'health' })}>
             <Users size={14} /> {P('认证异常')}
           </button>
           <button type="button" className="button secondary compact" onClick={() => navigate('/admin/connection')}>

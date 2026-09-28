@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { NavShell } from './components/NavShell'
 import { SiteFooter } from './components/SiteFooter'
 import { CommunityNotice } from './components/CommunityNotice'
-import { useHashRoute } from './router/hash'
+import { navigate, useHashRoute } from './router/hash'
 import { useLanguage } from './hooks/useStore'
 import { P } from './i18n'
 import { HomePage } from './pages/HomePage'
@@ -30,7 +30,6 @@ import { AdminAilyPage } from './pages/admin/AdminAilyPage'
 import { AdminCreditsPage } from './pages/admin/AdminCreditsPage'
 import { AdminConfigPage } from './pages/admin/AdminConfigPage'
 import { AdminCompatPage } from './pages/admin/AdminCompatPage'
-import { AdminRequestLogPage } from './pages/admin/AdminRequestLogPage'
 import { AdminSettingsPage } from './pages/admin/AdminSettingsPage'
 import { AdminProvidersPage } from './pages/admin/AdminProvidersPage'
 import { AdminOauthPage } from './pages/admin/AdminOauthPage'
@@ -42,6 +41,13 @@ import { AdminCodexInspectionPage } from './pages/admin/AdminCodexInspectionPage
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { getSiteConfig, subscribeSiteConfig } from './config/site'
 import { getLanguage } from './i18n'
+
+function LegacyAdminRedirect({ to }: { to: string }) {
+  useEffect(() => {
+    navigate(to)
+  }, [to])
+  return <p className="inline-loading">{P('正在打开新的管理入口…')}</p>
+}
 
 export default function App() {
   const path = useHashRoute()
@@ -123,7 +129,7 @@ export default function App() {
       page = <AdminCompatPage path={path} />
       break
     case '/admin/request-log':
-      page = <AdminRequestLogPage path={path} />
+      page = <LegacyAdminRedirect to="/admin/settings" />
       break
     case '/admin/settings':
       page = <AdminSettingsPage path={path} />

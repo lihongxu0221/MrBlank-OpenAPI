@@ -96,7 +96,6 @@ export const ADMIN_ROUTES = [
   '/admin/connection',
   '/admin/config',
   '/admin/compat',
-  '/admin/request-log',
   '/admin/constellation',
   '/admin/groups',
   '/admin/users',
