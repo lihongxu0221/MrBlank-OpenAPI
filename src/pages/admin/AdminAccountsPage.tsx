@@ -17,6 +17,7 @@ import {
   EyeOff,
   X,
   ScanSearch,
+  Copy,
 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
@@ -25,6 +26,15 @@ import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
 import { useToast } from '../../hooks/useStore'
 import { getHashQuery, navigate, navigateWithQuery } from '../../router/hash'
+import {
+  type CredModel,
+  normalizeAuthFileModels,
+  parseExcludedModels,
+  isModelExcluded,
+  computeModelFilterCounts,
+  toggleExcludedModel,
+  excludedListsEqual,
+} from '../../lib/credModels'
 
 type QuotaSnap = {
   remaining_ratio?: number | null
@@ -81,7 +91,7 @@ type Pool = {
 
 type TabId = 'list' | 'health' | 'oauth' | 'credentials'
 type ViewMode = 'table' | 'card'
-type DetailTab = 'overview' | 'quota' | 'config' | 'models'
+type DetailTab = 'overview' | 'quota' | 'config' | 'models' | 'diagnosis'
 
 type InspectionFinding = {
   id: string
@@ -174,6 +184,20 @@ function maskId(name: string, show: boolean) {
   return `${name.slice(0, 4)}…${name.slice(-4)}`
 }
 
+function maskEmail(email?: string | null) {
+  const s = String(email || '').trim()
+  if (!s || !s.includes('@')) return s || ''
+  const [u, d] = s.split('@')
+  if (u.length <= 2) return `${u[0] || '*'}***@${d}`
+  return `${u.slice(0, 2)}***@${d}`
+}
+
+function detailHeaderLine(a: Account) {
+  const label = a.label || maskEmail(a.email) || maskId(accountName(a), false)
+  const bits = [label, a.provider || '—', a.plan_type || a.quota?.plan_type || null, accountName(a)].filter(Boolean)
+  return bits.join(' · ')
+}
+
 function fmtTime(iso?: string | null) {
   if (!iso) return '—'
   try {
@@ -252,8 +276,16 @@ export function AdminAccountsPage({ path }: { path: string }) {
 
   const [detail, setDetail] = useState<Account | null>(null)
   const [detailTab, setDetailTab] = useState<DetailTab>('overview')
-  const [detailModels, setDetailModels] = useState<unknown>(null)
+  const [detailModels, setDetailModels] = useState<CredModel[]>([])
   const [detailModelsErr, setDetailModelsErr] = useState<string | null>(null)
+  const [detailModelsLoading, setDetailModelsLoading] = useState(false)
+  const [modelsSearch, setModelsSearch] = useState('')
+  const [modelsFilter, setModelsFilter] = useState<'all' | 'available' | 'disabled'>('all')
+  const [excludedDraft, setExcludedDraft] = useState<string[]>([])
+  const [excludedBaseline, setExcludedBaseline] = useState<string[]>([])
+  const [modelsSaving, setModelsSaving] = useState(false)
+  const [diagCandidates, setDiagCandidates] = useState<unknown[] | null>(null)
+  const [diagErr, setDiagErr] = useState<string | null>(null)
   const [configDraft, setConfigDraft] = useState({
     note: '',
     priority: '',
@@ -261,6 +293,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
     proxy_url: '',
     prefix: '',
     websockets: false,
+    excluded_models_text: '',
   })
 
   // OAuth config tab
@@ -616,11 +649,18 @@ export function AdminAccountsPage({ path }: { path: string }) {
     }
   }
 
-  function openDetail(a: Account) {
+  function openDetail(a: Account, tab: DetailTab = 'overview') {
     setDetail(a)
-    setDetailTab('overview')
-    setDetailModels(null)
+    setDetailTab(tab)
+    setDetailModels([])
     setDetailModelsErr(null)
+    setModelsSearch('')
+    setModelsFilter('all')
+    const ex = parseExcludedModels(a.excluded_models)
+    setExcludedDraft(ex)
+    setExcludedBaseline(ex)
+    setDiagCandidates(null)
+    setDiagErr(null)
     setConfigDraft({
       note: a.note != null ? String(a.note) : '',
       priority: a.priority != null ? String(a.priority) : '',
@@ -628,17 +668,47 @@ export function AdminAccountsPage({ path }: { path: string }) {
       proxy_url: a.proxy_url != null ? String(a.proxy_url) : '',
       prefix: a.prefix != null ? String(a.prefix) : '',
       websockets: !!a.websockets,
+      excluded_models_text: ex.join('\n'),
     })
   }
 
   async function loadDetailModels(name: string) {
     setDetailModelsErr(null)
+    setDetailModelsLoading(true)
+    const wasDirty = !excludedListsEqual(excludedDraft, excludedBaseline)
     try {
-      const d = await api.get<{ models: unknown }>(`/api/admin/accounts/models?name=${encodeURIComponent(name)}`)
-      setDetailModels(d.models)
+      const d = await api.get<{ models: unknown; excluded_models?: unknown }>(
+        `/api/admin/accounts/models?name=${encodeURIComponent(name)}`,
+      )
+      setDetailModels(normalizeAuthFileModels(d.models))
+      if (!wasDirty && d.excluded_models !== undefined) {
+        const ex = parseExcludedModels(d.excluded_models)
+        setExcludedDraft(ex)
+        setExcludedBaseline(ex)
+        setConfigDraft((c) => ({ ...c, excluded_models_text: ex.join('\n') }))
+      }
     } catch (e) {
       setDetailModelsErr((e as Error).message)
-      setDetailModels(null)
+      setDetailModels([])
+    } finally {
+      setDetailModelsLoading(false)
+    }
+  }
+
+  async function loadDetailDiagnosis(name: string) {
+    setDiagErr(null)
+    try {
+      const d = await api.get<{ items?: unknown[] }>(`/api/admin/account-actions`)
+      const items = Array.isArray(d.items) ? d.items : []
+      const mine = items.filter((it) => {
+        const row = it as { name?: string; account?: string; id?: string }
+        const key = String(row.name || row.account || row.id || '')
+        return key === name || key.includes(name) || name.includes(key)
+      })
+      setDiagCandidates(mine)
+    } catch (e) {
+      setDiagErr((e as Error).message)
+      setDiagCandidates([])
     }
   }
 
@@ -646,7 +716,60 @@ export function AdminAccountsPage({ path }: { path: string }) {
     if (detail && detailTab === 'models') {
       void loadDetailModels(accountName(detail))
     }
+    if (detail && detailTab === 'diagnosis') {
+      void loadDetailDiagnosis(accountName(detail))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail, detailTab])
+
+  const modelsDirty = !excludedListsEqual(excludedDraft, excludedBaseline)
+  const modelCounts = useMemo(
+    () => computeModelFilterCounts(detailModels, excludedDraft),
+    [detailModels, excludedDraft],
+  )
+  const filteredModels = useMemo(() => {
+    const q = modelsSearch.trim().toLowerCase()
+    return detailModels.filter((m) => {
+      const disabled = isModelExcluded(m.id, excludedDraft)
+      if (modelsFilter === 'available' && disabled) return false
+      if (modelsFilter === 'disabled' && !disabled) return false
+      if (!q) return true
+      const blob = `${m.id} ${m.name || ''} ${m.provider || ''}`.toLowerCase()
+      return blob.includes(q)
+    })
+  }, [detailModels, excludedDraft, modelsFilter, modelsSearch])
+
+  async function saveExcludedModels() {
+    if (!detail || !modelsDirty) return
+    const name = accountName(detail)
+    setModelsSaving(true)
+    try {
+      await api.patch('/api/admin/accounts/fields', { name, excluded_models: excludedDraft })
+      setExcludedBaseline([...excludedDraft])
+      setConfigDraft((c) => ({ ...c, excluded_models_text: excludedDraft.join('\n') }))
+      setDetail((d) => (d ? { ...d, excluded_models: [...excludedDraft] } : d))
+      showToast(P('模型规则已保存'))
+      await load()
+    } catch (e) {
+      showToast((e as Error).message)
+    } finally {
+      setModelsSaving(false)
+    }
+  }
+
+  function resetExcludedModels() {
+    setExcludedDraft([...excludedBaseline])
+    setConfigDraft((c) => ({ ...c, excluded_models_text: excludedBaseline.join('\n') }))
+  }
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast(P('已复制'))
+    } catch {
+      showToast(P('复制失败'))
+    }
+  }
 
   async function saveDetailConfig() {
     if (!detail) return
@@ -654,14 +777,21 @@ export function AdminAccountsPage({ path }: { path: string }) {
     const fields: Record<string, unknown> = {
       note: configDraft.note,
       websockets: configDraft.websockets,
+      excluded_models: parseExcludedModels(configDraft.excluded_models_text),
     }
     if (configDraft.priority !== '') fields.priority = Number(configDraft.priority)
     if (configDraft.weight !== '') fields.weight = Number(configDraft.weight)
     if (configDraft.proxy_url !== '') fields.proxy_url = configDraft.proxy_url
+    else fields.proxy_url = ''
     if (configDraft.prefix !== '') fields.prefix = configDraft.prefix
+    else fields.prefix = ''
     setBusyName(name)
     try {
       await api.patch('/api/admin/accounts/fields', { name, ...fields })
+      const ex = parseExcludedModels(configDraft.excluded_models_text)
+      setExcludedDraft(ex)
+      setExcludedBaseline(ex)
+      setDetail((d) => (d ? { ...d, excluded_models: ex } : d))
       showToast(P('配置已保存'))
       await load()
     } catch (e) {
@@ -1412,10 +1542,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
                           <button
                             type="button"
                             className="button secondary compact"
-                            onClick={() => {
-                              setDetailTab('models')
-                              openDetail(a)
-                            }}
+                            onClick={() => openDetail(a, 'models')}
                           >
                             {P('模型')}
                           </button>
@@ -1450,23 +1577,12 @@ export function AdminAccountsPage({ path }: { path: string }) {
           }}
           onClick={() => setDetail(null)}
         >
-          <aside
-            className="panel"
-            style={{
-              width: 'min(480px, 100%)',
-              height: '100%',
-              margin: 0,
-              borderRadius: 0,
-              overflow: 'auto',
-              padding: 16,
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-              <div>
-                <h2 style={{ margin: 0 }}>{detail.label || detail.email || accountName(detail)}</h2>
-                <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                  <code>{accountName(detail)}</code> · {detail.provider || '—'}
+          <aside className="panel cred-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="cred-drawer-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <h2>{detail.label || maskEmail(detail.email) || accountName(detail)}</h2>
+                <p className="cred-drawer-sub">
+                  {detailHeaderLine(detail)}
                 </p>
               </div>
               <button type="button" className="button secondary compact" onClick={() => setDetail(null)}>
@@ -1481,6 +1597,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
                   ['quota', '额度'],
                   ['config', '配置'],
                   ['models', '模型'],
+                  ['diagnosis', '诊断'],
                 ] as [DetailTab, string][]
               ).map(([id, label]) => (
                 <button key={id} type="button" className={detailTab === id ? 'on' : ''} onClick={() => setDetailTab(id)}>
@@ -1491,50 +1608,119 @@ export function AdminAccountsPage({ path }: { path: string }) {
 
             {detailTab === 'overview' ? (
               <div>
-                <p>
-                  <span className={badgeClass(resolveDisplay(detail))}>
-                    ● {badgeLabel(resolveDisplay(detail), detail.status)}
-                  </span>
-                </p>
-                {detail.status_message ? <p className="muted">{detail.status_message}</p> : null}
-                <p>
-                  OK/Fail · {detail.success ?? 0} / {detail.failed ?? 0}
-                </p>
-                <p>
-                  {P('最近刷新')} · {fmtTime(detail.last_refresh)}
-                </p>
-                <p>
-                  {P('更新时间')} · {fmtTime(detail.updated_at)}
-                </p>
-                <p className="muted" style={{ fontSize: 12 }}>
-                  {P('时间线 / 7 天活动 / 候选动作：需本站 Rebuild 采集，当前为空态。')}
-                </p>
+                <div className="cred-section">
+                  <h4>{P('可用性')}</h4>
+                  <div className="cred-kv">
+                    <span className="k">{P('状态')}</span>
+                    <span>
+                      <span className={badgeClass(resolveDisplay(detail))}>
+                        ● {badgeLabel(resolveDisplay(detail), detail.status)}
+                      </span>
+                    </span>
+                    <span className="k">{P('说明')}</span>
+                    <span>{detail.status_message || '—'}</span>
+                    <span className="k">OK / Fail</span>
+                    <span>
+                      {detail.success ?? 0} / {detail.failed ?? 0}
+                    </span>
+                    <span className="k">{P('套餐')}</span>
+                    <span>{detail.plan_type || detail.quota?.plan_type || '—'}</span>
+                    <span className="k">{P('最近刷新')}</span>
+                    <span>{fmtTime(detail.last_refresh)}</span>
+                    <span className="k">{P('更新时间')}</span>
+                    <span>{fmtTime(detail.updated_at)}</span>
+                  </div>
+                </div>
+                <div className="cred-section">
+                  <h4>{P('额度摘要')}</h4>
+                  {detail.quota ? (
+                    <div className="cred-kv">
+                      <span className="k">{P('剩余比例')}</span>
+                      <span>
+                        {fmtRatio(detail.quota.remaining_ratio)} ({detail.quota.risk || '—'})
+                      </span>
+                      <span className="k">{P('窗口')}</span>
+                      <span>{detail.quota.window || '—'}</span>
+                      <span className="k">{P('重置')}</span>
+                      <span>{detail.quota.resets_at || '—'}</span>
+                    </div>
+                  ) : (
+                    <p className="muted" style={{ fontSize: 12 }}>
+                      {P('暂无额度快照（本站 Rebuild 采集后显示）。')}
+                    </p>
+                  )}
+                </div>
+                <div className="cred-section">
+                  <h4>{P('最近请求')}</h4>
+                  {detail.recent_requests && detail.recent_requests.length ? (
+                    <div className="table-wrap">
+                      <table className="data-table compact">
+                        <thead>
+                          <tr>
+                            <th>{P('时间')}</th>
+                            <th>OK</th>
+                            <th>Fail</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detail.recent_requests.slice(-8).map((r, i) => (
+                            <tr key={i}>
+                              <td>{fmtTime(r.time)}</td>
+                              <td>{r.success ?? 0}</td>
+                              <td>{r.failed ?? 0}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="muted" style={{ fontSize: 12 }}>{P('CPA 未返回 recent_requests。')}</p>
+                  )}
+                </div>
+                <div className="cred-diag-empty">
+                  {P('近 200 分钟时间线 / 7 天活动 / 待处理候选：依赖本站 Rebuild 采集管线，当前为空态（非假数据）。')}
+                </div>
               </div>
             ) : null}
 
             {detailTab === 'quota' ? (
               <div>
                 {detail.quota ? (
-                  <>
-                    <p>
-                      {P('剩余比例')} · {fmtRatio(detail.quota.remaining_ratio)} ({detail.quota.risk || '—'})
-                    </p>
-                    <p>
-                      {P('窗口')} · {detail.quota.window || '—'}
-                    </p>
-                    <p>
-                      {P('套餐')} · {detail.quota.plan_type || detail.plan_type || '—'}
-                    </p>
-                    <p>
-                      {P('重置')} · {detail.quota.resets_at || '—'}
-                    </p>
-                    <p className="muted" style={{ fontSize: 12 }}>
-                      source · {detail.quota.source}
-                    </p>
-                  </>
+                  <div className="cred-section">
+                    <h4>{P('当前窗口')}</h4>
+                    <div className="cred-kv">
+                      <span className="k">{P('剩余比例')}</span>
+                      <span>
+                        {fmtRatio(detail.quota.remaining_ratio)} ({detail.quota.risk || '—'})
+                      </span>
+                      <span className="k">{P('剩余 / 上限')}</span>
+                      <span>
+                        {detail.quota.remaining ?? '—'} / {detail.quota.limit ?? '—'}
+                      </span>
+                      <span className="k">{P('窗口')}</span>
+                      <span>{detail.quota.window || '—'}</span>
+                      <span className="k">{P('套餐')}</span>
+                      <span>{detail.quota.plan_type || detail.plan_type || '—'}</span>
+                      <span className="k">{P('重置')}</span>
+                      <span>{detail.quota.resets_at || '—'}</span>
+                      <span className="k">{P('来源')}</span>
+                      <span>{detail.quota.source || '—'}</span>
+                      <span className="k">{P('观测时间')}</span>
+                      <span>
+                        {detail.quota.observed_at_ms
+                          ? fmtTime(new Date(detail.quota.observed_at_ms).toISOString())
+                          : '—'}
+                      </span>
+                    </div>
+                  </div>
                 ) : (
-                  <p className="muted">{P('暂无额度快照。可通过 POST /api/admin/quota-snapshots 写入本站 Rebuild 数据。')}</p>
+                  <div className="cred-diag-empty">
+                    {P('暂无额度快照。可通过 POST /api/admin/quota-snapshots 写入本站 Rebuild 数据后在此展示。')}
+                  </div>
                 )}
+                <div className="cred-diag-empty" style={{ marginTop: 10 }}>
+                  {P('模型窗口 / 预测 / Header 诊断：需持续 Rebuild 采集；当前未接假数据。')}
+                </div>
                 <button
                   type="button"
                   className="button secondary compact"
@@ -1597,6 +1783,18 @@ export function AdminAccountsPage({ path }: { path: string }) {
                   />
                   websockets
                 </label>
+                <label>
+                  {P('排除模型（excluded_models）')}
+                  <textarea
+                    style={{ width: '100%', minHeight: 88, fontFamily: 'inherit' }}
+                    placeholder={P('每行或逗号分隔；仅作用于当前凭证')}
+                    value={configDraft.excluded_models_text}
+                    onChange={(e) => setConfigDraft((d) => ({ ...d, excluded_models_text: e.target.value }))}
+                  />
+                  <span className="muted" style={{ fontSize: 11 }}>
+                    {P('全局别名和排除在「OAuth 配置」管理；模型 Tab 提供逐卡禁用/恢复。')}
+                  </span>
+                </label>
                 <button type="button" className="button" onClick={saveDetailConfig}>
                   {P('保存配置')}
                 </button>
@@ -1605,14 +1803,159 @@ export function AdminAccountsPage({ path }: { path: string }) {
 
             {detailTab === 'models' ? (
               <div>
+                <div className="cred-models-toolbar">
+                  <div className="title">
+                    {accountName(detail)} · {modelCounts.all} {P('个模型')}
+                  </div>
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="button secondary compact"
+                      onClick={() => {
+                        setDetail(null)
+                        switchTab('oauth')
+                      }}
+                    >
+                      {P('管理全局规则')}
+                    </button>
+                    <button
+                      type="button"
+                      className="button secondary compact"
+                      disabled={detailModelsLoading}
+                      onClick={() => void loadDetailModels(accountName(detail))}
+                    >
+                      <RefreshCw size={14} /> {P('刷新')}
+                    </button>
+                  </div>
+                </div>
+
+                <div className={`cred-models-dirty${modelsDirty ? ' is-dirty' : ''}`}>
+                  <span>
+                    {modelsDirty ? P('已修改未保存') : P('尚未修改当前凭证的模型规则')}
+                    {modelsDirty ? ` · ${P('凭证规则')} ${excludedDraft.length}` : ''}
+                  </span>
+                  <div className="dirty-actions">
+                    <button type="button" className="button secondary compact" disabled={!modelsDirty || modelsSaving} onClick={resetExcludedModels}>
+                      {P('重置')}
+                    </button>
+                    <button type="button" className="button compact" disabled={!modelsDirty || modelsSaving} onClick={() => void saveExcludedModels()}>
+                      {P('保存')}
+                    </button>
+                  </div>
+                </div>
+
+                <input
+                  className="cred-models-search"
+                  placeholder={P('搜索模型 ID、名称或别名')}
+                  value={modelsSearch}
+                  onChange={(e) => setModelsSearch(e.target.value)}
+                />
+
+                <div className="cred-model-filters" role="tablist" aria-label={P('模型状态筛选')}>
+                  <button type="button" className={modelsFilter === 'all' ? 'on' : ''} onClick={() => setModelsFilter('all')}>
+                    {P('全部')}
+                  </button>
+                  <button type="button" className={modelsFilter === 'available' ? 'on' : ''} onClick={() => setModelsFilter('available')}>
+                    {P('可用')}
+                  </button>
+                  <button type="button" className={modelsFilter === 'disabled' ? 'on' : ''} onClick={() => setModelsFilter('disabled')}>
+                    {P('已禁用')} {modelCounts.disabled}
+                  </button>
+                </div>
+
                 {detailModelsErr ? <p style={{ color: 'var(--error)' }}>{detailModelsErr}</p> : null}
-                {detailModels ? (
-                  <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 11 }}>
-                    {JSON.stringify(detailModels, null, 2)}
-                  </pre>
-                ) : !detailModelsErr ? (
-                  <p className="muted">{P('加载中…')}</p>
+                {detailModelsLoading && !detailModels.length ? <p className="muted">{P('加载中…')}</p> : null}
+                {!detailModelsLoading && !detailModelsErr && !filteredModels.length ? (
+                  <p className="muted">{P('没有匹配当前筛选条件的模型')}</p>
                 ) : null}
+
+                <div className="cred-model-list">
+                  {filteredModels.map((m) => {
+                    const disabled = isModelExcluded(m.id, excludedDraft)
+                    return (
+                      <div key={m.id} className={`cred-model-card${disabled ? ' is-disabled' : ''}`}>
+                        <div className="row1">
+                          <div className="id-line">
+                            <code>{m.id}</code>
+                            <button type="button" className="button secondary compact" title={P('复制')} onClick={() => void copyText(m.id)}>
+                              <Copy size={12} />
+                            </button>
+                          </div>
+                          <span className={disabled ? 'badge-disabled' : 'badge-avail'}>
+                            {disabled ? P('当前凭证禁用') : P('可用')}
+                          </span>
+                        </div>
+                        {m.name ? <div style={{ fontSize: 13 }}>{m.name}</div> : null}
+                        <div className="meta">
+                          {m.provider ? <span className="tag">{m.provider}</span> : null}
+                          {disabled ? <span className="hint">{P('凭证规则')}</span> : null}
+                        </div>
+                        <div>
+                          {disabled ? (
+                            <button
+                              type="button"
+                              className="button secondary compact"
+                              onClick={() => setExcludedDraft((d) => toggleExcludedModel(d, m.id, false))}
+                            >
+                              {P('恢复')}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="button secondary compact"
+                              onClick={() => setExcludedDraft((d) => toggleExcludedModel(d, m.id, true))}
+                            >
+                              {P('对此凭证禁用')}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {detailTab === 'diagnosis' ? (
+              <div>
+                <div className="cred-section">
+                  <h4>{P('诊断结论')}</h4>
+                  <div className="cred-kv">
+                    <span className="k">{P('状态')}</span>
+                    <span>
+                      <span className={badgeClass(resolveDisplay(detail))}>
+                        ● {badgeLabel(resolveDisplay(detail), detail.status)}
+                      </span>
+                    </span>
+                    <span className="k">{P('说明')}</span>
+                    <span>{detail.status_message || '—'}</span>
+                  </div>
+                </div>
+                <div className="cred-section">
+                  <h4>{P('动作候选')}</h4>
+                  {diagErr ? <p style={{ color: 'var(--error)' }}>{diagErr}</p> : null}
+                  {diagCandidates == null ? <p className="muted">{P('加载中…')}</p> : null}
+                  {diagCandidates && !diagCandidates.length ? (
+                    <div className="cred-diag-empty">
+                      {P('暂无与该凭证匹配的认证异常候选。巡检/Header 证据需本站 Rebuild；完整巡检见「健康巡检」Tab。')}
+                    </div>
+                  ) : null}
+                  {diagCandidates && diagCandidates.length ? (
+                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
+                      {diagCandidates.slice(0, 12).map((it, i) => {
+                        const row = it as { reason?: string; kind?: string; status_message?: string; id?: string }
+                        return (
+                          <li key={row.id || i}>
+                            {row.kind || 'candidate'} · {row.reason || row.status_message || '—'}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  ) : null}
+                </div>
+                <div className="cred-diag-empty">
+                  {P('登录信息 / 检查建议 / 近 7 天事件：CPAMP Manager-only 深度能力未绑 DB；本站将逐步用 Rebuild 证据填充。')}
+                </div>
               </div>
             ) : null}
 

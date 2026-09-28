@@ -89,6 +89,7 @@ import { createAilyAccountsStore } from './ailyAccounts.js'
 import { createAilyCompat } from './ailyCompat.js'
 import { createAilyOauth } from './ailyOauth.js'
 import { createQuotaSnapshotStore } from './quotaSnapshots.js'
+import { normalizeAuthFileModels, parseExcludedModels } from './credModels.js'
 import { convertPasteToAuthFiles } from './authFileConvert.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -2976,7 +2977,31 @@ app.get('/api/admin/accounts/models', requireAdmin, async (req, res) => {
       return
     }
     const data = await fetchAuthFileModels(cpaCfg, name)
-    res.json(ok({ name, models: data, source: 'cpa' }))
+    const models = normalizeAuthFileModels(data)
+    let excluded_models = []
+    try {
+      const filesPayload =
+        cpaCollector.getAuthFilesPayload?.() ||
+        (await fetchCpaAuthFilesCached(cpaCfg).catch(() => null))
+      const files = Array.isArray(filesPayload?.files) ? filesPayload.files : []
+      const hit = files.find((f) => String(f?.name || '') === name)
+      if (hit) {
+        excluded_models = parseExcludedModels(
+          hit.excluded_models ?? hit['excluded-models'] ?? hit.excludedModels ?? hit.attributes?.excluded_models,
+        )
+      }
+    } catch {
+      /* optional enrichment */
+    }
+    res.json(
+      ok({
+        name,
+        models,
+        models_raw: data,
+        excluded_models,
+        source: 'cpa',
+      }),
+    )
   } catch (err) {
     res.status(err?.status || 502).json(fail(err?.message || 'auth-file models failed'))
   }

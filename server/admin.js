@@ -164,7 +164,12 @@ export function summarizeUsage(usage) {
 
 function attr(f, key, fallback = null) {
   if (f?.[key] !== undefined && f?.[key] !== null) return f[key]
+  const kebab = String(key || '').includes('_') ? String(key).replaceAll('_', '-') : null
+  if (kebab && f?.[kebab] !== undefined && f?.[kebab] !== null) return f[kebab]
   if (f?.attributes && f.attributes[key] !== undefined && f.attributes[key] !== null) return f.attributes[key]
+  if (kebab && f?.attributes && f.attributes[kebab] !== undefined && f.attributes[kebab] !== null) {
+    return f.attributes[kebab]
+  }
   return fallback
 }
 

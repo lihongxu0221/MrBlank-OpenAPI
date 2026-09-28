@@ -6,6 +6,14 @@ import path from 'node:path'
 import { convertPasteToAuthFiles } from '../authFileConvert.js'
 import { createQuotaSnapshotStore } from '../quotaSnapshots.js'
 import { deriveDisplayStatus, mapAdminAccounts, summarizeAccounts } from '../admin.js'
+import {
+  normalizeAuthFileModels,
+  parseExcludedModels,
+  isModelExcluded,
+  computeModelFilterCounts,
+  toggleExcludedModel,
+  excludedListsEqual,
+} from '../credModels.js'
 
 test('deriveDisplayStatus maps reauth / disabled / running', () => {
   assert.equal(deriveDisplayStatus({ disabled: true }), 'disabled')
@@ -84,4 +92,48 @@ test('quotaSnapshots ingest + latest query', () => {
       /* ignore */
     }
   }
+})
+
+
+test('normalizeAuthFileModels accepts strings, objects, nested payloads', () => {
+  assert.deepEqual(normalizeAuthFileModels(['gpt-4', 'gpt-4', ' o1 ']).map((m) => m.id), [
+    'gpt-4',
+    'o1',
+  ])
+  const objs = normalizeAuthFileModels([
+    { id: 'claude-sonnet', display_name: 'Sonnet', owned_by: 'anthropic' },
+    { model: 'codex-mini', name: 'Codex Mini', provider: 'codex' },
+    { name: 'only-name' },
+    null,
+    12,
+  ])
+  assert.equal(objs.length, 3)
+  assert.equal(objs[0].name, 'Sonnet')
+  assert.equal(objs[0].provider, 'anthropic')
+  assert.equal(objs[1].id, 'codex-mini')
+  assert.equal(objs[2].id, 'only-name')
+  assert.deepEqual(
+    normalizeAuthFileModels({ models: { data: [{ id: 'a' }, { id: 'b' }] } }).map((m) => m.id),
+    ['a', 'b'],
+  )
+})
+
+test('parseExcludedModels + filter counts + toggle', () => {
+  assert.deepEqual(parseExcludedModels('a, b\nc'), ['a', 'b', 'c'])
+  assert.deepEqual(parseExcludedModels({ 'excluded-models': ['x', 'x'] }), ['x'])
+  const models = normalizeAuthFileModels(['gpt-4', 'o1', 'claude-3'])
+  const draft = ['gpt-4', 'claude-*']
+  assert.equal(isModelExcluded('gpt-4', draft), true)
+  assert.equal(isModelExcluded('claude-3', draft), true)
+  assert.equal(isModelExcluded('o1', draft), false)
+  const counts = computeModelFilterCounts(models, draft)
+  assert.equal(counts.all, 3)
+  assert.equal(counts.disabled, 2)
+  assert.equal(counts.available, 1)
+  const next = toggleExcludedModel(draft, 'o1', true)
+  assert.equal(isModelExcluded('o1', next), true)
+  const restored = toggleExcludedModel(next, 'gpt-4', false)
+  assert.equal(isModelExcluded('gpt-4', restored), false)
+  assert.equal(excludedListsEqual(['A', 'b'], ['b', 'a']), true)
+  assert.equal(excludedListsEqual(['A'], ['b']), false)
 })
