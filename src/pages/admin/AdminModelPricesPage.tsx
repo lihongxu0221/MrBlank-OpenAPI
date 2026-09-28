@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { CloudDownload, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { formatCredits, getQuotaPerUnit, setQuotaPerUnit } from '../../lib/format'
+import { formatCredits, getQuotaPerUnit, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
@@ -66,8 +66,22 @@ function numOrEmpty(v: number | null | undefined): string {
   return String(v)
 }
 
-function pointsFromUsd(usd: number, unit: number) {
-  return Math.round((Number(usd) || 0) * unit)
+function rawFromUsd(usd: number, quotaPerUnit: number) {
+  return Math.round((Number(usd) || 0) * (quotaPerUnit || 500000))
+}
+
+/** Price-book raw quota → display 点. Raw and display scales may differ. */
+function pointsFromRaw(raw: number, rawPerPoint: number) {
+  return quotaToPoints(Number(raw) || 0, rawPerPoint || 500000)
+}
+
+function pointsFromUsd(usd: number, quotaPerUnit: number, rawPerPoint: number) {
+  return pointsFromRaw(rawFromUsd(usd, quotaPerUnit), rawPerPoint)
+}
+
+function formatPoints(value: number) {
+  const n = Number(value) || 0
+  return n.toLocaleString('zh-CN', { maximumFractionDigits: 6 })
 }
 
 export function AdminModelPricesPage({ path }: { path: string }) {
@@ -78,6 +92,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
   const [costed, setCosted] = useState<{
     total_cost: number
     total_quota_points?: number
+    total_quota_raw?: number
     by_model: CostRow[]
     period: string
     note?: string
@@ -89,6 +104,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
   const [syncing, setSyncing] = useState(false)
   const [lastSync, setLastSync] = useState<SyncResult | null>(null)
   const [quotaUnit, setQuotaUnit] = useState(500000)
+  const [rawPerPoint, setRawPerPoint] = useState(500000)
   const [quotaUnitDraft, setQuotaUnitDraft] = useState('500000')
   const [savingUnit, setSavingUnit] = useState(false)
 
@@ -105,13 +121,14 @@ export function AdminModelPricesPage({ path }: { path: string }) {
         api.get<{
           total_cost: number
           total_quota_points?: number
+          total_quota_raw?: number
           by_model: CostRow[]
           period: string
           note?: string
         }>(`/api/admin/model-prices/usage-summary?period=${encodeURIComponent(period)}`),
-        api.get<{ quota_per_unit: number }>('/api/admin/quota-unit').catch(async () => {
+        api.get<{ quota_per_unit: number; raw_per_point?: number; credit_unit?: { raw_per_point?: number } }>('/api/admin/quota-unit').catch(async () => {
           const s = await api.get<{ quota_per_unit: number }>('/api/status', { auth: false })
-          return s
+          return { ...s, raw_per_point: s.quota_per_unit, credit_unit: { raw_per_point: s.quota_per_unit } }
         }),
       ])
       setPrices(book.prices?.length ? book.prices : [])
@@ -119,7 +136,9 @@ export function AdminModelPricesPage({ path }: { path: string }) {
       setCosted(usage)
       if (book.last_sync) setLastSync(book.last_sync)
       const u = Number(unit.quota_per_unit || book.quota_per_unit) || 500000
+      const rp = Number(unit.raw_per_point || unit.credit_unit?.raw_per_point || u) || 500000
       setQuotaUnit(u)
+      setRawPerPoint(rp)
       setQuotaUnitDraft(String(u))
       setQuotaPerUnit(u)
     } catch (e) {
@@ -139,22 +158,22 @@ export function AdminModelPricesPage({ path }: { path: string }) {
         if (idx !== i) return p
         const next = { ...p, ...patch, manual: true, source: patch.source ?? p.source ?? 'manual' }
         if ('input_per_mtok' in patch) {
-          next.input_quota_per_mtok = pointsFromUsd(Number(next.input_per_mtok) || 0, quotaUnit)
+          next.input_quota_per_mtok = rawFromUsd(Number(next.input_per_mtok) || 0, quotaUnit)
         }
         if ('output_per_mtok' in patch) {
-          next.output_quota_per_mtok = pointsFromUsd(Number(next.output_per_mtok) || 0, quotaUnit)
+          next.output_quota_per_mtok = rawFromUsd(Number(next.output_per_mtok) || 0, quotaUnit)
         }
         if ('cache_read_per_mtok' in patch) {
           next.cache_read_quota_per_mtok =
             next.cache_read_per_mtok == null
               ? null
-              : pointsFromUsd(Number(next.cache_read_per_mtok) || 0, quotaUnit)
+              : rawFromUsd(Number(next.cache_read_per_mtok) || 0, quotaUnit)
         }
         if ('cache_write_per_mtok' in patch) {
           next.cache_write_quota_per_mtok =
             next.cache_write_per_mtok == null
               ? null
-              : pointsFromUsd(Number(next.cache_write_per_mtok) || 0, quotaUnit)
+              : rawFromUsd(Number(next.cache_write_per_mtok) || 0, quotaUnit)
         }
         return next
       }),
@@ -362,9 +381,11 @@ export function AdminModelPricesPage({ path }: { path: string }) {
           <div className="value">{costed ? costed.total_cost.toFixed(4) : '—'}</div>
           <div className="hint">
             USD · {period}
-            {costed?.total_quota_points != null
-              ? ` · ≈ ${Number(costed.total_quota_points).toFixed(4)} ${P('点')}`
-              : ''}
+            {costed?.total_quota_raw != null
+              ? ` · ≈ ${formatPoints(pointsFromRaw(costed.total_quota_raw, rawPerPoint))} ${P('点')}`
+              : costed?.total_quota_points != null
+                ? ` · ≈ ${formatPoints(costed.total_quota_points)} ${P('点')}`
+                : ''}
           </div>
         </div>
         <div className="stat-card">
@@ -446,9 +467,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                   </td>
                   <td>
                     <span className="muted" style={{ fontSize: 12 }}>
-                      {(p.input_quota_per_mtok ?? pointsFromUsd(p.input_per_mtok, quotaUnit)).toLocaleString(
-                        'zh-CN',
-                      )}
+                      {formatPoints(pointsFromRaw(p.input_quota_per_mtok ?? rawFromUsd(p.input_per_mtok, quotaUnit), rawPerPoint))}
                     </span>
                   </td>
                   <td>
@@ -462,9 +481,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                   </td>
                   <td>
                     <span className="muted" style={{ fontSize: 12 }}>
-                      {(
-                        p.output_quota_per_mtok ?? pointsFromUsd(p.output_per_mtok, quotaUnit)
-                      ).toLocaleString('zh-CN')}
+                      {formatPoints(pointsFromRaw(p.output_quota_per_mtok ?? rawFromUsd(p.output_per_mtok, quotaUnit), rawPerPoint))}
                     </span>
                   </td>
                   <td>
@@ -483,7 +500,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                     />
                     {p.cache_read_per_mtok != null ? (
                       <div className="muted" style={{ fontSize: 11 }}>
-                        {pointsFromUsd(Number(p.cache_read_per_mtok) || 0, quotaUnit).toLocaleString('zh-CN')}{' '}
+                        {formatPoints(pointsFromUsd(Number(p.cache_read_per_mtok) || 0, quotaUnit, rawPerPoint))}{' '}
                         {P('点')}
                       </div>
                     ) : null}
@@ -504,7 +521,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                     />
                     {p.cache_write_per_mtok != null ? (
                       <div className="muted" style={{ fontSize: 11 }}>
-                        {pointsFromUsd(Number(p.cache_write_per_mtok) || 0, quotaUnit).toLocaleString('zh-CN')}{' '}
+                        {formatPoints(pointsFromUsd(Number(p.cache_write_per_mtok) || 0, quotaUnit, rawPerPoint))}{' '}
                         {P('点')}
                       </div>
                     ) : null}
@@ -565,9 +582,11 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                   <td>{(r.cache_tokens || 0).toLocaleString('zh-CN')}</td>
                   <td>{r.cost.toFixed(6)}</td>
                   <td>
-                    {r.quota_points != null
-                      ? Number(r.quota_points).toFixed(4)
-                      : formatCredits(r.quota_raw ?? 0, getQuotaPerUnit())}
+                    {r.quota_raw != null
+                      ? formatPoints(pointsFromRaw(r.quota_raw, rawPerPoint))
+                      : r.quota_points != null
+                        ? formatPoints(r.quota_points)
+                        : formatCredits(0, getQuotaPerUnit())}
                   </td>
                   <td>{r.priced ? '✓' : '—'}</td>
                 </tr>

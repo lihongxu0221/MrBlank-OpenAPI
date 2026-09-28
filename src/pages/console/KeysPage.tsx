@@ -102,8 +102,9 @@ export function KeysPage({ path }: { path: string }) {
   const { toast, showToast } = useToast()
 
   async function load() {
-    const status = await api.get<{ quota_per_unit: number }>('/api/status', { auth: false })
-    setQuotaPerUnit(status.quota_per_unit)
+    const status = await api.get<{ quota_per_unit: number; raw_per_point?: number; credit_unit?: { raw_per_point?: number } }>('/api/status', { auth: false })
+    const rawPerPoint = Number(status.raw_per_point || status.credit_unit?.raw_per_point || status.quota_per_unit) || 500000
+    setQuotaPerUnit(rawPerPoint)
     const data = await api.get<{
       items: Token[]
       total: number
