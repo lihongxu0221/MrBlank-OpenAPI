@@ -1793,6 +1793,7 @@ app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
       auth = await fetchCpaAuthFilesCached(cpaCfg, { force: true })
     }
     const items = mapAdminAccounts(auth)
+    res.setHeader('Cache-Control', 'no-store')
     res.json(
       ok({
         observed_at: auth?.observed_at || cpaCollector.getStatus().lastSync || null,
@@ -2841,6 +2842,64 @@ app.delete('/api/admin/accounts', requireAdmin, async (req, res) => {
   }
 })
 
+
+app.post('/api/admin/accounts/batch', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const action = String(req.body?.action || '').trim()
+    const namesRaw = Array.isArray(req.body?.names) ? req.body.names : []
+    const names = [...new Set(namesRaw.map((n) => String(n || '').trim()).filter(Boolean))]
+    if (!names.length) {
+      res.status(400).json(fail('names required'))
+      return
+    }
+    if (!['enable', 'disable', 'delete', 'priority'].includes(action)) {
+      res.status(400).json(fail('action must be enable|disable|delete|priority'))
+      return
+    }
+    let priority = undefined
+    if (action === 'priority') {
+      priority = Number(req.body?.priority)
+      if (!Number.isFinite(priority)) {
+        res.status(400).json(fail('priority must be a number'))
+        return
+      }
+    }
+    const results = []
+    for (const name of names) {
+      try {
+        if (action === 'enable') await setAuthFileDisabled(cpaCfg, name, false)
+        else if (action === 'disable') await setAuthFileDisabled(cpaCfg, name, true)
+        else if (action === 'delete') await deleteAuthFile(cpaCfg, name)
+        else if (action === 'priority') await patchAuthFileFields(cpaCfg, name, { priority })
+        results.push({ name, ok: true })
+      } catch (err) {
+        results.push({ name, ok: false, error: err?.message || String(err), status: err?.status || 502 })
+      }
+    }
+    try {
+      await cpaCollector.refresh({ force: true })
+    } catch {
+      /* ignore */
+    }
+    res.setHeader('Cache-Control', 'no-store')
+    res.json(
+      ok({
+        action,
+        results,
+        ok_count: results.filter((r) => r.ok).length,
+        fail_count: results.filter((r) => !r.ok).length,
+        source: 'cpa',
+      }),
+    )
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'account batch failed'))
+  }
+})
+
 app.get('/api/admin/oauth/providers', requireAdmin, (_req, res) => {
   res.json(
     ok({
@@ -3181,11 +3240,53 @@ app.put('/api/admin/model-prices', requireAdmin, (req, res) => {
   }
 })
 
+app.post('/api/admin/model-prices/sync', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const overwriteManual = body.overwrite_manual === true || body.overwriteManual === true
+    const data = await modelPrices.syncOfficial({ overwriteManual })
+    res.json(
+      ok({
+        imported: data.imported,
+        updated: data.updated,
+        skipped: data.skipped,
+        failed_sources: data.failed_sources || [],
+        sources: data.sources || {},
+        total_prices: data.total_prices,
+        at: data.at,
+        updated_at: data.updated_at,
+        last_sync: data,
+      }),
+    )
+  } catch (err) {
+    console.error('[admin] model-prices/sync', err?.message || err)
+    res.status(err?.status || 500).json(fail(err?.message || 'model-prices sync failed'))
+  }
+})
+
 app.get('/api/admin/model-prices/runtime-models', requireAdmin, (req, res) => {
   try {
     const period = String(req.query?.period || 'all')
-    const models = siteUsage.distinctModels({ period })
-    res.json(ok({ models, period, source: 'site-usage' }))
+    const seen = new Set(siteUsage.distinctModels({ period }) || [])
+    try {
+      const routing = ailyModelRouting.get()
+      for (const id of exposedModelNames(routing) || []) {
+        const s = String(id || '').trim()
+        if (!s) continue
+        seen.add(s)
+        if (!isAilyPrefixed(s)) seen.add(`aily/${s}`)
+      }
+      for (const row of routing?.mappings || []) {
+        const from = String(row?.from || '').trim()
+        if (!from) continue
+        seen.add(from)
+        seen.add(isAilyPrefixed(from) ? from : `aily/${from}`)
+      }
+    } catch {
+      /* aily routing optional */
+    }
+    const models = [...seen].sort((a, b) => a.localeCompare(b))
+    res.json(ok({ models, period, source: 'site-usage+aily-routing' }))
   } catch (err) {
     res.status(500).json(fail(err?.message || 'runtime-models failed'))
   }
