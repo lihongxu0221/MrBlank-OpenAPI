@@ -14,6 +14,7 @@ import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
 import { useToast } from '../../hooks/useStore'
+import { getHashQuery } from '../../router/hash'
 
 type AilyStatus = {
   auth_file?: string
@@ -135,6 +136,20 @@ export function AdminOauthPage({ path }: { path: string }) {
     loadAlias()
     loadAily()
     loadUpAccounts()
+  }, [gate.allowed])
+
+  // Deep-link from 凭证管理: /admin/oauth?provider=codex&reauth=...
+  useEffect(() => {
+    if (!gate.allowed) return
+    const provider = (getHashQuery().get('provider') || '').trim().toLowerCase()
+    if (!provider) return
+    const allowed = [...PRIMARY, ...OPTIONAL]
+    if (!allowed.includes(provider)) return
+    const key = `oauth-deeplink:${provider}:${getHashQuery().get('reauth') || ''}`
+    if (sessionStorage.getItem(key) === '1') return
+    sessionStorage.setItem(key, '1')
+    void start(provider)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gate.allowed])
 
   async function loadAlias() {
@@ -533,12 +548,17 @@ export function AdminOauthPage({ path }: { path: string }) {
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
       <ConsoleHero
         title={P('OAuth 登录')}
-        subtitle={P('选择提供商 → 打开授权页 → 粘贴回调地址 → 确认状态。也可在本页管理 Aily 上游凭证。')}
+        subtitle={P('CPA 九大提供商授权登录（选提供商 → 打开授权页 → 粘贴回调 → 轮询状态）。下方「本站上游」为 Aily/Grok，与 CPA OAuth 并列，不互相替代。')}
       />
       {err ? <p style={{ color: 'var(--error)' }}>{err}</p> : null}
 
       <div className="panel" style={{ marginTop: 12 }}>
-        <h3>{P('选择提供商')}</h3>
+        <h3>{P('CPA OAuth 提供商')}</h3>
+        {getHashQuery().get('reauth') ? (
+          <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+            {P('来自凭证管理的重新认证')} · <code>{getHashQuery().get('reauth')}</code>
+          </p>
+        ) : null}
         <p className="muted" style={{ marginTop: 0, marginBottom: 10, fontSize: 13 }}>
           {P('点击下方按钮启动授权流程，完成后在「授权进度」中粘贴回调地址。')}
         </p>
@@ -635,7 +655,7 @@ export function AdminOauthPage({ path }: { path: string }) {
       <div className="panel" style={{ marginTop: 24 }}>
         <div className="channels-toolbar" style={{ marginBottom: 12 }}>
           <div>
-            <h3 style={{ margin: 0 }}>{P('Aily 上游')}</h3>
+            <h3 style={{ margin: 0 }}>{P('本站上游 · Aily')}</h3>
             <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
               {P('管理 Aily 凭证与连通测试；客户端默认走 CPA，命中路由时用内嵌桥接。')}
               {ailyStatus?.updated_at
@@ -1024,7 +1044,7 @@ export function AdminOauthPage({ path }: { path: string }) {
       <div className="panel" style={{ marginTop: 24 }}>
         <div className="channels-toolbar" style={{ marginBottom: 12 }}>
           <div>
-            <h3 style={{ margin: 0 }}>{P('上游账号')}</h3>
+            <h3 style={{ margin: 0 }}>{P('本站上游 · Grok/OpenAI')}</h3>
             <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
               {P('Grok / OpenAI 兼容上游（api_key 或粘贴 OAuth JSON）。命中账号白名单/映射的 /v1 请求走内嵌兼容中继，不经 CPA。')}
             </p>

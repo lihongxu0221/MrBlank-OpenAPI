@@ -1135,3 +1135,26 @@ export async function fetchCpaLogs(cfg, { limit } = {}) {
     throw err
   }
 }
+
+/** List models available for a specific auth-file. */
+export async function fetchAuthFileModels(cfg, name) {
+  requireMgmt(cfg)
+  const n = String(name || '').trim()
+  if (!n) throw Object.assign(new Error('name required'), { status: 400 })
+  return cpaFetch(cfg, `/v0/management/auth-files/models?name=${encodeURIComponent(n)}`)
+}
+
+/**
+ * Reset quota for an auth file. CPA accepts auth_index (preferred) and/or name depending on version.
+ */
+export async function resetAuthFileQuota(cfg, { name, auth_index } = {}) {
+  requireMgmt(cfg)
+  const body = {}
+  const n = String(name || '').trim()
+  if (n) body.name = n
+  if (auth_index != null && auth_index !== '') body.auth_index = auth_index
+  if (!body.name && body.auth_index == null) {
+    throw Object.assign(new Error('name or auth_index required'), { status: 400 })
+  }
+  return cpaFetch(cfg, '/v0/management/reset-quota', { method: 'POST', body })
+}

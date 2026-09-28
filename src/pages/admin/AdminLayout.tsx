@@ -8,7 +8,6 @@ import {
   Sparkles,
   UserCog,
   UserRound,
-  Users,
   Gift,
   Settings,
   Blocks,
@@ -30,7 +29,7 @@ import { useSession } from '../../hooks/useStore'
 
 const ITEMS = [
   { path: '/admin', label: '管理概览', icon: LayoutDashboard },
-  { path: '/admin/accounts', label: '上游账号', icon: Users },
+  { path: '/admin/accounts', label: '凭证管理', icon: KeyRound },
   { path: '/admin/settings', label: '基础设置', icon: SlidersHorizontal },
   { path: '/admin/providers', label: 'AI 提供商', icon: KeySquare },
   { path: '/admin/oauth', label: 'OAuth 登录', icon: LogIn },

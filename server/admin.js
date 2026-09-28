@@ -162,14 +162,38 @@ export function summarizeUsage(usage) {
   }
 }
 
+function attr(f, key, fallback = null) {
+  if (f?.[key] !== undefined && f?.[key] !== null) return f[key]
+  if (f?.attributes && f.attributes[key] !== undefined && f.attributes[key] !== null) return f.attributes[key]
+  return fallback
+}
+
+export function deriveDisplayStatus(f) {
+  if (f?.disabled) return 'disabled'
+  const st = String(f?.status || f?.display_status || '').toLowerCase()
+  const msg = String(f?.status_message || f?.error || '').toLowerCase()
+  const blob = `${st} ${msg}`
+  if (
+    /reauth|re-auth|need.?reauth|expired|unauthorized|login.?required|invalid.?token|refresh.?fail|auth.?fail|token.?revok/.test(
+      blob,
+    )
+  ) {
+    return 'need_reauth'
+  }
+  if (f?.unavailable) return 'unavailable'
+  if (/exhaust|quota.?risk|rate.?limit|limit.?exceed|unavailable|error|fail|ban/.test(blob)) return 'unavailable'
+  if (/disable|off|paused/.test(blob)) return 'disabled'
+  if (/run|active|ok|ready|available|normal|success/.test(st) || !st) return 'running'
+  return st || 'running'
+}
+
 export function mapAdminAccounts(authFilesPayload) {
   const files = Array.isArray(authFilesPayload?.files) ? authFilesPayload.files : []
   return files.map((f) => {
-    const recent = Array.isArray(f.recent_requests)
-      ? f.recent_requests
-      : Array.isArray(f.recent_requests)
-        ? f.recent_requests
-        : []
+    const recent = Array.isArray(f.recent_requests) ? f.recent_requests : []
+    const disabled = !!f.disabled
+    const unavailable = !!f.unavailable
+    const display_status = deriveDisplayStatus(f)
     return {
       id: f.id || f.name || f.auth_index,
       name: f.name || f.id || null,
@@ -179,15 +203,24 @@ export function mapAdminAccounts(authFilesPayload) {
       provider: f.provider || f.type || null,
       account_type: f.account_type || f.type || null,
       status: f.status || null,
-      disabled: !!f.disabled,
-      unavailable: !!(f.unavailable || f.unavailable),
+      display_status,
+      disabled,
+      unavailable,
       success: Number(f.success || 0) || 0,
       failed: Number(f.failed || 0) || 0,
-      last_refresh: f.last_refresh || f.last_refresh || null,
+      last_refresh: f.last_refresh || null,
+      created_at: f.created_at || f.ctime || null,
       updated_at: f.updated_at || f.modtime || null,
-      status_message: f.status_message || f.status_message || '',
-      note: f.note ?? f.attributes?.note ?? null,
-      priority: f.priority ?? f.attributes?.priority ?? null,
+      status_message: f.status_message || '',
+      note: attr(f, 'note', null),
+      priority: attr(f, 'priority', null),
+      weight: attr(f, 'weight', null),
+      proxy_url: attr(f, 'proxy_url', attr(f, 'proxy', null)),
+      prefix: attr(f, 'prefix', null),
+      websockets: attr(f, 'websockets', null),
+      cooling: attr(f, 'cooling', null),
+      excluded_models: attr(f, 'excluded_models', null),
+      plan_type: f.plan_type || f.plan || attr(f, 'plan_type', null),
       recent_requests: recent.slice(-12),
     }
   })
@@ -199,18 +232,28 @@ export function summarizeAccounts(accounts) {
   let active = 0
   let unavailable = 0
   let disabled = 0
+  let need_reauth = 0
+  let attention = 0
   for (const a of items) {
     const p = String(a.provider || 'unknown')
     by_provider[p] = (by_provider[p] || 0) + 1
-    if (a.disabled) disabled += 1
-    else if (a.unavailable) unavailable += 1
-    else active += 1
+    const display = a.display_status || deriveDisplayStatus(a)
+    if (display === 'disabled' || a.disabled) disabled += 1
+    else if (display === 'need_reauth') {
+      need_reauth += 1
+      attention += 1
+    } else if (display === 'unavailable' || a.unavailable) {
+      unavailable += 1
+      attention += 1
+    } else active += 1
   }
   return {
     total: items.length,
     active,
     unavailable,
     disabled,
+    need_reauth,
+    attention,
     by_provider: Object.entries(by_provider)
       .map(([provider, count]) => ({ provider, count }))
       .sort((a, b) => b.count - a.count),

@@ -46,6 +46,8 @@ import {
   deleteAuthFile,
   downloadAuthFile,
   uploadAuthFile,
+  fetchAuthFileModels,
+  resetAuthFileQuota,
   startCpaOAuth,
   getCpaAuthStatus,
   submitCpaOAuthCallback,
@@ -86,6 +88,8 @@ import { createAilyModelRoutingStore, publicModelList, normalizeModelRouting, ex
 import { createAilyAccountsStore } from './ailyAccounts.js'
 import { createAilyCompat } from './ailyCompat.js'
 import { createAilyOauth } from './ailyOauth.js'
+import { createQuotaSnapshotStore } from './quotaSnapshots.js'
+import { convertPasteToAuthFiles } from './authFileConvert.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -131,6 +135,9 @@ const apiKeyAliases = createApiKeyAliasesStore(
 )
 const accountActions = createAccountActionsStore(
   process.env.ACCOUNT_ACTIONS_PATH || path.join(__dirname, 'data', 'account-actions.json'),
+)
+const quotaSnapshots = createQuotaSnapshotStore(
+  process.env.QUOTA_SNAPSHOTS_PATH || path.join(__dirname, 'data', 'quota-snapshots.json'),
 )
 const usageImportSessions = createUsageImportSessions(
   process.env.USAGE_IMPORTS_DIR || path.join(__dirname, 'data', 'usage-imports'),
@@ -1793,13 +1800,49 @@ app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
       auth = await fetchCpaAuthFilesCached(cpaCfg, { force: true })
     }
     const items = mapAdminAccounts(auth)
+    let quotaByAccount = {}
+    try {
+      const q = quotaSnapshots.query({
+        accounts: items.map((a) => a.name || a.id).filter(Boolean),
+        latest_only: true,
+      })
+      for (const e of q.items || []) {
+        if (e?.account) quotaByAccount[e.account] = e
+      }
+    } catch {
+      quotaByAccount = {}
+    }
+    const enriched = items.map((a) => {
+      const key = a.name || a.id
+      const snap = key ? quotaByAccount[key] : null
+      if (!snap) return a
+      return {
+        ...a,
+        quota: {
+          remaining_ratio: snap.remaining_ratio,
+          remaining: snap.remaining,
+          limit: snap.limit,
+          window: snap.window,
+          resets_at: snap.resets_at,
+          risk: snap.risk,
+          plan_type: snap.plan_type || a.plan_type,
+          observed_at_ms: snap.observed_at_ms,
+          source: 'site:quota-snapshots',
+        },
+      }
+    })
+    const pool = summarizeAccounts(enriched)
+    const quota_risk = enriched.filter((a) => a.quota && ['low', 'critical', 'exhausted'].includes(a.quota.risk)).length
+    pool.quota_risk = quota_risk
+    pool.attention = (pool.attention || 0) + quota_risk
     res.json(
       ok({
         observed_at: auth?.observed_at || cpaCollector.getStatus().lastSync || null,
-        items,
-        pool: summarizeAccounts(items),
+        items: enriched,
+        pool,
         source: 'cpa:auth-files',
         collector: cpaCollector.getStatus(),
+        quota_snapshots: quotaSnapshots.stats(),
       }),
     )
   } catch (err) {
@@ -2736,7 +2779,14 @@ app.patch('/api/admin/accounts/fields', requireAdmin, async (req, res) => {
     const fields = {}
     if (req.body?.note !== undefined) fields.note = String(req.body.note)
     if (req.body?.priority !== undefined) fields.priority = Number(req.body.priority)
+    if (req.body?.weight !== undefined) fields.weight = Number(req.body.weight)
     if (req.body?.disabled !== undefined) fields.disabled = !!req.body.disabled
+    if (req.body?.proxy_url !== undefined) fields.proxy_url = String(req.body.proxy_url)
+    if (req.body?.proxy !== undefined) fields.proxy = String(req.body.proxy)
+    if (req.body?.prefix !== undefined) fields.prefix = String(req.body.prefix)
+    if (req.body?.websockets !== undefined) fields.websockets = !!req.body.websockets
+    if (req.body?.cooling !== undefined) fields.cooling = req.body.cooling
+    if (req.body?.excluded_models !== undefined) fields.excluded_models = req.body.excluded_models
     const result = await patchAuthFileFields(cpaCfg, name, fields)
     try {
       await cpaCollector.refresh({ force: true })
@@ -2839,6 +2889,190 @@ app.delete('/api/admin/accounts', requireAdmin, async (req, res) => {
   } catch (err) {
     res.status(err?.status || 502).json(fail(err?.message || 'account delete failed'))
   }
+})
+
+
+app.post('/api/admin/accounts/batch', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const action = String(req.body?.action || '').trim()
+    const namesRaw = Array.isArray(req.body?.names) ? req.body.names : []
+    const names = [...new Set(namesRaw.map((n) => String(n || '').trim()).filter(Boolean))]
+    if (!names.length) {
+      res.status(400).json(fail('names required'))
+      return
+    }
+    if (!['enable', 'disable', 'delete', 'priority', 'weight', 'download'].includes(action)) {
+      res.status(400).json(fail('action must be enable|disable|delete|priority|weight|download'))
+      return
+    }
+    let priority
+    let weight
+    if (action === 'priority') {
+      priority = Number(req.body?.priority)
+      if (!Number.isFinite(priority)) {
+        res.status(400).json(fail('priority must be a number'))
+        return
+      }
+    }
+    if (action === 'weight') {
+      weight = Number(req.body?.weight)
+      if (!Number.isFinite(weight)) {
+        res.status(400).json(fail('weight must be a number'))
+        return
+      }
+    }
+    const results = []
+    const downloads = []
+    for (const name of names) {
+      try {
+        if (action === 'enable') await setAuthFileDisabled(cpaCfg, name, false)
+        else if (action === 'disable') await setAuthFileDisabled(cpaCfg, name, true)
+        else if (action === 'delete') await deleteAuthFile(cpaCfg, name)
+        else if (action === 'priority') await patchAuthFileFields(cpaCfg, name, { priority })
+        else if (action === 'weight') await patchAuthFileFields(cpaCfg, name, { weight })
+        else if (action === 'download') {
+          const content = await downloadAuthFile(cpaCfg, name)
+          downloads.push({ name, content })
+        }
+        results.push({ name, ok: true })
+      } catch (err) {
+        results.push({ name, ok: false, error: err?.message || String(err), status: err?.status || 502 })
+      }
+    }
+    try {
+      await cpaCollector.refresh({ force: true })
+    } catch {
+      /* ignore */
+    }
+    res.setHeader('Cache-Control', 'no-store')
+    res.json(
+      ok({
+        action,
+        results,
+        downloads: action === 'download' ? downloads : undefined,
+        ok_count: results.filter((r) => r.ok).length,
+        fail_count: results.filter((r) => !r.ok).length,
+        source: 'cpa',
+      }),
+    )
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'account batch failed'))
+  }
+})
+
+app.get('/api/admin/accounts/models', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const name = String(req.query?.name || '').trim()
+    if (!name) {
+      res.status(400).json(fail('name required'))
+      return
+    }
+    const data = await fetchAuthFileModels(cpaCfg, name)
+    res.json(ok({ name, models: data, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'auth-file models failed'))
+  }
+})
+
+app.post('/api/admin/accounts/reset-quota', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const name = String(req.body?.name || '').trim()
+    const auth_index = req.body?.auth_index
+    const result = await resetAuthFileQuota(cpaCfg, { name, auth_index })
+    res.json(ok({ name: name || null, auth_index: auth_index ?? null, result, source: 'cpa' }))
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'reset-quota failed'))
+  }
+})
+
+app.post('/api/admin/accounts/convert-upload', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const pasteType = String(req.body?.paste_type || req.body?.type || 'cpa').trim()
+    let content = req.body?.content
+    if (content && typeof content === 'object') content = JSON.stringify(content)
+    content = String(content || '')
+    const preferredName = String(req.body?.filename || req.body?.name || '').trim()
+    if (!content) {
+      res.status(400).json(fail('content required'))
+      return
+    }
+    const converted = convertPasteToAuthFiles(pasteType, content, preferredName)
+    const uploadResults = []
+    for (const file of converted.files) {
+      try {
+        const result = await uploadAuthFile(cpaCfg, {
+          filename: file.fileName,
+          content: JSON.stringify(file.authJson, null, 2),
+        })
+        uploadResults.push({ name: file.fileName, ok: true, result })
+      } catch (err) {
+        uploadResults.push({ name: file.fileName, ok: false, error: err?.message || String(err) })
+      }
+    }
+    try {
+      await cpaCollector.refresh({ force: true })
+    } catch {
+      /* ignore */
+    }
+    res.setHeader('Cache-Control', 'no-store')
+    res.json(
+      ok({
+        paste_type: pasteType,
+        converted_source_count: converted.convertedSourceCount,
+        convert_failures: converted.failures,
+        uploads: uploadResults,
+        ok_count: uploadResults.filter((r) => r.ok).length,
+        fail_count: uploadResults.filter((r) => !r.ok).length,
+        source: 'cpa+convert',
+      }),
+    )
+  } catch (err) {
+    res.status(err?.status || 502).json(fail(err?.message || 'convert-upload failed'))
+  }
+})
+
+app.post('/api/admin/quota-snapshots', requireAdmin, (req, res) => {
+  try {
+    const entries = req.body?.entries ?? req.body
+    const result = quotaSnapshots.ingest(entries)
+    res.json(ok({ ...result, source: 'site:quota-snapshots' }))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'quota-snapshots ingest failed'))
+  }
+})
+
+app.post('/api/admin/quota-snapshots/query', requireAdmin, (req, res) => {
+  try {
+    const result = quotaSnapshots.query({
+      accounts: req.body?.accounts,
+      now_ms: req.body?.now_ms,
+      include_inactive: req.body?.include_inactive !== false,
+      latest_only: req.body?.latest_only !== false,
+    })
+    res.json(ok(result))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'quota-snapshots query failed'))
+  }
+})
+
+app.get('/api/admin/quota-snapshots/stats', requireAdmin, (_req, res) => {
+  res.json(ok({ ...quotaSnapshots.stats(), source: 'site:quota-snapshots' }))
 })
 
 app.get('/api/admin/oauth/providers', requireAdmin, (_req, res) => {
