@@ -1192,3 +1192,51 @@ export async function resetAuthFileQuota(cfg, { name, auth_index } = {}) {
   }
   return cpaFetch(cfg, '/v0/management/reset-quota', { method: 'POST', body })
 }
+
+/**
+ * CPA management outbound proxy (CPAMP up.request → /v0/management/api-call).
+ * Used by Antigravity quota refresh (retrieveUserQuotaSummary).
+ */
+export async function cpaApiCall(cfg, { authIndex, method = 'POST', url, header, headers, data, body, proxy_url } = {}) {
+  requireMgmt(cfg)
+  const payload = {
+    authIndex: authIndex != null ? String(authIndex) : undefined,
+    auth_index: authIndex != null ? String(authIndex) : undefined,
+    method: String(method || 'POST').toUpperCase(),
+    url: String(url || '').trim(),
+    header: header || headers || undefined,
+    headers: header || headers || undefined,
+    data: data !== undefined ? data : body,
+  }
+  if (proxy_url) payload.proxy_url = proxy_url
+  if (!payload.url) throw Object.assign(new Error('url required'), { status: 400 })
+  if (!payload.authIndex && !payload.auth_index) {
+    throw Object.assign(new Error('authIndex required'), { status: 400 })
+  }
+  return cpaFetch(cfg, '/v0/management/api-call', { method: 'POST', body: payload })
+}
+
+/**
+ * CPAMP Manager: POST /v0/management/quota-snapshots/query (SPA Yd.query).
+ * CPA does not expose this route (404).
+ */
+export async function queryCpampQuotaSnapshots(cfg, { accounts, now_ms, include_inactive = true } = {}) {
+  if (!cfg.adminKey) throw Object.assign(new Error('CPAMP admin key not configured'), { status: 503 })
+  const body = {
+    accounts: Array.isArray(accounts) ? accounts : [],
+    include_inactive: include_inactive !== false,
+  }
+  if (now_ms != null && Number.isFinite(Number(now_ms))) body.now_ms = Number(now_ms)
+  return cpampFetch(cfg, '/v0/management/quota-snapshots/query', { method: 'POST', body })
+}
+
+/**
+ * CPAMP Manager: POST /v0/management/quota-snapshots (SPA Yd.write). Optional seed/write.
+ */
+export async function writeCpampQuotaSnapshots(cfg, entries) {
+  if (!cfg.adminKey) throw Object.assign(new Error('CPAMP admin key not configured'), { status: 503 })
+  return cpampFetch(cfg, '/v0/management/quota-snapshots', {
+    method: 'POST',
+    body: { entries: Array.isArray(entries) ? entries : [] },
+  })
+}

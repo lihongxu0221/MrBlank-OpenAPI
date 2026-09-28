@@ -1037,17 +1037,19 @@ export function AdminAccountsPage({ path }: { path: string }) {
             }
             setBatchBusy(true)
             try {
-              let okN = 0
-              for (const name of names) {
-                try {
-                  await api.post('/api/admin/accounts/reset-quota', { name })
-                  okN += 1
-                } catch {
-                  /* continue */
-                }
-              }
-              showToast(`${P('额度刷新完成')}：${P('成功')} ${okN} / ${names.length}`)
+              const res = await api.post<{
+                success?: number
+                total?: number
+                rate_limited?: boolean
+                results?: { name?: string; status?: string; error?: string }[]
+              }>('/api/admin/accounts/refresh-quota', { names })
+              const okN = Number(res?.success ?? 0)
+              const total = Number(res?.total ?? names.length)
+              const msg = `${P('额度刷新完成')}：${P('成功')} ${okN} / ${total}`
+              showToast(res?.rate_limited ? `${msg}（部分因频率限制跳过）` : msg)
               await load()
+            } catch (e: any) {
+              showToast(e?.message || P('额度刷新失败'))
             } finally {
               setBatchBusy(false)
             }

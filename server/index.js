@@ -91,6 +91,11 @@ import { createAilyAccountsStore } from './ailyAccounts.js'
 import { createAilyCompat } from './ailyCompat.js'
 import { createAilyOauth } from './ailyOauth.js'
 import { createQuotaSnapshotStore } from './quotaSnapshots.js'
+import {
+  fetchCpampAccountQuotas,
+  mergeCpampQuotaIntoAccounts,
+  refreshAccountQuotas,
+} from './cpampQuota.js'
 import { normalizeAuthFileModels, parseExcludedModels } from './credModels.js'
 import { convertPasteToAuthFiles } from './authFileConvert.js'
 
@@ -1803,41 +1808,51 @@ app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
       auth = await fetchCpaAuthFilesCached(cpaCfg, { force: true })
     }
     const items = mapAdminAccounts(auth)
-    let quotaByAccount = {}
+    // CPAMP-literal: POST /v0/management/quota-snapshots/query (SPA Yd.query).
+    // CPA has no quota-snapshots (404). Site store is fallback only.
+    let quotaMeta = { source: null, ok: false }
+    let enriched = items
     try {
-      const q = quotaSnapshots.query({
-        accounts: items.map((a) => a.name || a.id).filter(Boolean),
-        latest_only: true,
-      })
-      for (const e of q.items || []) {
-        if (e?.account) quotaByAccount[e.account] = e
+      const { byKey, meta } = await fetchCpampAccountQuotas(cpaCfg, auth)
+      quotaMeta = meta
+      enriched = mergeCpampQuotaIntoAccounts(items, byKey)
+    } catch (err) {
+      quotaMeta = { ok: false, error: err?.message || String(err), source: 'cpamp:quota-snapshots' }
+      // Fallback: site Rebuild store
+      try {
+        const q = quotaSnapshots.query({
+          accounts: items.map((a) => a.name || a.id).filter(Boolean),
+          latest_only: true,
+        })
+        const byAccount = {}
+        for (const e of q.items || []) {
+          if (e?.account) byAccount[e.account] = e
+        }
+        enriched = items.map((a) => {
+          const key = a.name || a.id
+          const snap = key ? byAccount[key] : null
+          if (!snap) return a
+          return {
+            ...a,
+            plan_type: a.plan_type || snap.plan_type || null,
+            quota: {
+              remaining_ratio: snap.remaining_ratio,
+              remaining: snap.remaining,
+              limit: snap.limit,
+              window: snap.window,
+              resets_at: snap.resets_at,
+              risk: snap.risk,
+              plan_type: snap.plan_type || a.plan_type,
+              observed_at_ms: snap.observed_at_ms,
+              source: 'site:quota-snapshots',
+            },
+          }
+        })
+        quotaMeta = { ...quotaMeta, fallback: 'site:quota-snapshots' }
+      } catch {
+        /* keep items */
       }
-    } catch {
-      quotaByAccount = {}
     }
-    const enriched = items.map((a) => {
-      const key = a.name || a.id
-      const snap = key ? quotaByAccount[key] : null
-      if (!snap) return a
-      const snapQuota = {
-        remaining_ratio: snap.remaining_ratio,
-        remaining: snap.remaining,
-        limit: snap.limit,
-        window: snap.window,
-        resets_at: snap.resets_at,
-        risk: snap.risk,
-        plan_type: snap.plan_type || a.plan_type,
-        observed_at_ms: snap.observed_at_ms,
-        source: 'site:quota-snapshots',
-      }
-      return {
-        ...a,
-        plan_type: a.plan_type || snap.plan_type || null,
-        // Prefer site snapshot when present; keep auth-file windows if snapshot has none
-        quota: snapQuota,
-        quota_windows: Array.isArray(a.quota_windows) && a.quota_windows.length ? a.quota_windows : a.quota_windows,
-      }
-    })
     const pool = summarizeAccounts(enriched)
     const quota_risk = enriched.filter((a) => a.quota && ['low', 'critical', 'exhausted'].includes(a.quota.risk)).length
     pool.quota_risk = quota_risk
@@ -1847,9 +1862,10 @@ app.get('/api/admin/accounts', requireAdmin, async (_req, res) => {
         observed_at: auth?.observed_at || cpaCollector.getStatus().lastSync || null,
         items: enriched,
         pool,
-        source: 'cpa:auth-files',
+        source: 'cpa:auth-files+cpamp:quota-snapshots',
         collector: cpaCollector.getStatus(),
         quota_snapshots: quotaSnapshots.stats(),
+        quota: quotaMeta,
       }),
     )
   } catch (err) {
@@ -3056,6 +3072,65 @@ app.post('/api/admin/accounts/reset-quota', requireAdmin, async (req, res) => {
     res.status(err?.status || 502).json(fail(err?.message || 'reset-quota failed'))
   }
 })
+
+app.post('/api/admin/accounts/refresh-quota', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey && !cpaCfg.adminKey) {
+      res.status(503).json(fail('CPA/CPAMP keys 未配置'))
+      return
+    }
+    await cpaCollector.refresh({ force: true })
+    let auth = cpaCollector.getAuthFilesPayload()
+    if (!auth) auth = await fetchCpaAuthFilesCached(cpaCfg, { force: true })
+    const namesRaw = Array.isArray(req.body?.names) ? req.body.names : []
+    const names = [...new Set(namesRaw.map((n) => String(n || '').trim()).filter(Boolean))]
+    const refreshed = await refreshAccountQuotas(cpaCfg, auth, {
+      names: names.length ? names : null,
+    })
+    // Persist api-call successes into site store (local cache; display still prefers CPAMP query)
+    try {
+      const entries = []
+      for (const r of refreshed.results || []) {
+        if (r.status !== 'success' || !r.quota_windows?.length || !r.name) continue
+        for (const w of r.quota_windows) {
+          entries.push({
+            account: r.name,
+            provider: r.provider || 'antigravity',
+            remaining_ratio: w.remaining_ratio,
+            window: w.window || w.label,
+            resets_at: w.resets_at,
+            risk: w.risk,
+            source: 'cpa:api-call',
+            meta: { label: w.label },
+          })
+        }
+      }
+      if (entries.length) quotaSnapshots.ingest(entries)
+    } catch {
+      /* non-fatal */
+    }
+    const items = mergeCpampQuotaIntoAccounts(mapAdminAccounts(auth), refreshed.byKey)
+    res.json(
+      ok({
+        ...refreshed.meta,
+        results: (refreshed.results || []).map((r) => ({
+          name: r.name,
+          status: r.status,
+          error: r.error || null,
+          errorStatus: r.errorStatus || null,
+          windows: r.quota_windows?.length || 0,
+          reason: r.reason || null,
+        })),
+        items,
+        source: refreshed.meta?.source || 'cpamp:quota-snapshots+cpa:api-call',
+      }),
+    )
+  } catch (err) {
+    console.error('[admin] refresh-quota', err?.message || err)
+    res.status(err?.status || 502).json(fail(err?.message || 'refresh-quota failed'))
+  }
+})
+
 
 app.post('/api/admin/accounts/convert-upload', requireAdmin, async (req, res) => {
   try {

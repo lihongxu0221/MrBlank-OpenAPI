@@ -20,6 +20,17 @@ import {
 } from '../credModels.js'
 import { normalizeAuthFilePatchFields } from '../cpa.js'
 
+import {
+  buildCpampQueryAccounts,
+  labelCpampWindow,
+  mapCpampWindow,
+  mapCpampQueryToAccountQuota,
+  mergeCpampQuotaIntoAccounts,
+  parseAntigravityQuotaGroups,
+  mapAntigravityGroupsToWindows,
+  isListQuotaWindow,
+} from '../cpampQuota.js'
+
 test('deriveDisplayStatus maps reauth / disabled / running', () => {
   assert.equal(deriveDisplayStatus({ disabled: true }), 'disabled')
   assert.equal(deriveDisplayStatus({ status_message: 'need reauth token expired' }), 'need_reauth')
@@ -302,4 +313,152 @@ test('cred list CSS: no forced 1240 min-width; models panel not height-clipped',
   for (const cls of ['.cred-grid-card-header', '.cred-grid-history', '.cred-grid-recent', '.cred-spark-h', '.cred-quota-stack', '.cred-grid-card-footer', '.cred-plan-badge']) {
     assert.ok(css.includes(cls), `missing ${cls}`)
   }
+})
+
+test('buildCpampQueryAccounts matches CPAMP OEe/hEe shape', () => {
+  const accounts = buildCpampQueryAccounts({
+    files: [
+      {
+        name: 'antigravity-a@x.com.json',
+        provider: 'antigravity',
+        email: 'a@x.com',
+        auth_index: 'abc',
+        project_id: 'proj',
+        label: 'a@x.com',
+      },
+      { name: 'skip-me.json', provider: 'gemini-cli' },
+    ],
+  })
+  assert.equal(accounts.length, 1)
+  assert.equal(accounts[0].row_key, 'antigravity-a@x.com.json')
+  assert.equal(accounts[0].provider, 'antigravity')
+  assert.equal(accounts[0].account.auth_file_snapshot, 'antigravity-a@x.com.json')
+  assert.equal(accounts[0].account.auth_index, 'abc')
+  assert.equal(accounts[0].account.auth_project_id_snapshot, 'proj')
+})
+
+test('labelCpampWindow maps Claude/Gemini 5h + weekly', () => {
+  assert.equal(
+    labelCpampWindow({ provider_window_id: 'claude-and-gpt-models:3p-5h', window_kind: 'five_hour', model_scope_key: 'claude_gpt' }),
+    'Claude 5h',
+  )
+  assert.equal(
+    labelCpampWindow({ provider_window_id: 'gemini-models:gemini-5h', window_kind: 'five_hour', model_scope_key: 'gemini' }),
+    'Gemini 5h',
+  )
+  assert.equal(
+    labelCpampWindow({ provider_window_id: 'claude-and-gpt-models:3p-weekly', window_kind: 'weekly', model_scope_key: 'claude_gpt' }),
+    'Claude 周额度',
+  )
+  assert.equal(
+    labelCpampWindow({ provider_window_id: 'gemini-models:gemini-weekly', window_kind: 'weekly', model_scope_key: 'gemini' }),
+    'Gemini 周额度',
+  )
+})
+
+test('mapCpampQueryToAccountQuota fills remaining_ratio from remaining_percent', () => {
+  const byKey = mapCpampQueryToAccountQuota({
+    items: [
+      {
+        row_key: 'antigravity-a.json',
+        provider: 'antigravity',
+        windows: [
+          {
+            provider_window_id: 'claude-and-gpt-models:3p-5h',
+            window_kind: 'five_hour',
+            window_mode: 'fixed',
+            model_scope_kind: 'family',
+            model_scope_key: 'claude_gpt',
+            remaining_percent: 100,
+            used_percent: 0,
+            cycle_end_ms: 1790600564000,
+          },
+          {
+            provider_window_id: 'gemini-models:gemini-5h',
+            window_kind: 'five_hour',
+            window_mode: 'fixed',
+            model_scope_kind: 'family',
+            model_scope_key: 'gemini',
+            remaining_percent: 90.5,
+            used_percent: 9.5,
+            cycle_end_ms: 1790590154000,
+          },
+          {
+            provider_window_id: 'claude-gpt:shared',
+            window_kind: 'unknown',
+            model_scope_kind: 'models',
+            remaining_percent: 100,
+          },
+        ],
+      },
+    ],
+  })
+  const hit = byKey.get('antigravity-a.json')
+  assert.ok(hit)
+  assert.equal(hit.quota_windows.length, 2)
+  assert.equal(hit.quota_windows[0].label, 'Claude 5h')
+  assert.equal(hit.quota_windows[0].remaining_ratio, 1)
+  assert.equal(hit.quota_windows[1].label, 'Gemini 5h')
+  assert.ok(Math.abs(hit.quota_windows[1].remaining_ratio - 0.905) < 1e-9)
+  assert.equal(isListQuotaWindow({ window_kind: 'unknown', model_scope_kind: 'models' }), false)
+})
+
+test('mergeCpampQuotaIntoAccounts overlays windows', () => {
+  const byKey = mapCpampQueryToAccountQuota({
+    items: [
+      {
+        row_key: 'a.json',
+        provider: 'antigravity',
+        windows: [
+          {
+            provider_window_id: 'gemini-models:gemini-5h',
+            window_kind: 'five_hour',
+            window_mode: 'fixed',
+            model_scope_kind: 'family',
+            model_scope_key: 'gemini',
+            remaining_percent: 80,
+          },
+        ],
+      },
+    ],
+  })
+  const merged = mergeCpampQuotaIntoAccounts([{ name: 'a.json', provider: 'antigravity' }], byKey)
+  assert.equal(merged[0].quota_windows[0].label, 'Gemini 5h')
+  assert.ok(merged[0].quota)
+})
+
+test('parseAntigravityQuotaGroups + mapAntigravityGroupsToWindows (hse/tEe)', () => {
+  const groups = parseAntigravityQuotaGroups({
+    groups: [
+      {
+        displayName: 'Claude and GPT models',
+        buckets: [
+          { displayName: '5 hour limit', window: '5h', remainingFraction: 0.75, resetTime: '2026-09-28T12:00:00Z' },
+          { displayName: 'weekly limit', window: 'weekly', remainingFraction: 0.9 },
+        ],
+      },
+      {
+        displayName: 'Gemini models',
+        buckets: [{ displayName: '5 hour limit', window: '5h', remainingFraction: 0.5 }],
+      },
+    ],
+  })
+  assert.equal(groups.length, 2)
+  const windows = mapAntigravityGroupsToWindows(groups)
+  assert.equal(windows.length, 3)
+  assert.equal(windows[0].label, 'Claude 5h')
+  assert.equal(windows[0].remaining_ratio, 0.75)
+  assert.equal(windows[1].label, 'Claude 周额度')
+  assert.equal(windows[2].label, 'Gemini 5h')
+})
+
+test('mapCpampWindow risk from remaining_percent', () => {
+  const w = mapCpampWindow({
+    provider_window_id: 'x',
+    window_kind: 'five_hour',
+    remaining_percent: 10,
+    cycle_end_ms: 1790600564000,
+  })
+  assert.equal(w.risk, 'critical')
+  assert.ok(w.resets_at)
 })
