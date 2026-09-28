@@ -55,6 +55,8 @@ type SyncResult = {
   priced_auto?: number
   priced_manual?: number
   unpriced_count?: number
+  inherited_count?: number
+  inheritance_missed_count?: number
   matched_from_sources?: number
   quota_per_unit?: number
 }
@@ -253,7 +255,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
       setLastSync(d)
       showToast(
         P(
-          `同步完成：支持 ${d.supported_count ?? '—'}，已定价 ${d.priced_count ?? 0}，未定价 ${d.unpriced_count ?? 0}，清除过期 ${d.stale_removed ?? 0}` +
+          `同步完成：支持 ${d.supported_count ?? '—'}，已定价 ${d.priced_count ?? 0}，继承 ${d.inherited_count ?? 0}，未定价 ${d.unpriced_count ?? 0}，清除过期 ${d.stale_removed ?? 0}` +
             (d.failed_sources?.length ? `；失败源 ${d.failed_sources.join(',')}` : ''),
         ),
       )
@@ -341,7 +343,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
             ? new Date(lastSync.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
             : '—'}{' '}
           · {P('支持')} {lastSync.supported_count ?? '—'} · {P('已定价')} {lastSync.priced_count ?? lastSync.total_prices ?? 0}{' '}
-          · {P('未定价')} {lastSync.unpriced_count ?? '—'} · {P('清除过期')} {lastSync.stale_removed ?? 0} ·{' '}
+          · {P('继承')} {lastSync.inherited_count ?? '—'} · {P('未定价')} {lastSync.unpriced_count ?? '—'} · {P('清除过期')} {lastSync.stale_removed ?? 0} ·{' '}
           {P('新增')} {lastSync.imported ?? 0} · {P('更新')} {lastSync.updated ?? 0}
           {lastSync.failed_sources?.length ? ` · ${P('失败源')} ${lastSync.failed_sources.join(', ')}` : ''}
           {lastSync.quota_per_unit != null

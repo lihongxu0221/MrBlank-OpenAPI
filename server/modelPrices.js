@@ -11,12 +11,14 @@
  *
  * Auto-sync: FILTER to supported catalog only (CPA /v1/models + aily when routed).
  * Rebuild automatic portion; preserve manual overrides; remove stale auto rows.
+ * Then apply VARIANT_INHERITANCE for unpriced supported aliases/variants.
  * Quota fields use aily formula: quota_per_mtok = round(usd_per_mtok * quota_per_unit).
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { stripAilyPrefix, isAilyPrefixed } from './ailyModelRouting.js'
 import { fetchOfficialPrices } from './modelPriceSync.js'
+import { applyVariantInheritance, VARIANT_INHERITANCE } from './modelPriceInheritance.js'
 import {
   DEFAULT_QUOTA_PER_UNIT,
   dollarsToQuota,
@@ -389,6 +391,16 @@ export function createModelPricesStore(filePath, deps = {}) {
         }
       }
 
+      // Variant inheritance for supported models missing aggregator prices
+      const inheritance = applyVariantInheritance(byModel, {
+        supported,
+        fetchedPrices: fetched.prices,
+        isProtectedManual,
+        attachQuotaFields,
+        unit,
+        now,
+      })
+
       store.prices = [...byModel.values()]
         .map((p) => attachQuotaFields({ ...p }, unit))
         .sort((a, b) => a.model.localeCompare(b.model))
@@ -414,6 +426,10 @@ export function createModelPricesStore(filePath, deps = {}) {
         unpriced_count: unpriced,
         matched_from_sources: matchedSupported.size,
         quota_per_unit: unit,
+        inherited_count: inheritance.inherited_count,
+        inheritance_missed_count: inheritance.inheritance_missed_count,
+        inherited: inheritance.inherited,
+        inheritance_missed: inheritance.inheritance_missed,
       }
       store.last_sync = summary
       persist()
@@ -514,7 +530,7 @@ export function createModelPricesStore(filePath, deps = {}) {
         log(`[modelPrices] sync start (${reason})`)
         const result = await syncOfficial()
         log(
-          `[modelPrices] sync done imported=${result.imported} updated=${result.updated} skipped=${result.skipped} stale_removed=${result.stale_removed} supported=${result.supported_count} priced=${result.priced_count} unpriced=${result.unpriced_count} failed=${(result.failed_sources || []).join(',') || 'none'}`,
+          `[modelPrices] sync done imported=${result.imported} updated=${result.updated} skipped=${result.skipped} stale_removed=${result.stale_removed} inherited=${result.inherited_count || 0} supported=${result.supported_count} priced=${result.priced_count} unpriced=${result.unpriced_count} failed=${(result.failed_sources || []).join(',') || 'none'}`,
         )
       } catch (err) {
         console.error('[modelPrices] sync failed', err?.message || err)
@@ -590,4 +606,6 @@ export {
   bareSupportedSet,
   dollarsToQuota,
   usdPerMtokToQuotaPerMtok,
+  VARIANT_INHERITANCE,
+  applyVariantInheritance,
 }
