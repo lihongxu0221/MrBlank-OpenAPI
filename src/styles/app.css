@@ -3418,7 +3418,24 @@ td.num {
 }
 .price-book-table table.data th:nth-child(8),
 .price-book-table table.data td:nth-child(8) {
-  width: 8%;
+  width: 15%;
+}
+.price-book-table .price-book-cache-points {
+  min-height: 1.2em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.price-book-table .price-book-source-cell {
+  overflow: visible;
+  text-overflow: clip;
+  vertical-align: top;
+}
+.price-book-table .price-book-source {
+  display: block;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  text-overflow: clip;
 }
 .price-book-table table.data th:nth-child(9),
 .price-book-table table.data td:nth-child(9) {

@@ -498,12 +498,14 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                         })
                       }}
                     />
-                    {p.cache_read_per_mtok != null ? (
-                      <div className="muted" style={{ fontSize: 11 }}>
-                        {formatPoints(pointsFromUsd(Number(p.cache_read_per_mtok) || 0, quotaUnit, rawPerPoint))}{' '}
-                        {P('点')}
-                      </div>
-                    ) : null}
+                    <div className="price-book-cache-points muted" style={{ fontSize: 11 }} aria-hidden="true">
+                      {p.cache_read_per_mtok != null ? (
+                        <>
+                          {formatPoints(pointsFromUsd(Number(p.cache_read_per_mtok) || 0, quotaUnit, rawPerPoint))}{' '}
+                          {P('点')}
+                        </>
+                      ) : ' '}
+                    </div>
                   </td>
                   <td>
                     <input
@@ -519,15 +521,21 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                         })
                       }}
                     />
-                    {p.cache_write_per_mtok != null ? (
-                      <div className="muted" style={{ fontSize: 11 }}>
-                        {formatPoints(pointsFromUsd(Number(p.cache_write_per_mtok) || 0, quotaUnit, rawPerPoint))}{' '}
-                        {P('点')}
-                      </div>
-                    ) : null}
+                    <div className="price-book-cache-points muted" style={{ fontSize: 11 }} aria-hidden="true">
+                      {p.cache_write_per_mtok != null ? (
+                        <>
+                          {formatPoints(pointsFromUsd(Number(p.cache_write_per_mtok) || 0, quotaUnit, rawPerPoint))}{' '}
+                          {P('点')}
+                        </>
+                      ) : ' '}
+                    </div>
                   </td>
-                  <td>
-                    <span className="muted" style={{ fontSize: 12 }}>
+                  <td className="price-book-source-cell">
+                    <span
+                      className="muted price-book-source"
+                      style={{ fontSize: 12 }}
+                      title={p.manual ? 'manual' : p.source || '—'}
+                    >
                       {p.manual ? 'manual' : p.source || '—'}
                     </span>
                   </td>
