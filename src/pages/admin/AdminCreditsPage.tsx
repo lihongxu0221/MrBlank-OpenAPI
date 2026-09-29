@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Gift, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
@@ -24,6 +24,11 @@ type RedeemCode = {
   enabled: boolean
   note?: string
   expires_at?: string | null
+}
+
+type RedeemCodeRow = RedeemCode & {
+  /** Client-only identity; editable fields must not be used as React keys. */
+  rowKey: string
 }
 
 type Summary = {
@@ -58,7 +63,13 @@ export function AdminCreditsPage({ path }: { path: string }) {
   const gate = useAdminGate()
   const [data, setData] = useState<Summary | null>(null)
   const [config, setConfig] = useState<CreditConfig | null>(null)
-  const [codes, setCodes] = useState<RedeemCode[]>([])
+  const [codes, setCodes] = useState<RedeemCodeRow[]>([])
+  const nextCodeKey = useRef(0)
+
+  function withRowKey(code: RedeemCode): RedeemCodeRow {
+    nextCodeKey.current += 1
+    return { ...code, rowKey: `redeem-code-${nextCodeKey.current}` }
+  }
   const [err, setErr] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -76,7 +87,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
       const s = await api.get<Summary>('/api/admin/credits')
       setData(s)
       setConfig(s.config)
-      setCodes(s.codes || [])
+      setCodes((s.codes || []).map(withRowKey))
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -111,7 +122,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
     setErr(null)
     try {
       const cleaned = codes
-        .map((c) => ({
+        .map(({ rowKey: _rowKey, ...c }) => ({
           ...c,
           code: String(c.code || '')
             .trim()
@@ -119,7 +130,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
         }))
         .filter((c) => c.code)
       const res = await api.put<{ codes: RedeemCode[] }>('/api/admin/credits/codes', { codes: cleaned })
-      setCodes(res.codes || [])
+      setCodes((res.codes || []).map(withRowKey))
       setMsg(P('兑换码已保存'))
       await load()
     } catch (e) {
@@ -250,7 +261,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
           <button
             type="button"
             className="button ghost"
-            onClick={() => setCodes((prev) => [...prev, blankCode()])}
+            onClick={() => setCodes((prev) => [...prev, withRowKey(blankCode())])}
           >
             <Plus size={14} /> {P('添加')}
           </button>
@@ -273,7 +284,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
             </thead>
             <tbody>
               {codes.map((c, i) => (
-                <tr key={`${c.code}-${i}`}>
+                <tr key={c.rowKey}>
                   <td>
                     <input
                       value={c.code}
