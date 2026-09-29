@@ -301,8 +301,8 @@ export function AdminModelPricesPage({ path }: { path: string }) {
         <p className="muted" style={{ marginTop: 0 }}>
           {P('展示点与内部额度单位换算（aily 对齐：默认 1 点 = 1 USD = 500000 内部单位）。价格同步、计费扣减、密钥额度、用户组滚动窗口共用此设置。')}
         </p>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
-          <div className="field" style={{ minWidth: 220 }}>
+        <div className="price-book-unit">
+          <div className="field">
             <label>{P('1 点 = N 内部单位')}</label>
             <input
               className="field-input"
@@ -356,7 +356,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
       </div>
       {err ? <p style={{ color: 'var(--error)' }}>{err}</p> : null}
       {lastSync ? (
-        <p className="muted" style={{ marginTop: 0 }}>
+        <p className="muted price-book-sync" style={{ marginTop: 0 }}>
           {P('上次同步')}：{' '}
           {lastSync.at
             ? new Date(lastSync.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
@@ -431,17 +431,17 @@ export function AdminModelPricesPage({ path }: { path: string }) {
             '提示：无需为 aily/xxx 单独定价。手动编辑会标记 manual。USD/MTok 旁显示对应平台点（quota = round(USD×N)）。',
           )}
         </p>
-        <div className="table-wrap">
+        <div className="table-wrap price-book-table">
           <table className="data">
             <thead>
               <tr>
                 <th>{P('模型')}</th>
-                <th>input USD</th>
-                <th>input {P('点')}</th>
-                <th>output USD</th>
-                <th>output {P('点')}</th>
-                <th>cache read</th>
-                <th>cache write</th>
+                <th>in USD</th>
+                <th>in {P('点')}</th>
+                <th>out USD</th>
+                <th>out {P('点')}</th>
+                <th>cache r</th>
+                <th>cache w</th>
                 <th>{P('来源')}</th>
                 <th />
               </tr>
@@ -451,14 +451,14 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                 <tr key={`${p.model}-${i}`}>
                   <td>
                     <input
-                      className="field-input"
+                      className="field-input field-input--model"
                       value={p.model}
                       onChange={(e) => updateRow(i, { model: e.target.value })}
                     />
                   </td>
                   <td>
                     <input
-                      className="field-input"
+                      className="field-input field-input--num"
                       type="number"
                       step="0.01"
                       value={p.input_per_mtok}
@@ -472,7 +472,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                   </td>
                   <td>
                     <input
-                      className="field-input"
+                      className="field-input field-input--num"
                       type="number"
                       step="0.01"
                       value={p.output_per_mtok}
@@ -486,7 +486,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                   </td>
                   <td>
                     <input
-                      className="field-input"
+                      className="field-input field-input--num"
                       type="number"
                       step="0.01"
                       placeholder="—"
@@ -507,7 +507,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                   </td>
                   <td>
                     <input
-                      className="field-input"
+                      className="field-input field-input--num"
                       type="number"
                       step="0.01"
                       placeholder="—"

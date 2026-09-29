@@ -942,6 +942,26 @@ main#main-content {
   border-color: var(--accent);
 }
 
+.field-input {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 11px 12px;
+  outline: none;
+}
+.field-input:focus {
+  border-color: var(--accent);
+}
+
+.console-main {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .table-wrap {
   overflow: auto;
   border: 1px solid var(--line);
@@ -3342,3 +3362,83 @@ td.num {
 .toks .up { color: #22c55e; }
 .toks .cache { color: #22d3ee; font-size: 12px; }
 .lat { font-size: 12px; color: var(--muted); line-height: 1.35; }
+
+/* Admin model prices — compact inputs so table fits ~admin content width */
+.price-book-unit {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: end;
+}
+.price-book-unit .field {
+  flex: 0 1 240px;
+  min-width: 0;
+  max-width: 280px;
+  margin-bottom: 0;
+}
+.price-book-unit .field-input {
+  max-width: 240px;
+}
+.price-book-table.table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.price-book-table table.data {
+  width: 100%;
+  table-layout: fixed;
+}
+.price-book-table table.data th,
+.price-book-table table.data td {
+  padding: 8px 6px;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.price-book-table table.data th:nth-child(1),
+.price-book-table table.data td:nth-child(1) {
+  width: 18%;
+}
+.price-book-table table.data th:nth-child(2),
+.price-book-table table.data td:nth-child(2),
+.price-book-table table.data th:nth-child(4),
+.price-book-table table.data td:nth-child(4),
+.price-book-table table.data th:nth-child(6),
+.price-book-table table.data td:nth-child(6),
+.price-book-table table.data th:nth-child(7),
+.price-book-table table.data td:nth-child(7) {
+  width: 9.5%;
+}
+.price-book-table table.data th:nth-child(3),
+.price-book-table table.data td:nth-child(3),
+.price-book-table table.data th:nth-child(5),
+.price-book-table table.data td:nth-child(5) {
+  width: 8%;
+}
+.price-book-table table.data th:nth-child(8),
+.price-book-table table.data td:nth-child(8) {
+  width: 8%;
+}
+.price-book-table table.data th:nth-child(9),
+.price-book-table table.data td:nth-child(9) {
+  width: 44px;
+}
+.price-book-table .field-input {
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  min-width: 0;
+}
+.price-book-table .field-input--num {
+  width: 100%;
+  max-width: 5.75rem;
+}
+.price-book-table .field-input--model {
+  width: 100%;
+  max-width: 100%;
+}
+.price-book-sync {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
