@@ -360,7 +360,7 @@ export function createUserKeyStore(filePath) {
       const u = data.users?.[String(userId)]
       return u?.profile || null
     },
-    /** Resolve profile username / display_name / exact userId → user ids (deduped). */
+    /** Resolve profile username / exact userId → user ids (deduped). Never match display_name (collision-prone). */
     findUserIdsByUsername(username) {
       const want = String(username || '')
         .trim()
@@ -373,10 +373,7 @@ export function createUserKeyStore(filePath) {
         const un = String(u.profile?.username || '')
           .trim()
           .toLowerCase()
-        const dn = String(u.profile?.display_name || '')
-          .trim()
-          .toLowerCase()
-        if (id.toLowerCase() === want || un === want || dn === want) ids.push(id)
+        if (id.toLowerCase() === want || un === want) ids.push(id)
       }
       return ids
     },

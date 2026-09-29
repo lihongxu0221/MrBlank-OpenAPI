@@ -135,3 +135,15 @@ test('linux.do findByApiKey skips disabled by default', () => {
   assert.ok(store.findByApiKey(fullKey, { includeDisabled: true }))
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+test('findUserIdsByUsername matches username/exact id only — not display_name', () => {
+  const { store, dir } = tmpStore()
+  store.setProfile('local:alice', { username: 'alice', display_name: 'SharedNick' })
+  store.setProfile('local:bob', { username: 'bob', display_name: 'SharedNick' })
+  assert.deepEqual(store.findUserIdsByUsername('alice'), ['local:alice'])
+  assert.deepEqual(store.findUserIdsByUsername('local:bob'), ['local:bob'])
+  // Shared display_name must NOT resolve either user (collision-prone merge hint)
+  assert.deepEqual(store.findUserIdsByUsername('SharedNick'), [])
+  assert.deepEqual(store.findUserIdsByUsername('sharednick'), [])
+  fs.rmSync(dir, { recursive: true, force: true })
+})

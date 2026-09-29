@@ -278,6 +278,7 @@ export function OverviewPage({ path }: { path: string }) {
         <CheckinClaimCard
           data={checkin}
           actionDisabled={!checkin?.claimable}
+          actionLabel={P('去签到')}
           onAction={() => navigate('/checkin')}
         />
 

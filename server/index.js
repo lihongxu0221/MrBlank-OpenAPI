@@ -746,8 +746,9 @@ function metricsForUserId(userId) {
 }
 
 /**
- * Map admin-typed user id / username / display_name → canonical membership key.
- * Prefer local user id, then profile matches; fall back to the raw input.
+ * Map admin-typed user id / username → canonical membership key.
+ * Prefer local user id, then profile username / exact id; never display_name (collision-prone).
+ * Fall back to the raw input.
  */
 function resolveGroupUserId(raw) {
   const input = String(raw || '').trim()
@@ -766,7 +767,7 @@ function resolveGroupUserId(raw) {
   return input
 }
 
-/** Orphan membership keys that should fold into canonicalId (username typos, etc.). */
+/** Orphan membership keys that should fold into canonicalId (username / exact id only — never display_name). */
 function groupMemberAliasKeys(canonicalId, hintNames = []) {
   const id = String(canonicalId)
   const hints = new Set(
@@ -785,10 +786,7 @@ function groupMemberAliasKeys(canonicalId, hintNames = []) {
     hints.add(profile.username)
     hints.add(String(profile.username).toLowerCase())
   }
-  if (profile?.display_name) {
-    hints.add(profile.display_name)
-    hints.add(String(profile.display_name).toLowerCase())
-  }
+  // Intentionally omit profile.display_name — shared nicknames must not merge memberships.
   const aliases = []
   for (const m of groupStore.listMembers()) {
     if (m.user_id === id) continue
@@ -822,10 +820,8 @@ function resolveUserGroupForId(userId, metrics = {}, hintNames = []) {
 function resolveAuthGroup(req) {
   const store = req.store || getOrCreateUserStore(req.auth.user)
   const metrics = userGroupMetrics(req.auth.user.id, store)
-  return resolveUserGroupForId(req.auth.user.id, metrics, [
-    req.auth.user.username,
-    req.auth.user.display_name,
-  ])
+  // Alias merge hints: username + exact id only (never display_name).
+  return resolveUserGroupForId(req.auth.user.id, metrics, [req.auth.user.username])
 }
 
 
@@ -1394,7 +1390,8 @@ app.use(
                 },
               }
             }
-            // Per-model hard cap (rolling 30d). NO site-credits overflow (D5).
+            // Per-model hard cap (rolling 30d): pre-request soft check like window quotas
+            // (blocks when already exhausted; does not clamp mid-request). NO site-credits overflow (D5).
             const mq = groupStore.assertModelQuota(userId, groupInfo.group, model)
             if (!mq.ok) {
               try { releaseTokenConcurrency() } catch { /* ignore */ }

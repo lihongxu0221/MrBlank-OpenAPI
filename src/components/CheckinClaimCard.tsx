@@ -8,12 +8,15 @@ export function CheckinClaimCard({
   className,
   actionDisabled,
   actionBusy,
+  actionLabel,
   onAction,
 }: {
   data: any | null
   className?: string
   actionDisabled?: boolean
   actionBusy?: boolean
+  /** CTA label. Overview navigate-only should pass「去签到」; claim page keeps default. */
+  actionLabel?: string
   onAction: () => void
 }) {
   const checkedIn = !!data?.stats?.checked_in_today
@@ -59,7 +62,7 @@ export function CheckinClaimCard({
             disabled={!!actionDisabled || !!actionBusy}
             onClick={onAction}
           >
-            {P('验证并签到')} →
+            {actionLabel || P('验证并签到')} →
           </button>
           {data?.unavailable_reason ? (
             <div className="alert-box">{data.unavailable_reason}</div>

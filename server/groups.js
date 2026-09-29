@@ -7,7 +7,9 @@
  *   - Rolling 5h / week / month quotas are STORED as raw units; admin UI edits in 点
  *   - BFF /v1 deducts price-book raw quota into these windows (not 1 token = 1 raw)
  *   - Empty model_ids = all models; non-empty = allowlist (403 if violated)
- *   - model_quotas: per-model raw caps (0 or missing = unlimited); rolling 30d; hard cap (no credits overflow)
+ *   - model_quotas: per-model raw caps (0 or missing = unlimited); rolling 30d;
+ *     pre-request soft check like window quotas (blocks when already exhausted; no mid-request clamp);
+ *     hard governance — no site-credits overflow (D5)
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -504,7 +506,8 @@ export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {})
 
     /**
      * Per-model hard cap (rolling 30d / month window). 0 or missing = unlimited.
-     * Does NOT allow site-credits overflow (D5).
+     * Pre-request soft check like window quotas: denies when used >= limit already;
+     * does not clamp mid-request. Does NOT allow site-credits overflow (D5).
      */
     assertModelQuota(userId, group, modelId) {
       const mid = String(modelId || '').trim()

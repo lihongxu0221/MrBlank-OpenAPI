@@ -47,12 +47,19 @@ export function AdminGroupModelsPage({ path }: { path: string }) {
     [groups, selectedId],
   )
 
-  /** Selected group's 5h rolling quota in raw tokens (API storage). */
+  /** Selected group's 5h rolling quota in raw tokens (API storage). Window 0 = 无额度. */
   const group5hRaw = Number(selectedGroup?.quotas?.window_5h) || 0
-  const group5hHint =
+  const group5hHeaderHint =
     group5hRaw > 0
-      ? `${P('0 = 不限')} · ${P('本组近5小时额度')} ≈ ${formatQuotaCompact(group5hRaw)} token`
-      : `${P('0 = 不限')} · ${P('本组近5小时额度')} ≈ ${P('不限')}`
+      ? `${P('本组近5小时额度')} ≈ ${formatQuotaCompact(group5hRaw)} token`
+      : `${P('本组近5小时额度')} ≈ ${P('无额度')}`
+
+  /** Per-model quota hint: 0 = unlimited (unlike window quotas). */
+  function modelQuotaPointsHint(points: number): string {
+    const pts = Number(points) || 0
+    if (pts <= 0) return `${P('0 = 不限')} · ≈ ${P('不限')}`
+    return `${P('0 = 不限')} · ≈ ${formatQuotaCompact(pointsToQuota(pts, quotaUnit))} token`
+  }
 
   function applyGroupToEditor(g: Group | null, unit: number) {
     if (!g) {
@@ -302,6 +309,8 @@ export function AdminGroupModelsPage({ path }: { path: string }) {
                     {selectedIds.size
                       ? P('已限制白名单：仅勾选模型可用')
                       : P('未限制白名单（全部模型可用）；仍可为单模型设置额度')}
+                    {' · '}
+                    {group5hHeaderHint}
                   </div>
                 </div>
                 <div style={{ flex: 1 }} />
@@ -367,11 +376,11 @@ export function AdminGroupModelsPage({ path }: { path: string }) {
                               step="0.01"
                               min={0}
                               value={pts}
-                              title={group5hHint}
+                              title={modelQuotaPointsHint(pts)}
                               onChange={(e) => setModelQuotaPoints(m.id, Number(e.target.value) || 0)}
                               style={{ width: '100%' }}
                             />
-                            <div className="field-note">{group5hHint}</div>
+                            <div className="field-note">{modelQuotaPointsHint(pts)}</div>
                           </td>
                           <td className="muted" style={{ fontSize: 12 }}>
                             {pts > 0

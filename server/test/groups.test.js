@@ -157,6 +157,31 @@ describe('groups membership single source of truth', () => {
     assert.equal(store.listMembers().length, 1)
     fs.rmSync(dir, { recursive: true, force: true })
   })
+
+  it('display_name must not be treated as membership alias (no collision merge)', () => {
+    // Contract: aliasKeys = username + exact id only (never display_name).
+    // findUserIdsByUsername must not invent display_name keys (see userKeys test).
+    const { dir, store } = tmpStore()
+    const a = 'local:user-a'
+    const b = 'local:user-b'
+    store.ensureUser(a)
+    store.ensureUser(b)
+    store.assignMember(a, { group_id: 'leader', override: true })
+    store.assignMember(b, { group_id: 'basic', override: true })
+    // SharedNick is not a membership key → no-op; B untouched
+    store.resolveUserGroup(a, {}, { aliasKeys: ['alice', 'SharedNick'] })
+    assert.equal(store.listMembers().length, 2)
+    assert.equal(store.resolveUserGroup(a, {}).group.id, 'leader')
+    assert.equal(store.resolveUserGroup(b, {}).group.id, 'basic')
+    // Username-keyed orphan still merges when explicitly listed
+    store.assignMember('alice', { group_id: 'leader', override: true })
+    const info = store.resolveUserGroup(a, {}, { aliasKeys: ['alice'] })
+    assert.equal(info.group.id, 'leader')
+    assert.equal(store.listMembers().length, 2)
+    assert.equal(store.listMembers().some((m) => m.user_id === b), true)
+    assert.equal(store.listMembers().some((m) => m.user_id === 'alice'), false)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
 })
 
 describe('model_quotas / assertModelQuota', () => {

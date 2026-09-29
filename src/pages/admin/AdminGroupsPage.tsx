@@ -91,12 +91,13 @@ function toApiGroup(g: Group, unit: number): Group {
   }
 }
 
-/** Points (UI) → compact token hint under quota inputs (matches 组模型配额). */
+/** Points (UI) → compact token hint under rolling window quotas.
+ * Window 0 = exhausted / no allotment (NOT unlimited). model_quotas keep 0=不限. */
 function quotaPointsHint(points: number, unit: number): string {
   const pts = Number(points) || 0
-  if (pts <= 0) return `${P('0 = 不限')} · ≈ ${P('不限')}`
+  if (pts <= 0) return `${P('0 = 无额度')} · ≈ ${P('无额度')}`
   const raw = pointsToQuota(pts, unit)
-  return `${P('0 = 不限')} · ≈ ${formatQuotaCompact(raw)} token`
+  return `${P('0 = 无额度')} · ≈ ${formatQuotaCompact(raw)} token`
 }
 
 export function AdminGroupsPage({ path }: { path: string }) {
