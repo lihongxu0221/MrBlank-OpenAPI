@@ -88,6 +88,7 @@ import { createV1Proxy } from './v1Proxy.js'
 import { createAilyManager, loadAilyConfig } from './aily.js'
 import { createAilyUpstream } from './ailyUpstream.js'
 import { createAilyModelRoutingStore, publicModelList, normalizeModelRouting, exposedModelNames, isAilyPrefixed, stripAilyPrefix } from './ailyModelRouting.js'
+import { collectAilyPublicModelRows, enrichModelsBodyWithAily } from './mergedV1Models.js'
 import { createAilyAccountsStore } from './ailyAccounts.js'
 import { createAilyCredentialsStore } from './ailyCredentials.js'
 import { createAilyCompat } from './ailyCompat.js'
@@ -1287,6 +1288,15 @@ app.use(
           releaseTokenConcurrency,
         }
       },
+      async enrichModelsBody(_ctx, bodyText) {
+        // Plaza / price-sync parity: include aily/* when routing or AILY_MODEL_ROUTES enabled.
+        return enrichModelsBodyWithAily(bodyText, {
+          getRouting: () => ailyModelRouting.get(),
+          getEnvRoutes: () => ailyManager.cfg?.modelRoutes || [],
+          envModelMatches: (m) => ailyManager.modelMatches(m),
+          listAilyModels: () => ailyUpstream.listModels(false),
+        })
+      },
       filterModelsBody(ctx, bodyText) {
         return groupStore.filterModelsResponseBody(bodyText, ctx.groupInfo?.group)
       },
@@ -1899,43 +1909,24 @@ app.get('/api/token/options', requireAuth, async (req, res) => {
 
     // Merge Aily public models when site routing or AILY_MODEL_ROUTES is configured.
     // Public ids are always aily/{name} so they never collide with CPA bare ids.
+    // Shared with GET /v1/models enrich (mergedV1Models) so admin pickers match plaza.
     let ailyModels = []
     try {
-      const routing = ailyModelRouting.get()
-      const exposed = exposedModelNames(routing)
-      const envRoutes = ailyManager.cfg?.modelRoutes || []
-      if (exposed.length || envRoutes.length) {
-        let catalogList = []
-        try {
-          const result = await ailyUpstream.listModels(false)
-          catalogList =
-            result.data ||
-            (result.models || []).map((id) => ({ id, object: 'model', owned_by: 'aily' }))
-        } catch (e) {
-          console.warn('[aily] plaza catalog:', e?.message || e)
-        }
-        const sourceList =
-          catalogList.length > 0
-            ? catalogList
-            : exposed.map((id) => ({ id, object: 'model', owned_by: 'aily', name: stripAilyPrefix(id) || id }))
-        let pub = publicModelList(sourceList, routing)
-        // If only env routes (no whitelist/mappings), filter catalog by env patterns (bare or prefixed)
-        if (!exposed.length && envRoutes.length) {
-          pub = pub.filter(
-            (m) =>
-              ailyManager.modelMatches(m.id) || ailyManager.modelMatches(stripAilyPrefix(m.id)),
-          )
-        }
-        ailyModels = pub.map((m) => ({
-          id: m.id, // already aily/...
-          name: m.name || stripAilyPrefix(m.id) || m.id,
-          provider: 'Aily',
-          kind: 'text',
-          text_price: 0,
-          text_out_price: 0,
-          owned_by: 'aily',
-        }))
-      }
+      const rows = await collectAilyPublicModelRows({
+        getRouting: () => ailyModelRouting.get(),
+        getEnvRoutes: () => ailyManager.cfg?.modelRoutes || [],
+        envModelMatches: (m) => ailyManager.modelMatches(m),
+        listAilyModels: () => ailyUpstream.listModels(false),
+      })
+      ailyModels = rows.map((m) => ({
+        id: m.id, // already aily/...
+        name: m.name || stripAilyPrefix(m.id) || m.id,
+        provider: 'Aily',
+        kind: 'text',
+        text_price: 0,
+        text_out_price: 0,
+        owned_by: 'aily',
+      }))
     } catch (e) {
       console.warn('[aily] plaza merge failed:', e?.message || e)
     }

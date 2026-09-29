@@ -107,6 +107,7 @@ function isConsumingEndpoint(endpoint, method) {
  * @param {{ match?: (model:string)=>boolean, handleV1?: Function, embedded?: boolean, adapterUrl?: string, apiKey?: string }} [opts.ailyRoute]
  * @param {{
  *   enforce?: (ctx: object) => Promise<{ allow: true, userId?: string, groupInfo?: object } | { allow: false, status: number, headers?: object, body: object }>,
+ *   enrichModelsBody?: (ctx: object, bodyText: string) => string | Promise<string>,
  *   filterModelsBody?: (ctx: object, bodyText: string) => string,
  *   onComplete?: (ctx: object) => void,
  * }} [opts.governance]
@@ -421,11 +422,38 @@ export function createV1Proxy({
     const modelsList = isModelsList(endpoint, req.method)
     let resBodyOverride = null
 
-    // For /v1/models: buffer full body, filter by group, then send
-    if (modelsList && typeof governance?.filterModelsBody === 'function' && govCtx.userId) {
+    // For /v1/models: buffer full body, merge Aily (plaza parity), filter by group, then send
+    const shouldBufferModels =
+      modelsList &&
+      (typeof governance?.enrichModelsBody === 'function' ||
+        (typeof governance?.filterModelsBody === 'function' && govCtx.userId))
+    if (shouldBufferModels) {
       const text = await upstream.text().catch(() => '')
-      resBodyOverride = governance.filterModelsBody(govCtx, text) || text
-      res.status(upstream.status)
+      let merged = text
+      if (typeof governance?.enrichModelsBody === 'function') {
+        try {
+          merged = (await governance.enrichModelsBody(govCtx, text)) || text
+        } catch (err) {
+          console.warn('[v1] enrichModelsBody failed', err?.message || err)
+          merged = text
+        }
+      }
+      if (typeof governance?.filterModelsBody === 'function' && govCtx.userId) {
+        resBodyOverride = governance.filterModelsBody(govCtx, merged) || merged
+      } else {
+        resBodyOverride = merged
+      }
+      // If CPA errored but enrich produced aily rows, prefer 200 so pickers see aily/*
+      let outStatus = upstream.status
+      try {
+        const parsed = JSON.parse(resBodyOverride || '{}')
+        if (Array.isArray(parsed?.data) && parsed.data.length && upstream.status >= 400) {
+          outStatus = 200
+        }
+      } catch {
+        /* keep upstream status */
+      }
+      res.status(outStatus)
       const resHeaderObj = {}
       upstream.headers.forEach((v, k) => {
         resHeaderObj[k] = v
@@ -440,6 +468,7 @@ export function createV1Proxy({
         res.setHeader('x-mrblank-route', routeVia)
         res.setHeader('content-type', 'application/json')
         if (govCtx.groupInfo?.group?.id) res.setHeader('x-mrblank-group', govCtx.groupInfo.group.id)
+        if (merged !== text) res.setHeader('x-mrblank-models', 'cpa+aily')
       } catch {
         /* ignore */
       }
@@ -452,7 +481,7 @@ export function createV1Proxy({
           method: req.method,
           endpoint,
           upstream_url: upstreamUrl,
-          status_code: upstream.status,
+          status_code: outStatus,
           duration_ms: Date.now() - started,
           ttft_ms: null,
           ip: clientIp(req),
@@ -469,7 +498,7 @@ export function createV1Proxy({
           upstream_req_headers: redactHeaders(fwd),
           upstream_req_body: reqBodyText,
           is_stream: false,
-          type: upstream.status >= 400 ? 5 : 2,
+          type: outStatus >= 400 ? 5 : 2,
           content: '',
           route_via: routeVia,
           group_id: govCtx.groupInfo?.group?.id || '',
@@ -478,7 +507,7 @@ export function createV1Proxy({
         console.error('[diagnosis] record failed', err?.message || err)
       }
       emitComplete({
-        status: upstream.status,
+        status: outStatus,
         usage,
         isConsuming: false,
         is_stream: false,
