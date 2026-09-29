@@ -128,3 +128,58 @@ test('legacy events get synthetic ids on load (backfill)', () => {
   assert.match(list.items[0].id, /^bf-/)
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+test('chart series includes current hour so recent tokens bind (aily-parity)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'site-usage-series-'))
+  const file = path.join(dir, 'site-usage.json')
+  const store = createSiteUsageStore(file, { maxEvents: 100, maxAgeMs: 86400000 * 30 })
+
+  // Pin "now" just after an hour boundary so ceil(span/1h) alone would drop the in-progress hour.
+  const fakeNow = Date.parse('2026-09-29T10:01:00+08:00')
+  const realNow = Date.now
+  Date.now = () => fakeNow
+  try {
+    store.recordEvent({
+      ts: new Date(fakeNow - 30_000).toISOString(),
+      userId: 'u1',
+      username: 'alice',
+      token_name: 'k1',
+      model: 'grok-4.7-build',
+      endpoint: '/v1/chat/completions',
+      group: 'newcomer',
+      success: true,
+      type: TYPE_CONSUME,
+      prompt_tokens: 20000,
+      completion_tokens: 8100,
+      cache_tokens: 0,
+      amountUsd: 0.01,
+    })
+    store.recordEvent({
+      ts: new Date(fakeNow - 10_000).toISOString(),
+      userId: 'u1',
+      username: 'alice',
+      token_name: 'k1',
+      model: 'unknown',
+      endpoint: '/v1/models',
+      group: 'newcomer',
+      success: true,
+      type: TYPE_CONSUME,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+    })
+
+    const chart = store.chartData({ range: '24h', grain: 'hour', type: TYPE_CONSUME })
+    assert.equal(chart.totals.tokens, 28100)
+    assert.ok(chart.series.length >= 24, 'expected at least 24 hourly buckets')
+    assert.equal(chart.series.at(-1)?.date, '2026-09-29 10:00')
+    const hot = chart.series.filter((s) => (s.prompt_tokens || 0) > 0 || (s.requests || 0) > 0)
+    assert.equal(hot.length, 1)
+    assert.equal(hot[0].prompt_tokens, 20000)
+    assert.equal(hot[0].completion_tokens, 8100)
+    assert.equal(hot[0].requests, 2)
+    assert.ok(chart.by_endpoint.some((e) => e.name === '/v1/chat/completions' && e.tokens === 28100))
+  } finally {
+    Date.now = realNow
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

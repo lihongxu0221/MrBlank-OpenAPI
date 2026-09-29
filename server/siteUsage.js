@@ -479,31 +479,43 @@ export function createSiteUsageStore(filePath, opts = {}) {
     const typeQ = { ...q }
     if (typeQ.type == null || typeQ.type === '') typeQ.type = TYPE_CONSUME
     const events = filterEvents(typeQ)
-    const { from, to } = rangeBounds(q)
-    const span = Math.max(3600, to - from)
-    let grain = q.grain || (span <= 48 * 3600 ? 'hour' : 'day')
+    let { from, to } = rangeBounds(q)
+    const range = q.range || q.period || '24h'
+    // Anchor unbounded windows to real data (aily-parity) so we never emit epoch→now buckets.
+    if (range === 'all' || from <= 0) {
+      if (events.length) {
+        let oldest = to
+        for (const row of events) {
+          const ts = Date.parse(row.ts || '') || 0
+          if (ts > 0 && ts < oldest) oldest = ts
+        }
+        from = oldest
+      } else {
+        from = Math.max(0, to - 86400000)
+      }
+    }
+    const span = Math.max(3600000, to - from)
+    let grain = q.grain || (span <= 48 * 3600000 ? 'hour' : 'day')
     if (grain !== 'hour' && grain !== 'day') grain = 'day'
 
     const buckets = []
     const map = {}
+    const ensureBucket = (key) => {
+      if (map[key]) return
+      const rec = emptyBucket(key)
+      buckets.push(rec)
+      map[key] = rec
+    }
+    // Inclusive of the end grain key so "current hour/day" events bind into series
+    // (ceil(span/step) alone drops the in-progress bucket and left Token趋势 flat).
     if (grain === 'hour') {
-      const hours = Math.max(1, Math.ceil(span / 3600000))
-      for (let i = 0; i < hours; i++) {
-        const key = hourKeyMs(from + i * 3600000)
-        if (map[key]) continue
-        const rec = emptyBucket(key)
-        buckets.push(rec)
-        map[key] = rec
-      }
+      const step = 3600000
+      for (let t = from; t <= to; t += step) ensureBucket(hourKeyMs(t))
+      ensureBucket(hourKeyMs(to))
     } else {
-      const daysN = Math.max(1, Math.ceil(span / 86400000))
-      for (let i = 0; i < daysN; i++) {
-        const key = dayKeyMs(from + i * 86400000)
-        if (map[key]) continue
-        const rec = emptyBucket(key)
-        buckets.push(rec)
-        map[key] = rec
-      }
+      const step = 86400000
+      for (let t = from; t <= to; t += step) ensureBucket(dayKeyMs(t))
+      ensureBucket(dayKeyMs(to))
     }
 
     const by_model = {}

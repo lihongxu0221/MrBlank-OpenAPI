@@ -130,7 +130,14 @@ function withTokens(items?: DistItem[]) {
 }
 
 function Donut({ items, valueKey }: { items: DistItem[]; valueKey: 'tokens' | 'amount' }) {
-  const total = items.reduce((s, x) => s + (Number(x[valueKey]) || 0), 0) || 1
+  const metricTotal = items.reduce((s, x) => s + (Number(x[valueKey]) || 0), 0)
+  // When selected metric is all-zero (e.g. no amount yet), fall back to requests so multi-row
+  // distributions still split — matches aily visual expectation for mixed zero-token rows.
+  const useRequests = metricTotal <= 0
+  const total =
+    (useRequests
+      ? items.reduce((s, x) => s + (Number(x.requests) || 0), 0)
+      : metricTotal) || 1
   const r = 38
   const c = 2 * Math.PI * r
   let off = 0
@@ -138,7 +145,8 @@ function Donut({ items, valueKey }: { items: DistItem[]; valueKey: 'tokens' | 'a
     <svg className="usage-donut" viewBox="0 0 100 100">
       <circle cx="50" cy="50" r={r} fill="none" stroke="var(--line, #e5e7eb)" strokeWidth="12" />
       {items.map((x, i) => {
-        const dash = ((Number(x[valueKey]) || 0) / total) * c
+        const val = useRequests ? Number(x.requests) || 0 : Number(x[valueKey]) || 0
+        const dash = (val / total) * c
         const el = (
           <circle
             key={(x.name || '') + i}
@@ -185,63 +193,65 @@ function Dist({ title, items, nestKeys }: { title: string; items?: DistItem[]; n
       ) : (
         <div className="usage-dist">
           <Donut items={top} valueKey={metric} />
-          <table className="data usage-fit">
-            <thead>
-              <tr>
-                <th></th>
-                <th>{col}</th>
-                <th>请求</th>
-                <th>Token</th>
-                <th>实际</th>
-              </tr>
-            </thead>
-            <tbody>
-              {top.map((x, i) => {
-                const keys = nestKeys && Array.isArray(x.keys) ? x.keys : []
-                return (
-                  <Fragment key={x.name}>
-                    <tr>
-                      <td>
-                        {keys.length ? (
-                          <button
-                            type="button"
-                            className="usage-tog"
-                            onClick={() => setOpen((o) => ({ ...o, [i]: !o[i] }))}
-                          >
-                            {open[i] ? '▾' : '▸'}
-                          </button>
-                        ) : (
-                          <i
-                            style={{
-                              display: 'inline-block',
-                              width: 8,
-                              height: 8,
-                              borderRadius: 99,
-                              background: PALETTE[i % PALETTE.length],
-                            }}
-                          />
-                        )}
-                      </td>
-                      <td className="name">{distName(x.name)}</td>
-                      <td className="num">{fmtTok(x.requests)}</td>
-                      <td className="num">{fmtTok(x.tokens)}</td>
-                      <td className="fee">{usd(x.amount)}</td>
-                    </tr>
-                    {open[i] &&
-                      keys.map((k) => (
-                        <tr key={k.name} className="usage-dist-child">
-                          <td></td>
-                          <td className="name">{k.name}</td>
-                          <td className="num">{fmtTok(k.requests)}</td>
-                          <td className="num">{fmtTok(k.tokens)}</td>
-                          <td className="fee">{usd(k.amount)}</td>
-                        </tr>
-                      ))}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
+          <div className="usage-dist-table">
+            <table className="data usage-fit">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>{col}</th>
+                  <th>请求</th>
+                  <th>Token</th>
+                  <th>实际</th>
+                </tr>
+              </thead>
+              <tbody>
+                {top.map((x, i) => {
+                  const keys = nestKeys && Array.isArray(x.keys) ? x.keys : []
+                  return (
+                    <Fragment key={x.name}>
+                      <tr>
+                        <td>
+                          {keys.length ? (
+                            <button
+                              type="button"
+                              className="usage-tog"
+                              onClick={() => setOpen((o) => ({ ...o, [i]: !o[i] }))}
+                            >
+                              {open[i] ? '▾' : '▸'}
+                            </button>
+                          ) : (
+                            <i
+                              style={{
+                                display: 'inline-block',
+                                width: 8,
+                                height: 8,
+                                borderRadius: 99,
+                                background: PALETTE[i % PALETTE.length],
+                              }}
+                            />
+                          )}
+                        </td>
+                        <td className="name">{distName(x.name)}</td>
+                        <td className="num">{fmtTok(x.requests)}</td>
+                        <td className="num">{fmtTok(x.tokens)}</td>
+                        <td className="fee">{usd(x.amount)}</td>
+                      </tr>
+                      {open[i] &&
+                        keys.map((k) => (
+                          <tr key={k.name} className="usage-dist-child">
+                            <td></td>
+                            <td className="name">{k.name}</td>
+                            <td className="num">{fmtTok(k.requests)}</td>
+                            <td className="num">{fmtTok(k.tokens)}</td>
+                            <td className="fee">{usd(k.amount)}</td>
+                          </tr>
+                        ))}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
