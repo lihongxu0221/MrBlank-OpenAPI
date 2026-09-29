@@ -11,6 +11,11 @@ import {
   maskTokenNameFromAuth,
   redactHeaders,
 } from './diagnosis.js'
+import {
+  createHonorModelSseTransformer,
+  honorModelName,
+  honorRequestedModelInBody,
+} from './honorRequestedModel.js'
 
 
 /** Pure CPA vs Aily route selection (testable).
@@ -542,9 +547,55 @@ export function createV1Proxy({
 
     const capture = []
     let captured = 0
+    const ctype = String(resHeaderObj['content-type'] || '')
+    const upstreamLooksStream = ctype.includes('text/event-stream')
+    const honorSse = upstreamLooksStream ? createHonorModelSseTransformer(requestedModel) : null
     const reader = upstream.body?.getReader?.()
-    if (!reader) {
-      const text = await upstream.text().catch(() => '')
+
+    /** Buffer non-SSE bodies fully so we can honor requested model before write. */
+    async function readAllFromReader(rdr) {
+      const parts = []
+      while (true) {
+        const { done, value } = await rdr.read()
+        if (done) break
+        if (ttft_ms == null) ttft_ms = Date.now() - started
+        parts.push(Buffer.from(value))
+      }
+      return Buffer.concat(parts).toString('utf8')
+    }
+
+    if (!upstreamLooksStream) {
+      let rawText = ''
+      try {
+        rawText = reader ? await readAllFromReader(reader) : await upstream.text().catch(() => '')
+      } catch (err) {
+        rawText = String(err?.message || err)
+      }
+      const honored = honorRequestedModelInBody(rawText, requestedModel)
+      const text = honored.text
+      if (honored.changed) {
+        try {
+          res.setHeader('x-mrblank-model-honor', '1')
+        } catch {
+          /* ignore */
+        }
+      }
+      if (text) {
+        capture.push(Buffer.from(text))
+        captured = text.length
+        res.end(text)
+      } else res.end()
+    } else if (!reader) {
+      const rawText = await upstream.text().catch(() => '')
+      const honored = honorRequestedModelInBody(rawText, requestedModel)
+      const text = honored.text
+      if (honored.changed) {
+        try {
+          res.setHeader('x-mrblank-model-honor', '1')
+        } catch {
+          /* ignore */
+        }
+      }
       if (text) {
         capture.push(Buffer.from(text))
         captured = text.length
@@ -556,12 +607,29 @@ export function createV1Proxy({
           const { done, value } = await reader.read()
           if (done) break
           if (ttft_ms == null) ttft_ms = Date.now() - started
-          const buf = Buffer.from(value)
-          res.write(buf)
+          let outBuf = Buffer.from(value)
+          if (honorSse) {
+            const rewritten = honorSse.push(outBuf)
+            outBuf = Buffer.from(rewritten)
+            if (!outBuf.length) continue
+          }
+          res.write(outBuf)
           if (captured < MAX_CAPTURE) {
-            const take = Math.min(buf.length, MAX_CAPTURE - captured)
-            capture.push(buf.subarray(0, take))
+            const take = Math.min(outBuf.length, MAX_CAPTURE - captured)
+            capture.push(outBuf.subarray(0, take))
             captured += take
+          }
+        }
+        if (honorSse) {
+          const tail = honorSse.flush()
+          if (tail) {
+            const outBuf = Buffer.from(tail)
+            res.write(outBuf)
+            if (captured < MAX_CAPTURE) {
+              const take = Math.min(outBuf.length, MAX_CAPTURE - captured)
+              capture.push(outBuf.subarray(0, take))
+              captured += take
+            }
           }
         }
         res.end()
@@ -578,8 +646,9 @@ export function createV1Proxy({
     let resBodyText = Buffer.concat(capture).toString('utf8')
     if (captured >= MAX_CAPTURE) resBodyText += '\n…(truncated)'
     const usage = extractUsageFromBody(resBodyText)
+    const resolvedModelName = honorModelName(usage.model_name || '', requestedModel)
     const is_stream =
-      String(resHeaderObj['content-type'] || '').includes('text/event-stream') ||
+      upstreamLooksStream ||
       /data:\s*\{/.test(resBodyText.slice(0, 200))
 
     try {
@@ -592,7 +661,7 @@ export function createV1Proxy({
         duration_ms: Date.now() - started,
         ttft_ms,
         ip: clientIp(req),
-        model_name: usage.model_name || requestedModel,
+        model_name: resolvedModelName || requestedModel,
         requested_model: requestedModel,
         token_name: maskTokenNameFromAuth(req.headers.authorization),
         prompt_tokens: usage.prompt_tokens,
@@ -616,13 +685,19 @@ export function createV1Proxy({
 
     emitComplete({
       status: upstream.status,
-      usage,
+      usage: { ...usage, model_name: resolvedModelName || usage.model_name || requestedModel },
       isConsuming: isConsumingEndpoint(endpoint, req.method),
       is_stream,
-      model_name: usage.model_name || requestedModel,
+      model_name: resolvedModelName || requestedModel,
       route_via: routeVia,
       group: govCtx.groupInfo?.group?.id || govCtx.groupInfo?.group?.name || '',
       has_detail: true,
     })
   }
 }
+
+export {
+  honorModelName,
+  honorRequestedModelInBody,
+  isUpstreamVariantOfRequested,
+} from './honorRequestedModel.js'
