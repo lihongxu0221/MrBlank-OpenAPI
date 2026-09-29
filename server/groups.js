@@ -276,9 +276,58 @@ export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {})
       }))
     },
 
-    assignMember(userId, { group_id, override = true } = {}) {
+    /**
+     * Merge orphan membership keys (e.g. username typed as id) into canonical userId.
+     * Prefers an override assignment when the canonical row has none.
+     */
+    mergeAlias(canonicalUserId, aliasUserId) {
       const doc = read()
-      const mem = ensureMember(doc, userId)
+      const id = String(canonicalUserId)
+      const alias = String(aliasUserId || '')
+      if (!alias || alias === id || !doc.members[alias]) {
+        return doc.members[id] ? { user_id: id, ...doc.members[id] } : null
+      }
+      const orphan = doc.members[alias]
+      const mem = ensureMember(doc, id)
+      if (orphan.override && !mem.override) {
+        mem.group_id = orphan.group_id
+        mem.override = true
+        mem.assigned_at = orphan.assigned_at || nowIso()
+      } else if (orphan.override && mem.override) {
+        if (String(orphan.assigned_at || '') > String(mem.assigned_at || '')) {
+          mem.group_id = orphan.group_id
+          mem.assigned_at = orphan.assigned_at
+        }
+      }
+      if (orphan.joined_at && (!mem.joined_at || orphan.joined_at < mem.joined_at)) {
+        mem.joined_at = orphan.joined_at
+      }
+      if (doc.usage[alias]?.events?.length) {
+        if (!doc.usage[id]) doc.usage[id] = { events: [] }
+        doc.usage[id].events.push(...doc.usage[alias].events)
+        delete doc.usage[alias]
+      }
+      delete doc.members[alias]
+      write(doc)
+      return { user_id: id, ...mem }
+    },
+
+    /** Absorb username / alternate keys into one membership row (single source of truth). */
+    absorbAliases(canonicalUserId, aliasUserIds = []) {
+      let last = null
+      for (const a of aliasUserIds || []) {
+        last = this.mergeAlias(canonicalUserId, a) || last
+      }
+      return last
+    },
+
+    assignMember(userId, { group_id, override = true, merge_from = [] } = {}) {
+      const id = String(userId)
+      if (Array.isArray(merge_from) && merge_from.length) {
+        this.absorbAliases(id, merge_from)
+      }
+      const doc = read()
+      const mem = ensureMember(doc, id)
       if (group_id) {
         if (!findGroup(doc, group_id)) throw new Error('用户组不存在')
         mem.group_id = group_id
@@ -286,7 +335,7 @@ export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {})
       mem.override = !!override
       mem.assigned_at = nowIso()
       write(doc)
-      return { user_id: String(userId), ...mem }
+      return { user_id: id, ...mem }
     },
 
     ensureUser(userId, { joinedAt } = {}) {
@@ -314,7 +363,10 @@ export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {})
      * Resolve group for user; auto-promote unless override.
      * metrics: { account_days, request_count, used_quota, checkins }
      */
-    resolveUserGroup(userId, metrics = {}) {
+    resolveUserGroup(userId, metrics = {}, { aliasKeys = [] } = {}) {
+      if (Array.isArray(aliasKeys) && aliasKeys.length) {
+        this.absorbAliases(userId, aliasKeys)
+      }
       const doc = read()
       const mem = ensureMember(doc, userId)
       const nextId = evaluateGroupId(doc, userId, metrics)

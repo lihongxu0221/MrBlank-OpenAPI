@@ -106,3 +106,55 @@ describe('groups quota / allowlist / promotion', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 })
+
+
+describe('groups membership single source of truth', () => {
+  it('mergeAlias folds username key into canonical id and keeps override', () => {
+    const { dir, store } = tmpStore()
+    const canonical = 'local:abc123'
+    store.ensureUser(canonical)
+    store.assignMember('admin', { group_id: 'leader', override: true })
+    // Simulate duplicate: canonical still newcomer, orphan username has leader override
+    const before = store.listMembers()
+    assert.equal(before.length >= 2, true)
+    store.mergeAlias(canonical, 'admin')
+    const members = store.listMembers()
+    assert.equal(members.length, 1)
+    assert.equal(members[0].user_id, canonical)
+    assert.equal(members[0].group_id, 'leader')
+    assert.equal(members[0].override, true)
+    const info = store.resolveUserGroup(canonical, {})
+    assert.equal(info.group.id, 'leader')
+    assert.equal(info.override, true)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('assignMember merge_from removes aliases in one write', () => {
+    const { dir, store } = tmpStore()
+    const canonical = 'local:deadbeef'
+    store.ensureUser(canonical)
+    store.assignMember('admin', { group_id: 'basic', override: true })
+    const row = store.assignMember(canonical, {
+      group_id: 'leader',
+      override: true,
+      merge_from: ['admin'],
+    })
+    assert.equal(row.user_id, canonical)
+    assert.equal(row.group_id, 'leader')
+    assert.equal(store.listMembers().length, 1)
+    assert.equal(store.listMembers()[0].user_id, canonical)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('resolveUserGroup aliasKeys absorbs orphan before evaluating', () => {
+    const { dir, store } = tmpStore()
+    const canonical = 'local:cafe'
+    store.ensureUser(canonical)
+    store.assignMember('admin', { group_id: 'leader', override: true })
+    const info = store.resolveUserGroup(canonical, {}, { aliasKeys: ['admin'] })
+    assert.equal(info.group.id, 'leader')
+    assert.equal(info.override, true)
+    assert.equal(store.listMembers().length, 1)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+})

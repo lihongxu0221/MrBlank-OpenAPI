@@ -380,7 +380,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
           <Users size={16} /> {P('成员覆盖分配')}
         </h3>
         <p className="page-lead">
-          {P('覆盖分配会固定用户组（不再自动晋级）。用户 ID 为 Linux.do 数字 id 或本站 local:… 形式。')}
+          {P('覆盖分配会固定用户组（不再自动晋级）。可填本站用户名、local:… id，或 Linux.do 数字 id；同一用户只保留一行（用户名为别名时会合并到正式 id）。')}
         </p>
         <div className="field">
           <label>{P('用户 ID')}</label>

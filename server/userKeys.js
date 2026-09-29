@@ -360,6 +360,26 @@ export function createUserKeyStore(filePath) {
       const u = data.users?.[String(userId)]
       return u?.profile || null
     },
+    /** Resolve profile username / display_name / exact userId → user ids (deduped). */
+    findUserIdsByUsername(username) {
+      const want = String(username || '')
+        .trim()
+        .toLowerCase()
+      if (!want) return []
+      const data = readAll()
+      const ids = []
+      for (const [userId, u] of Object.entries(data.users || {})) {
+        const id = String(userId)
+        const un = String(u.profile?.username || '')
+          .trim()
+          .toLowerCase()
+        const dn = String(u.profile?.display_name || '')
+          .trim()
+          .toLowerCase()
+        if (id.toLowerCase() === want || un === want || dn === want) ids.push(id)
+      }
+      return ids
+    },
     hashToUserMap() {
       const data = readAll()
       /** @type {Map<string, { userId: string, display_name: string, username: string }>} */

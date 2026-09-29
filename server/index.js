@@ -695,7 +695,10 @@ function createUserSession(user) {
     // Phase E: evaluate promotion rules on every login
     try {
       const store = getOrCreateUserStore(user)
-      groupStore.resolveUserGroup(user.id, userGroupMetrics(user.id, store))
+      resolveUserGroupForId(user.id, userGroupMetrics(user.id, store), [
+        user.username,
+        user.display_name,
+      ])
     } catch (e2) {
       console.error('[groups] promote-on-login failed', e2?.message || e2)
     }
@@ -742,10 +745,87 @@ function metricsForUserId(userId) {
   return userGroupMetrics(userId, store)
 }
 
+/**
+ * Map admin-typed user id / username / display_name → canonical membership key.
+ * Prefer local user id, then profile matches; fall back to the raw input.
+ */
+function resolveGroupUserId(raw) {
+  const input = String(raw || '').trim()
+  if (!input) return ''
+  const byId = localUserStore.findById(input)
+  if (byId?.id) return byId.id
+  const byName = localUserStore.findByUsername(input)
+  if (byName?.id) return byName.id
+  const profileIds = userKeyStore.findUserIdsByUsername(input)
+  if (profileIds.length === 1) return profileIds[0]
+  if (profileIds.includes(input)) return input
+  if (profileIds.length > 1) {
+    const local = profileIds.find((id) => String(id).startsWith('local:'))
+    if (local) return local
+  }
+  return input
+}
+
+/** Orphan membership keys that should fold into canonicalId (username typos, etc.). */
+function groupMemberAliasKeys(canonicalId, hintNames = []) {
+  const id = String(canonicalId)
+  const hints = new Set(
+    [id, ...hintNames]
+      .map((s) => String(s || '').trim())
+      .filter(Boolean)
+      .flatMap((s) => [s, s.toLowerCase()]),
+  )
+  const local = localUserStore.findById(id)
+  if (local?.username) {
+    hints.add(local.username)
+    hints.add(String(local.username).toLowerCase())
+  }
+  const profile = userKeyStore.getProfile(id)
+  if (profile?.username) {
+    hints.add(profile.username)
+    hints.add(String(profile.username).toLowerCase())
+  }
+  if (profile?.display_name) {
+    hints.add(profile.display_name)
+    hints.add(String(profile.display_name).toLowerCase())
+  }
+  const aliases = []
+  for (const m of groupStore.listMembers()) {
+    if (m.user_id === id) continue
+    if (hints.has(m.user_id) || hints.has(String(m.user_id).toLowerCase())) {
+      aliases.push(m.user_id)
+    }
+  }
+  return aliases
+}
+
+/** Fold username-keyed duplicates into canonical ids (idempotent). */
+function reconcileGroupMemberAliases() {
+  const seen = new Set()
+  for (const m of groupStore.listMembers()) {
+    if (seen.has(m.user_id)) continue
+    const canonical = resolveGroupUserId(m.user_id)
+    if (!canonical || canonical === m.user_id) continue
+    const aliases = groupMemberAliasKeys(canonical, [m.user_id])
+    if (m.user_id !== canonical) aliases.push(m.user_id)
+    groupStore.absorbAliases(canonical, [...new Set(aliases)])
+    seen.add(canonical)
+  }
+}
+
+function resolveUserGroupForId(userId, metrics = {}, hintNames = []) {
+  const id = String(userId)
+  const aliases = groupMemberAliasKeys(id, hintNames)
+  return groupStore.resolveUserGroup(id, metrics, { aliasKeys: aliases })
+}
+
 function resolveAuthGroup(req) {
   const store = req.store || getOrCreateUserStore(req.auth.user)
   const metrics = userGroupMetrics(req.auth.user.id, store)
-  return groupStore.resolveUserGroup(req.auth.user.id, metrics)
+  return resolveUserGroupForId(req.auth.user.id, metrics, [
+    req.auth.user.username,
+    req.auth.user.display_name,
+  ])
 }
 
 
@@ -1196,7 +1276,7 @@ app.use(
 
         const userId = owner.userId
         const metrics = metricsForUserId(userId)
-        const groupInfo = groupStore.resolveUserGroup(userId, metrics)
+        const groupInfo = resolveUserGroupForId(userId, metrics)
         let useSiteCredits = false
 
         if (isConsuming) {
@@ -1468,7 +1548,7 @@ app.use(
         }
         // Re-evaluate promotion after usage
         try {
-          groupStore.resolveUserGroup(userId, metricsForUserId(userId))
+          resolveUserGroupForId(userId, metricsForUserId(userId))
         } catch {
           /* ignore */
         }
@@ -2696,12 +2776,18 @@ app.put('/api/admin/groups', requireAdmin, (req, res) => {
 })
 
 app.get('/api/admin/groups/members', requireAdmin, (_req, res) => {
+  try {
+    reconcileGroupMemberAliases()
+  } catch (e) {
+    console.error('[groups] reconcile aliases failed', e?.message || e)
+  }
   const members = groupStore.listMembers().map((m) => {
     const profile = userKeyStore.getProfile(m.user_id) || {}
+    const local = localUserStore.findById(m.user_id)
     return {
       ...m,
-      display_name: profile.display_name || '',
-      username: profile.username || '',
+      display_name: profile.display_name || local?.display_name || '',
+      username: profile.username || local?.username || '',
       email: profile.email || '',
     }
   })
@@ -2710,10 +2796,26 @@ app.get('/api/admin/groups/members', requireAdmin, (_req, res) => {
 
 app.put('/api/admin/groups/members/:userId', requireAdmin, (req, res) => {
   try {
-    const row = groupStore.assignMember(req.params.userId, {
+    const raw = decodeURIComponent(String(req.params.userId || '')).trim()
+    const canonical = resolveGroupUserId(raw) || raw
+    if (!canonical) {
+      res.status(400).json(fail('需要用户 ID 或用户名'))
+      return
+    }
+    const aliases = groupMemberAliasKeys(canonical, [raw])
+    if (raw && raw !== canonical) aliases.push(raw)
+    const row = groupStore.assignMember(canonical, {
       group_id: req.body?.group_id,
       override: req.body?.override !== false,
+      merge_from: [...new Set(aliases)],
     })
+    try {
+      if (localUserStore.findById(canonical) && req.body?.group_id) {
+        localUserStore.updateUser(canonical, { group_id: String(req.body.group_id) })
+      }
+    } catch (e) {
+      console.error('[groups] sync local user group_id failed', e?.message || e)
+    }
     res.json(ok(row))
   } catch (err) {
     res.status(400).json(fail(err?.message || '分配用户组失败'))
