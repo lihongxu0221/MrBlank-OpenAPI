@@ -83,6 +83,39 @@ export function parseRawPerPoint(input: unknown): number | null {
   return Math.round(n)
 }
 
+/** Compact a quota amount using the service-status B/M/K thresholds. */
+export function formatQuotaCompact(n: number): string {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '0'
+  const abs = Math.abs(v)
+  const sign = v < 0 ? '-' : ''
+  let scaled = abs
+  let suffix = ''
+  if (abs >= 1e9) {
+    scaled = abs / 1e9
+    suffix = 'B'
+  } else if (abs >= 1e6) {
+    scaled = abs / 1e6
+    suffix = 'M'
+  } else if (abs >= 1e3) {
+    scaled = abs / 1e3
+    suffix = 'K'
+  } else {
+    return String(Math.round(v * 10) / 10)
+  }
+  // Truncate to avoid displaying more quota than the full value represents.
+  const oneDecimal = Math.floor(scaled * 10) / 10
+  return `${sign}${oneDecimal.toFixed(1).replace(/\.0$/, '')}${suffix}`
+}
+
+/** Full quota amount with thousands separators and its compact B/M/K form. */
+export function formatQuotaWithCompact(n: number): string {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '0'
+  const full = v.toLocaleString('en-US', { maximumFractionDigits: 0 })
+  return Math.abs(v) >= 1e3 ? `${full} ≈ ${formatQuotaCompact(v)}` : full
+}
+
 /** Compact form for N: 500000 → "0.5M", 1e9 → "1B", 5000 → "5K". */
 export function formatRawPerPointCompact(n: number): string {
   const v = Math.round(Number(n) || FIXED_USD_TO_RAW)

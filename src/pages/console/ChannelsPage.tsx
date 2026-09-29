@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Clock3, LayoutGrid, List, RefreshCw, Sparkles, Zap } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
+import { formatQuotaWithCompact } from '../../lib/format'
 import { ConsoleLayout } from './ConsoleLayout'
 import { ConsoleHero } from '../../components/ConsoleHero'
 
@@ -149,7 +150,7 @@ export function ChannelsPage({ path }: { path: string }) {
             <div className="label">{P('累计消耗额度')}</div>
             <Sparkles size={14} className="stat-icon" />
           </div>
-          <div className="value">{tokenTotal ? tokenTotal.toLocaleString('zh-CN') : '0'}</div>
+          <div className="value">{formatQuotaWithCompact(tokenTotal)}</div>
         </div>
       </div>
 
