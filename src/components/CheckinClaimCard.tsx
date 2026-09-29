@@ -17,8 +17,13 @@ export function CheckinClaimCard({
   onAction: () => void
 }) {
   const checkedIn = !!data?.stats?.checked_in_today
-  const minQ = formatCredits(data?.min_quota ?? 0)
-  const maxQ = formatCredits(data?.max_quota ?? 0)
+  // Never fall back to a static 0–5 (or 0–0) range while stats are loading.
+  const rangeReady =
+    data != null &&
+    Number.isFinite(Number(data.min_quota)) &&
+    Number.isFinite(Number(data.max_quota))
+  const minQ = rangeReady ? formatCredits(Number(data.min_quota)) : '—'
+  const maxQ = rangeReady ? formatCredits(Number(data.max_quota)) : '—'
 
   return (
     <div className={`panel action-card${className ? ` ${className}` : ''}`}>
@@ -31,7 +36,13 @@ export function CheckinClaimCard({
       <h3>{checkedIn ? P('今天的探索额度，已到账') : P('新的一天，新的可能')}</h3>
       <p>{P('完成轻量验证，领取今天的公益额度。')}</p>
       <div className="quota-range">
-        {minQ} {P('点')} — {maxQ} {P('点')}
+        {rangeReady ? (
+          <>
+            {minQ} {P('点')} — {maxQ} {P('点')}
+          </>
+        ) : (
+          <>—</>
+        )}
       </div>
       <div className="hint-line">{P('每日签到额度 · 以服务器日期为准')}</div>
       <div className="tag-row">

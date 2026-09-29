@@ -25,22 +25,33 @@ export function OverviewPage({ path }: { path: string }) {
   const { toast, showToast } = useToast()
 
   useEffect(() => {
-    api.get<{ quota_per_unit: number }>('/api/status', { auth: false }).then((s) => setQuotaPerUnit(s.quota_per_unit))
-    api.get('/api/user/self').then(setSelf).catch(() => {})
-    api
-      .get<{ days: { date: string; requests: number }[] }>('/api/user/dashboard')
-      .then((d) => setDays(d.days || []))
-      .catch(() => {})
-    api
-      .get<{ items: unknown[]; total: number }>('/api/token/?p=1&size=10')
-      .then((d) => setKeyTotal(d.total ?? d.items?.length ?? 0))
-      .catch(() => {})
-    api
-      .get<{ model_details: unknown[] }>('/api/token/options')
-      .then((d) => setModelCount((d.model_details || []).filter((m: any) => !m.planned).length))
-      .catch(() => {})
-    api.get('/api/user/checkin').then(setCheckin).catch(() => {})
-    api.get('/api/user/group').then(setGroupInfo).catch(() => {})
+    let cancelled = false
+    ;(async () => {
+      try {
+        const s = await api.get<{ quota_per_unit: number }>('/api/status', { auth: false })
+        if (!cancelled) setQuotaPerUnit(s.quota_per_unit)
+      } catch {
+        /* keep default unit */
+      }
+      if (cancelled) return
+      api.get('/api/user/self').then(setSelf).catch(() => {})
+      api
+        .get<{ days: { date: string; requests: number }[] }>('/api/user/dashboard')
+        .then((d) => setDays(d.days || []))
+        .catch(() => {})
+      api
+        .get<{ items: unknown[]; total: number }>('/api/token/?p=1&size=10')
+        .then((d) => setKeyTotal(d.total ?? d.items?.length ?? 0))
+        .catch(() => {})
+      api
+        .get<{ model_details: unknown[] }>('/api/token/options')
+        .then((d) => setModelCount((d.model_details || []).filter((m: any) => !m.planned).length))
+        .catch(() => {})
+      // Load check-in after unit so min_quota/max_quota format to live points (e.g. 2–100).
+      api.get('/api/user/checkin').then((d) => { if (!cancelled) setCheckin(d) }).catch(() => {})
+      api.get('/api/user/group').then((d) => { if (!cancelled) setGroupInfo(d) }).catch(() => {})
+    })()
+    return () => { cancelled = true }
   }, [])
 
   const maxReq = Math.max(1, ...days.map((d) => d.requests))
@@ -250,8 +261,14 @@ export function OverviewPage({ path }: { path: string }) {
           </button>
           <p className="workspace-note">
             {qt(P('注册不会直接获得额度。完成每日签到可领取 {min}–{max} 点公益额度（以当日社区池为准）。'), {
-              min: formatCredits(checkin?.min_quota ?? 0),
-              max: formatCredits(checkin?.max_quota ?? 0),
+              min:
+                checkin != null && Number.isFinite(Number(checkin.min_quota))
+                  ? formatCredits(Number(checkin.min_quota))
+                  : '—',
+              max:
+                checkin != null && Number.isFinite(Number(checkin.max_quota))
+                  ? formatCredits(Number(checkin.max_quota))
+                  : '—',
             })}
           </p>
         </div>
