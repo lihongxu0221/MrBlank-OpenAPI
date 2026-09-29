@@ -7,6 +7,7 @@
  *   - Rolling 5h / week / month quotas are STORED as raw units; admin UI edits in 点
  *   - BFF /v1 deducts price-book raw quota into these windows (not 1 token = 1 raw)
  *   - Empty model_ids = all models; non-empty = allowlist (403 if violated)
+ *   - model_quotas: per-model raw caps (0 or missing = unlimited); rolling 30d; hard cap (no credits overflow)
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -26,6 +27,7 @@ const DEFAULT_GROUPS = [
     description: '刚加入的探索者，可用基础模型与较小滚动额度。',
     quotas: { window_5h: 2 * Q, week: 10 * Q, month: 30 * Q },
     model_ids: [],
+    model_quotas: {},
     promotion: { min_account_days: 0, min_request_count: 0, min_used_quota: 0, min_checkins: 0 },
     enabled: true,
     sort_order: 10,
@@ -37,6 +39,7 @@ const DEFAULT_GROUPS = [
     description: '完成初步使用后的默认活跃档。',
     quotas: { window_5h: 5 * Q, week: 25 * Q, month: 80 * Q },
     model_ids: [],
+    model_quotas: {},
     promotion: { min_account_days: 3, min_request_count: 10, min_used_quota: 1 * Q, min_checkins: 2 },
     enabled: true,
     sort_order: 20,
@@ -48,6 +51,7 @@ const DEFAULT_GROUPS = [
     description: '稳定使用社区资源的成员。',
     quotas: { window_5h: 10 * Q, week: 50 * Q, month: 160 * Q },
     model_ids: [],
+    model_quotas: {},
     promotion: { min_account_days: 14, min_request_count: 50, min_used_quota: 5 * Q, min_checkins: 7 },
     enabled: true,
     sort_order: 30,
@@ -59,6 +63,7 @@ const DEFAULT_GROUPS = [
     description: '高频调用与长期签到的活跃探索者。',
     quotas: { window_5h: 20 * Q, week: 100 * Q, month: 320 * Q },
     model_ids: [],
+    model_quotas: {},
     promotion: { min_account_days: 45, min_request_count: 200, min_used_quota: 20 * Q, min_checkins: 20 },
     enabled: true,
     sort_order: 40,
@@ -70,6 +75,7 @@ const DEFAULT_GROUPS = [
     description: '高信任档；额度更高。信任分/社区声望等规则预留扩展。',
     quotas: { window_5h: 40 * Q, week: 200 * Q, month: 600 * Q },
     model_ids: [],
+    model_quotas: {},
     promotion: { min_account_days: 90, min_request_count: 500, min_used_quota: 50 * Q, min_checkins: 40 },
     enabled: true,
     sort_order: 50,
@@ -90,6 +96,18 @@ function normalizePromotion(p = {}) {
     // min_trust_level, min_likes_received, min_topics_entered, min_posts_read
     notes: String(p.notes || ''),
   }
+}
+
+function normalizeModelQuotas(raw) {
+  const out = {}
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+  for (const [k, v] of Object.entries(raw)) {
+    const id = String(k || '').trim()
+    if (!id) continue
+    const n = Number(v)
+    out[id] = Number.isFinite(n) ? Math.max(0, n) : 0
+  }
+  return out
 }
 
 function normalizeGroup(raw, index = 0) {
@@ -115,6 +133,7 @@ function normalizeGroup(raw, index = 0) {
       month: Math.max(0, Number(quotas.month) || 0),
     },
     model_ids,
+    model_quotas: normalizeModelQuotas(raw?.model_quotas),
     promotion: normalizePromotion(raw?.promotion),
     enabled: raw?.enabled !== false,
     sort_order: Number.isFinite(Number(raw?.sort_order)) ? Number(raw.sort_order) : (index + 1) * 10,
@@ -239,6 +258,18 @@ export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {})
     return events.reduce((sum, e) => sum + (Number(e.quota) || 0), 0)
   }
 
+  /** Per-model usage in rolling window (default month = 30d). */
+  function usedForModel(doc, userId, modelId, kind = 'month') {
+    const mid = String(modelId || '').trim()
+    if (!mid) return 0
+    const u = doc.usage[String(userId)] || { events: [] }
+    const events = pruneUsage(u.events, kind)
+    return events.reduce((sum, e) => {
+      if (String(e.model || '').trim() !== mid) return sum
+      return sum + (Number(e.quota) || 0)
+    }, 0)
+  }
+
   function evaluateGroupId(doc, userId, metrics) {
     const mem = ensureMember(doc, userId)
     if (mem.override && mem.group_id && findGroup(doc, mem.group_id)) {
@@ -344,14 +375,17 @@ export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {})
       write(doc)
     },
 
-    recordUsage(userId, { quota = 0, requests = 0 } = {}) {
+    recordUsage(userId, { quota = 0, requests = 0, model = '' } = {}) {
       const doc = read()
       const id = String(userId)
       if (!doc.usage[id]) doc.usage[id] = { events: [] }
       const q = Math.max(0, Number(quota) || 0)
       const r = Math.max(0, Number(requests) || 0)
+      const mid = String(model || '').trim()
       if (q || r) {
-        doc.usage[id].events.push({ at: Date.now(), quota: q, requests: r })
+        const ev = { at: Date.now(), quota: q, requests: r }
+        if (mid) ev.model = mid
+        doc.usage[id].events.push(ev)
         // keep last ~90d
         const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000
         doc.usage[id].events = doc.usage[id].events.filter((e) => Number(e.at) >= cutoff)
@@ -468,6 +502,96 @@ export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {})
       }
     },
 
+    /**
+     * Per-model hard cap (rolling 30d / month window). 0 or missing = unlimited.
+     * Does NOT allow site-credits overflow (D5).
+     */
+    assertModelQuota(userId, group, modelId) {
+      const mid = String(modelId || '').trim()
+      if (!mid) return { ok: true }
+      const limitRaw = group?.model_quotas?.[mid]
+      if (limitRaw == null) return { ok: true }
+      const limit = Math.max(0, Number(limitRaw) || 0)
+      if (limit <= 0) return { ok: true, unlimited: true, model: mid }
+      const doc = read()
+      const used = usedForModel(doc, userId, mid, 'month')
+      if (used >= limit) {
+        return {
+          ok: false,
+          code: 'model_quota_exhausted',
+          model: mid,
+          used,
+          limit,
+          remaining: 0,
+          message: `模型「${mid}」本月（滚动 30 日）额度已用尽。`,
+        }
+      }
+      return { ok: true, model: mid, used, limit, remaining: Math.max(0, limit - used) }
+    },
+
+    usedForModel(userId, modelId, kind = 'month') {
+      return usedForModel(read(), userId, modelId, kind)
+    },
+
+    /** Patch one group's model_ids + model_quotas (admin group-models tab). */
+    updateGroupModels(groupId, { model_ids, model_quotas } = {}) {
+      const doc = read()
+      const g = findGroup(doc, groupId)
+      if (!g) throw new Error('用户组不存在')
+      if (model_ids !== undefined) {
+        g.model_ids = Array.isArray(model_ids)
+          ? model_ids.map((s) => String(s).trim()).filter(Boolean)
+          : String(model_ids || '')
+              .split(/[,，\s]+/)
+              .map((s) => s.trim())
+              .filter(Boolean)
+      }
+      if (model_quotas !== undefined) {
+        g.model_quotas = normalizeModelQuotas(model_quotas)
+      }
+      const idx = doc.groups.findIndex((x) => x.id === g.id)
+      doc.groups[idx] = normalizeGroup(g, idx)
+      write(doc)
+      return doc.groups[idx]
+    },
+
+    /**
+     * Effective allowlist = group.model_ids ∩ key model_limits (stricter).
+     * Empty side means unrestricted on that side.
+     */
+    effectiveModelAllowlist(group, keyModelLimits) {
+      const groupIds = group?.model_ids || []
+      const keyIds = Array.isArray(keyModelLimits)
+        ? keyModelLimits.map((s) => String(s).trim()).filter(Boolean)
+        : String(keyModelLimits || '')
+            .split(/[,，\s]+/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+      if (!groupIds.length && !keyIds.length) return []
+      if (!groupIds.length) return keyIds
+      if (!keyIds.length) return groupIds.slice()
+      const keySet = new Set(keyIds.map(String))
+      return groupIds.filter((id) => keySet.has(String(id)))
+    },
+
+    assertKeyModelAllowed(keyModelLimits, modelId) {
+      const keyIds = Array.isArray(keyModelLimits)
+        ? keyModelLimits.map((s) => String(s).trim()).filter(Boolean)
+        : String(keyModelLimits || '')
+            .split(/[,，\s]+/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+      if (!keyIds.length) return { ok: true }
+      const mid = String(modelId || '').trim()
+      if (!mid) return { ok: true }
+      if (keyIds.map(String).includes(mid)) return { ok: true }
+      return {
+        ok: false,
+        message: `模型「${mid}」不在此 API Key 的模型限制内。`,
+        code: 'key_model_not_allowed',
+      }
+    },
+
     /** Filter OpenAI-style { data: [{ id }] } /v1/models JSON text. */
     filterModelsResponseBody(bodyText, group) {
       const allow = group?.model_ids || []
@@ -535,7 +659,10 @@ export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {})
         const tokens = Number(row.prompt_tokens || 0) + Number(row.completion_tokens || 0)
         const total = Number(row.total_tokens ?? tokens) || 0
         // Map tokens -> quota units roughly 1 token ≈ 1 quota unit for rolling windows (MVP).
-        events.push({ at, quota: total, requests: 1 })
+        const mid = String(row.model || row.model_name || '').trim()
+        const ev = { at, quota: total, requests: 1 }
+        if (mid) ev.model = mid
+        events.push(ev)
       }
       const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000
       doc.usage[id] = { events: events.filter((e) => e.at >= cutoff), synced_at: nowIso() }

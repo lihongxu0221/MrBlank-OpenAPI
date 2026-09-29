@@ -23,6 +23,7 @@ import { AdminAccountsPage } from './pages/admin/AdminAccountsPage'
 import { AdminUsagePage } from './pages/admin/AdminUsagePage'
 import { AdminConstellationPage } from './pages/admin/AdminConstellationPage'
 import { AdminGroupsPage } from './pages/admin/AdminGroupsPage'
+import { AdminGroupModelsPage } from './pages/admin/AdminGroupModelsPage'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage'
 import { AdminAilyPage } from './pages/admin/AdminAilyPage'
 import { AdminCreditsPage } from './pages/admin/AdminCreditsPage'
@@ -156,6 +157,9 @@ export default function App() {
       break
     case '/admin/groups':
       page = <AdminGroupsPage path={path} />
+      break
+    case '/admin/group-models':
+      page = <AdminGroupModelsPage path={path} />
       break
     case '/admin/users':
       page = <AdminUsersPage path={path} />

@@ -158,3 +158,98 @@ describe('groups membership single source of truth', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 })
+
+describe('model_quotas / assertModelQuota', () => {
+  it('normalizes model_quotas: default {}, clamps negatives, 0=unlimited', () => {
+    const { dir, store } = tmpStore()
+    const saved = store.saveGroups([
+      {
+        id: 'mq',
+        name: 'MQ',
+        level: 1,
+        quotas: { window_5h: 1e9, week: 1e9, month: 1e9 },
+        model_ids: ['gpt-4o'],
+        model_quotas: { 'gpt-4o': 1000, neg: -5, zero: 0 },
+        promotion: { min_account_days: 0, min_request_count: 0, min_used_quota: 0, min_checkins: 0 },
+        enabled: true,
+      },
+    ])
+    const g = saved[0]
+    assert.equal(g.model_quotas['gpt-4o'], 1000)
+    assert.equal(g.model_quotas.neg, 0)
+    assert.equal(g.model_quotas.zero, 0)
+    assert.equal(g.model_quotas.missing, undefined)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('assertModelQuota: missing/0 unlimited; limit blocks; records model on usage', () => {
+    const { dir, store } = tmpStore()
+    store.saveGroups([
+      {
+        id: 'mq2',
+        name: 'MQ2',
+        level: 1,
+        quotas: { window_5h: 1e12, week: 1e12, month: 1e12 },
+        model_ids: [],
+        model_quotas: { 'gpt-4o': 500, open: 0 },
+        promotion: { min_account_days: 0, min_request_count: 0, min_used_quota: 0, min_checkins: 0 },
+        enabled: true,
+      },
+    ])
+    const uid = 'mq-user'
+    store.ensureUser(uid)
+    const group = store.listGroups()[0]
+    assert.equal(store.assertModelQuota(uid, group, 'open').ok, true)
+    assert.equal(store.assertModelQuota(uid, group, 'unlisted').ok, true)
+    assert.equal(store.assertModelQuota(uid, group, 'gpt-4o').ok, true)
+    store.recordUsage(uid, { quota: 500, requests: 1, model: 'gpt-4o' })
+    const denied = store.assertModelQuota(uid, group, 'gpt-4o')
+    assert.equal(denied.ok, false)
+    assert.equal(denied.code, 'model_quota_exhausted')
+    store.recordUsage(uid, { quota: 9999, requests: 1, model: 'other' })
+    assert.equal(store.assertModelQuota(uid, group, 'gpt-4o').ok, false)
+    assert.equal(store.usedForModel(uid, 'gpt-4o'), 500)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('empty model_ids still all-open; filterModels honors allowlist', () => {
+    const { dir, store } = tmpStore()
+    const open = { model_ids: [], model_quotas: {} }
+    assert.equal(store.isModelAllowed(open, 'any-model'), true)
+    const details = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+    assert.deepEqual(
+      store.filterModels(details, open).map((m) => m.id),
+      ['a', 'b', 'c'],
+    )
+    assert.deepEqual(
+      store.filterModels(details, { model_ids: ['b'] }).map((m) => m.id),
+      ['b'],
+    )
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('effectiveModelAllowlist is intersection (stricter)', () => {
+    const { dir, store } = tmpStore()
+    assert.deepEqual(store.effectiveModelAllowlist({ model_ids: [] }, ''), [])
+    assert.deepEqual(store.effectiveModelAllowlist({ model_ids: ['a', 'b'] }, ''), ['a', 'b'])
+    assert.deepEqual(store.effectiveModelAllowlist({ model_ids: [] }, 'a,c'), ['a', 'c'])
+    assert.deepEqual(store.effectiveModelAllowlist({ model_ids: ['a', 'b'] }, 'b,c'), ['b'])
+    assert.equal(store.assertKeyModelAllowed('a,b', 'c').ok, false)
+    assert.equal(store.assertKeyModelAllowed('a,b', 'a').ok, true)
+    assert.equal(store.assertKeyModelAllowed('', 'anything').ok, true)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('updateGroupModels patches model_ids and model_quotas', () => {
+    const { dir, store } = tmpStore()
+    const g0 = store.listGroups()[0]
+    const updated = store.updateGroupModels(g0.id, {
+      model_ids: ['gpt-4o', 'aily/claude'],
+      model_quotas: { 'gpt-4o': 10000000, 'aily/claude': 0 },
+    })
+    assert.deepEqual(updated.model_ids, ['gpt-4o', 'aily/claude'])
+    assert.equal(updated.model_quotas['gpt-4o'], 10000000)
+    assert.equal(updated.model_quotas['aily/claude'], 0)
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+})

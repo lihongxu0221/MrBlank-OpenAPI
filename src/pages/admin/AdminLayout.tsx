@@ -15,6 +15,7 @@ import {
   LineChart,
   DollarSign,
   ScanSearch,
+  Boxes,
 } from 'lucide-react'
 import { P } from '../../i18n'
 import { navigate, navigateWithQuery } from '../../router/hash'
@@ -33,6 +34,7 @@ const ITEMS = [
   { path: '/admin/usage', label: '用量监控', icon: Activity },
   { path: '/admin/constellation', label: '模型星座', icon: Sparkles },
   { path: '/admin/groups', label: '用户组', icon: UserCog },
+  { path: '/admin/group-models', label: '组模型配额', icon: Boxes },
   { path: '/admin/credits', label: '签到兑换', icon: Gift },
   { path: '/admin/users', label: '本站账号', icon: UserRound },
 ]

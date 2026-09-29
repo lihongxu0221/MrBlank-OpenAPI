@@ -98,6 +98,7 @@ export const ADMIN_ROUTES = [
   '/admin/compat',
   '/admin/constellation',
   '/admin/groups',
+  '/admin/group-models',
   '/admin/users',
   '/admin/aily',
   '/admin/credits',

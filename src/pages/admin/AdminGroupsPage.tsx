@@ -5,6 +5,7 @@ import { P } from '../../i18n'
 import { formatQuotaUnitLabel, getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
+import { navigate } from '../../router/hash'
 import { useAdminGate } from './useAdminGate'
 
 type Promotion = {
@@ -294,18 +295,22 @@ export function AdminGroupsPage({ path }: { path: string }) {
               </div>
             </div>
             <div className="field">
-              <label>{P('模型白名单（空=全部；逗号分隔 model id）')}</label>
-              <input
-                value={g.model_ids.join(', ')}
-                onChange={(e) =>
-                  updateGroup(index, {
-                    model_ids: e.target.value
-                      .split(/[,，\s]+/)
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  })
-                }
-              />
+              <label>{P('模型白名单 / 按模型额度')}</label>
+              <div className="field-note">
+                {(g.model_ids || []).length
+                  ? `${(g.model_ids || []).length} ${P('个模型')}：${(g.model_ids || []).slice(0, 4).join(', ')}${(g.model_ids || []).length > 4 ? '…' : ''}`
+                  : P('未限制白名单（全部）')}
+                {' · '}
+                <a
+                  href="#/admin/group-models"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    navigate('/admin/group-models')
+                  }}
+                >
+                  {P('在「组模型配额」中编辑')}
+                </a>
+              </div>
             </div>
             <h4 style={{ margin: '8px 0 6px' }}>{P('晋级条件（达到即可升至本组）')}</h4>
             <div className="field">

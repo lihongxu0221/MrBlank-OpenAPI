@@ -1368,6 +1368,61 @@ app.use(
                 },
               }
             }
+            // Key model_limits ∩ group whitelist (stricter)
+            const keyLimits = owner.token?.model_limits
+            const keyModelCheck = groupStore.assertKeyModelAllowed(keyLimits, model)
+            if (!keyModelCheck.ok) {
+              try { releaseTokenConcurrency() } catch { /* ignore */ }
+              return {
+                allow: false,
+                status: 403,
+                code: keyModelCheck.code || 'key_model_not_allowed',
+                group_id: groupInfo.group?.id,
+                headers: {
+                  'x-mrblank-governance': 'key_model_not_allowed',
+                  'x-mrblank-group': groupInfo.group?.id || '',
+                },
+                body: {
+                  error: {
+                    message: keyModelCheck.message,
+                    type: 'forbidden',
+                    code: keyModelCheck.code || 'key_model_not_allowed',
+                    param: 'model',
+                  },
+                  group_id: groupInfo.group?.id,
+                  model_allowlist: groupStore.effectiveModelAllowlist(groupInfo.group, keyLimits),
+                },
+              }
+            }
+            // Per-model hard cap (rolling 30d). NO site-credits overflow (D5).
+            const mq = groupStore.assertModelQuota(userId, groupInfo.group, model)
+            if (!mq.ok) {
+              try { releaseTokenConcurrency() } catch { /* ignore */ }
+              return {
+                allow: false,
+                status: 429,
+                code: mq.code || 'model_quota_exhausted',
+                group_id: groupInfo.group?.id,
+                headers: {
+                  'x-mrblank-governance': mq.code || 'model_quota_exhausted',
+                  'x-mrblank-group': groupInfo.group?.id || '',
+                  'retry-after': '3600',
+                },
+                body: {
+                  error: {
+                    message: mq.message,
+                    type: 'insufficient_quota',
+                    code: mq.code || 'model_quota_exhausted',
+                    param: 'model',
+                  },
+                  group_id: groupInfo.group?.id,
+                  model: mq.model,
+                  used: mq.used,
+                  limit: mq.limit,
+                  remaining: mq.remaining,
+                },
+              }
+            }
           }
         }
         return {
@@ -1520,7 +1575,8 @@ app.use(
           quota = tokens > 0 ? 1 : 0
         }
         try {
-          groupStore.recordUsage(userId, { quota, requests: 1 })
+          const usageModel = String(requestedModel || model_name || usage?.model || '').trim()
+          groupStore.recordUsage(userId, { quota, requests: 1, model: usageModel })
         } catch (e) {
           console.error('[groups] recordUsage failed', e?.message || e)
         }
@@ -1917,8 +1973,11 @@ app.post(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
     const body = req.body || {}
     const fullKey = `sk-mrblank-${req.auth.user.id}-${randomToken(12)}`
     await addCpaApiKey(cpaCfg, fullKey)
-    const modelLimits =
+    let modelLimits =
       body.model_limits || groupStore.modelLimitsString(groupInfo.group) || ''
+    if (body.model_limits && (groupInfo.group?.model_ids || []).length) {
+      modelLimits = groupStore.effectiveModelAllowlist(groupInfo.group, body.model_limits).join(',')
+    }
     const unlimited = body.unlimited_quota !== false
     const item = userKeyStore.create(req.auth.user.id, {
       name: String(body.name || 'key'),
@@ -2819,6 +2878,77 @@ app.put('/api/admin/groups/members/:userId', requireAdmin, (req, res) => {
     res.json(ok(row))
   } catch (err) {
     res.status(400).json(fail(err?.message || '分配用户组失败'))
+  }
+})
+
+app.put('/api/admin/groups/:id/models', requireAdmin, (req, res) => {
+  try {
+    const group = groupStore.updateGroupModels(req.params.id, {
+      model_ids: req.body?.model_ids,
+      model_quotas: req.body?.model_quotas,
+    })
+    res.json(
+      ok({
+        group,
+        quota_unit: quotaUnitStore.getUnit(),
+        credit_unit: creditUnitInfo(),
+      }),
+    )
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '保存组模型配额失败'))
+  }
+})
+
+/** CPA + Aily merged catalog for admin group-models picker (plaza parity). */
+app.get('/api/admin/groups/model-catalog', requireAdmin, async (_req, res) => {
+  try {
+    let cpaModels = []
+    let cpaErr = null
+    try {
+      cpaModels = await fetchCpaModels(cpaCfg)
+    } catch (err) {
+      cpaErr = err?.message || String(err)
+    }
+    let ailyModels = []
+    try {
+      const rows = await collectAilyPublicModelRows({
+        getRouting: () => ailyModelRouting.get(),
+        getEnvRoutes: () => ailyManager.cfg?.modelRoutes || [],
+        envModelMatches: (m) => ailyManager.modelMatches(m),
+        listAilyModels: () => ailyUpstream.listModels(false),
+      })
+      ailyModels = rows.map((m) => ({
+        id: m.id,
+        name: m.name || stripAilyPrefix(m.id) || m.id,
+        owned_by: 'aily',
+      }))
+    } catch (e) {
+      console.warn('[admin/groups/model-catalog] aily:', e?.message || e)
+    }
+    const byId = new Map()
+    for (const m of cpaModels || []) {
+      const id = String(m?.id || m?.name || '').trim()
+      if (id) byId.set(id, { id, name: m?.name || id, owned_by: m?.owned_by || 'cpa' })
+    }
+    for (const m of ailyModels) {
+      const id = String(m.id || '').trim()
+      if (!id || byId.has(id)) continue
+      byId.set(id, m)
+    }
+    const models = [...byId.values()].sort((a, b) => String(a.id).localeCompare(String(b.id)))
+    res.json(
+      ok({
+        models,
+        cpa_count: (cpaModels || []).length,
+        aily_count: ailyModels.length,
+        source: cpaErr ? (ailyModels.length ? 'aily' : 'error') : ailyModels.length ? 'cpa+aily' : 'cpa',
+        error: cpaErr || null,
+        quota_unit: quotaUnitStore.getUnit(),
+        credit_unit: creditUnitInfo(),
+      }),
+    )
+  } catch (err) {
+    res.status(500).json(fail(err?.message || 'model-catalog failed'))
   }
 })
 
