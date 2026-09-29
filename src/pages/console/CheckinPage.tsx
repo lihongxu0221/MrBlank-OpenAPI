@@ -96,21 +96,27 @@ export function CheckinPage({ path }: { path: string }) {
             <span className="pill">{P('轻量人机验证')}</span>
             <span className="pill">{P('后台自动检查')}</span>
           </div>
-          <button
-            type="button"
-            className="button block soft"
-            disabled={!data?.claimable || busy}
-            onClick={claim}
-          >
-            {data?.stats?.checked_in_today ? P('今日已签到') : P('验证并签到')} →
-          </button>
-          {data?.unavailable_reason ? (
-            <div className="alert-box">{data.unavailable_reason}</div>
-          ) : data?.claimable ? (
-            <div className="alert-box" style={{ opacity: 0.85 }}>
-              {P('签到日界为北京时间零点；额度将记入本站积分钱包。')}
-            </div>
-          ) : null}
+          {data?.stats?.checked_in_today ? (
+            <div className="alert-box">{P('今日已签到')}</div>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="button block soft"
+                disabled={!data?.claimable || busy}
+                onClick={claim}
+              >
+                {P('验证并签到')} →
+              </button>
+              {data?.unavailable_reason ? (
+                <div className="alert-box">{data.unavailable_reason}</div>
+              ) : data?.claimable ? (
+                <div className="alert-box" style={{ opacity: 0.85 }}>
+                  {P('签到日界为北京时间零点；额度将记入本站积分钱包。')}
+                </div>
+              ) : null}
+            </>
+          )}
           <div className="action-foot">
             {qt(P('本月签到 {month} 天 · 累计 {total} 天'), {
               month: data?.stats?.checkin_count ?? 0,

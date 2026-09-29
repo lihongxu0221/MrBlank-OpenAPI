@@ -261,22 +261,27 @@ export function OverviewPage({ path }: { path: string }) {
             </div>
             <span className="pill">{P('每日一份好奇心')}</span>
           </div>
-          <h3>{P('新的一天，新的可能')}</h3>
+          <h3>
+            {checkin?.stats?.checked_in_today ? P('今天的探索额度，已到账') : P('新的一天，新的可能')}
+          </h3>
           <p>{P('完成轻量验证，领取今天的公益额度。')}</p>
           <div className="quota-range">0 {P('点')} — 5 {P('点')}</div>
           <div className="tag-row">
             <span className="pill">{P('轻量人机验证')}</span>
             <span className="pill">{P('后台自动检查')}</span>
           </div>
-          <button type="button" className="button block soft" onClick={() => navigate('/checkin')}>
-            {P('验证并签到')} →
-          </button>
-          <div className="alert-box">
-            {checkin?.unavailable_reason ||
-              (checkin?.claimable
-                ? P('前往签到页领取今日额度（北京时间日界）。')
-                : P('今日社区签到额度已发放完毕，请在北京时间零点后再来'))}
-          </div>
+          {checkin?.stats?.checked_in_today ? (
+            <div className="alert-box">{P('今日已签到')}</div>
+          ) : (
+            <>
+              <button type="button" className="button block soft" onClick={() => navigate('/checkin')}>
+                {P('验证并签到')} →
+              </button>
+              {checkin && !checkin.claimable && checkin.unavailable_reason ? (
+                <div className="alert-box">{checkin.unavailable_reason}</div>
+              ) : null}
+            </>
+          )}
           <div className="action-foot">
             {qt(P('本月签到 {month} 天 · 累计 {total} 天'), {
               month: checkin?.stats?.checkin_count ?? 0,
