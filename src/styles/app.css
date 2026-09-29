@@ -1701,6 +1701,30 @@ table.data tr:last-child td {
   color: var(--bg);
   border-color: var(--ink);
 }
+.channel-view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+}
+.channel-view-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.channel-view-switch button.is-active {
+  background: var(--ink);
+  color: var(--bg);
+}
 .status-legend {
   display: flex;
   flex-wrap: wrap;
@@ -1744,14 +1768,70 @@ table.data tr:last-child td {
   position: relative;
   box-shadow: none;
 }
-.channel-card .health-badge {
-  position: absolute;
-  top: 14px;
-  right: 14px;
+.channel-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  margin-bottom: 14px;
 }
-.channel-card h3 {
-  margin: 0 48px 14px 0;
+.channel-card-heading h3 {
+  min-width: 0;
+  margin: 0;
   font-size: 1.15rem;
+}
+.channel-card-heading .health-badge {
+  flex-shrink: 0;
+}
+.channel-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.channel-list .channel-card {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.1fr) minmax(190px, 1fr) minmax(220px, 1.3fr) minmax(180px, 1fr);
+  gap: 16px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 14px;
+}
+.channel-list .channel-card-heading,
+.channel-list .channel-meta,
+.channel-list .channel-foot {
+  margin-bottom: 0;
+  margin-top: 0;
+}
+.channel-list .history-track {
+  min-width: 0;
+}
+.channel-list .channel-foot {
+  align-items: center;
+}
+.channel-list .channel-foot code {
+  word-break: break-all;
+}
+@media (max-width: 1000px) {
+  .channel-list .channel-card {
+    grid-template-columns: minmax(170px, 1fr) minmax(190px, 1fr);
+  }
+  .channel-list .channel-card-heading { grid-column: 1; }
+  .channel-list .channel-meta { grid-column: 2; }
+  .channel-list .history-track { grid-column: 1 / -1; }
+  .channel-list .channel-foot { grid-column: 1 / -1; }
+}
+@media (max-width: 700px) {
+  .channel-list .channel-card {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .channel-list .channel-card-heading,
+  .channel-list .channel-meta,
+  .channel-list .history-track,
+  .channel-list .channel-foot {
+    grid-column: auto;
+  }
 }
 .channel-meta {
   display: grid;

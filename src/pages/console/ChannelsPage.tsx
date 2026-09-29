@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Clock3, RefreshCw, Sparkles, Zap } from 'lucide-react'
+import { Clock3, LayoutGrid, List, RefreshCw, Sparkles, Zap } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
 import { ConsoleLayout } from './ConsoleLayout'
@@ -21,6 +21,17 @@ type Totals = {
   avg_latency_ms?: number | null
   total_tokens?: number
   total_requests?: number
+}
+
+const VIEW_STORAGE_KEY = 'welfare.console.service-status-view'
+type ViewMode = 'card' | 'list'
+
+function initialViewMode(): ViewMode {
+  try {
+    return localStorage.getItem(VIEW_STORAGE_KEY) === 'list' ? 'list' : 'card'
+  } catch {
+    return 'card'
+  }
 }
 
 const ENDPOINT_META: { title: string; path: string; desc: string }[] = [
@@ -53,6 +64,13 @@ export function ChannelsPage({ path }: { path: string }) {
   const [totals, setTotals] = useState<Totals>({})
   const [endpoints, setEndpoints] = useState<Endpoint[]>([])
   const [overall, setOverall] = useState('unavailable')
+  const [viewMode, setViewMode] = useState<ViewMode>(initialViewMode)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VIEW_STORAGE_KEY, viewMode)
+    } catch {}
+  }, [viewMode])
 
   async function load() {
     setLoading(true)
@@ -150,6 +168,24 @@ export function ChannelsPage({ path }: { path: string }) {
           <button type="button" className="button secondary compact" onClick={load} disabled={loading}>
             <RefreshCw size={14} /> {P('刷新状态')}
           </button>
+          <div className="channel-view-switch" role="group" aria-label={P('视图模式')}>
+            <button
+              type="button"
+              className={viewMode === 'card' ? 'is-active' : ''}
+              aria-pressed={viewMode === 'card'}
+              onClick={() => setViewMode('card')}
+            >
+              <LayoutGrid size={14} /> {P('卡片')}
+            </button>
+            <button
+              type="button"
+              className={viewMode === 'list' ? 'is-active' : ''}
+              aria-pressed={viewMode === 'list'}
+              onClick={() => setViewMode('list')}
+            >
+              <List size={14} /> {P('列表')}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -171,7 +207,7 @@ export function ChannelsPage({ path }: { path: string }) {
       {groups.map((g) => (
         <div key={g.name || 'default'} className="channel-group">
           <div className="eyebrow">MODEL COLLECTION / {g.name || P('默认分组')}</div>
-          <div className="channel-grid">
+          <div className={viewMode === 'list' ? 'channel-list' : 'channel-grid'}>
             {(g.models || []).map((m) => {
               const hist = (m.history || []).slice(0, range === '24h' ? 24 : 7).reverse()
               const avail =
@@ -180,11 +216,16 @@ export function ChannelsPage({ path }: { path: string }) {
                   ? (hist.filter((h) => h.status === 'operational').length / hist.length) * 100
                   : 0)
               return (
-                <article key={m.id} className="channel-card panel">
-                  <div className={`health-badge ${statusClass(m.status)}`}>
-                    ● {statusLabel(m.status)}
+                <article
+                  key={m.id}
+                  className={`channel-card panel ${viewMode === 'list' ? 'channel-card-list' : ''}`}
+                >
+                  <div className="channel-card-heading">
+                    <h3>{m.name || m.id}</h3>
+                    <div className={`health-badge ${statusClass(m.status)}`}>
+                      ● {statusLabel(m.status)}
+                    </div>
                   </div>
-                  <h3>{m.name || m.id}</h3>
                   <div className="channel-meta">
                     <div>
                       <span className="label">{P('最快响应耗时')}</span>
