@@ -2,7 +2,15 @@ import { useCallback, useEffect, useState } from 'react'
 import { CloudDownload, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { formatCredits, getQuotaPerUnit, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
+import {
+  FIXED_USD_TO_RAW,
+  formatCredits,
+  formatRawPerPointCompact,
+  getQuotaPerUnit,
+  parseRawPerPoint,
+  quotaToPoints,
+  setQuotaPerUnit,
+} from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
@@ -66,17 +74,18 @@ function numOrEmpty(v: number | null | undefined): string {
   return String(v)
 }
 
-function rawFromUsd(usd: number, quotaPerUnit: number) {
-  return Math.round((Number(usd) || 0) * (quotaPerUnit || 500000))
+/** Always FIXED 500000 — 1 USD = 0.5M raw (not configurable). */
+function rawFromUsd(usd: number, _ignored?: number) {
+  return Math.round((Number(usd) || 0) * FIXED_USD_TO_RAW)
 }
 
 /** Price-book raw quota → display 点. Raw and display scales may differ. */
 function pointsFromRaw(raw: number, rawPerPoint: number) {
-  return quotaToPoints(Number(raw) || 0, rawPerPoint || 500000)
+  return quotaToPoints(Number(raw) || 0, rawPerPoint || FIXED_USD_TO_RAW)
 }
 
-function pointsFromUsd(usd: number, quotaPerUnit: number, rawPerPoint: number) {
-  return pointsFromRaw(rawFromUsd(usd, quotaPerUnit), rawPerPoint)
+function pointsFromUsd(usd: number, _quotaIgnored: number, rawPerPoint: number) {
+  return pointsFromRaw(rawFromUsd(usd), rawPerPoint)
 }
 
 function formatPoints(value: number) {
@@ -103,9 +112,9 @@ export function AdminModelPricesPage({ path }: { path: string }) {
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [lastSync, setLastSync] = useState<SyncResult | null>(null)
-  const [quotaUnit, setQuotaUnit] = useState(500000)
-  const [rawPerPoint, setRawPerPoint] = useState(500000)
-  const [quotaUnitDraft, setQuotaUnitDraft] = useState('500000')
+  const [quotaUnit, setQuotaUnit] = useState(FIXED_USD_TO_RAW) // kept for setQuotaPerUnit / formatCredits
+  const [rawPerPoint, setRawPerPoint] = useState(FIXED_USD_TO_RAW)
+  const [quotaUnitDraft, setQuotaUnitDraft] = useState(formatRawPerPointCompact(FIXED_USD_TO_RAW))
   const [savingUnit, setSavingUnit] = useState(false)
 
   const load = useCallback(async () => {
@@ -126,7 +135,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
           period: string
           note?: string
         }>(`/api/admin/model-prices/usage-summary?period=${encodeURIComponent(period)}`),
-        api.get<{ quota_per_unit: number; raw_per_point?: number; credit_unit?: { raw_per_point?: number } }>('/api/admin/quota-unit').catch(async () => {
+        api.get<{ quota_per_unit: number; raw_per_point?: number; usd_to_raw?: number; credit_unit?: { raw_per_point?: number } }>('/api/admin/quota-unit').catch(async () => {
           const s = await api.get<{ quota_per_unit: number }>('/api/status', { auth: false })
           return { ...s, raw_per_point: s.quota_per_unit, credit_unit: { raw_per_point: s.quota_per_unit } }
         }),
@@ -135,12 +144,14 @@ export function AdminModelPricesPage({ path }: { path: string }) {
       setRuntime(rt.supported || rt.models || [])
       setCosted(usage)
       if (book.last_sync) setLastSync(book.last_sync)
-      const u = Number(unit.quota_per_unit || book.quota_per_unit) || 500000
-      const rp = Number(unit.raw_per_point || unit.credit_unit?.raw_per_point || u) || 500000
-      setQuotaUnit(u)
+      // quota_per_unit / raw_per_point = configurable N (1 点 = N raw)
+      const rp =
+        Number(unit.raw_per_point || unit.credit_unit?.raw_per_point || unit.quota_per_unit || book.quota_per_unit) ||
+        FIXED_USD_TO_RAW
+      setQuotaUnit(rp)
       setRawPerPoint(rp)
-      setQuotaUnitDraft(String(u))
-      setQuotaPerUnit(u)
+      setQuotaUnitDraft(formatRawPerPointCompact(rp))
+      setQuotaPerUnit(rp)
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -158,22 +169,22 @@ export function AdminModelPricesPage({ path }: { path: string }) {
         if (idx !== i) return p
         const next = { ...p, ...patch, manual: true, source: patch.source ?? p.source ?? 'manual' }
         if ('input_per_mtok' in patch) {
-          next.input_quota_per_mtok = rawFromUsd(Number(next.input_per_mtok) || 0, quotaUnit)
+          next.input_quota_per_mtok = rawFromUsd(Number(next.input_per_mtok) || 0)
         }
         if ('output_per_mtok' in patch) {
-          next.output_quota_per_mtok = rawFromUsd(Number(next.output_per_mtok) || 0, quotaUnit)
+          next.output_quota_per_mtok = rawFromUsd(Number(next.output_per_mtok) || 0)
         }
         if ('cache_read_per_mtok' in patch) {
           next.cache_read_quota_per_mtok =
             next.cache_read_per_mtok == null
               ? null
-              : rawFromUsd(Number(next.cache_read_per_mtok) || 0, quotaUnit)
+              : rawFromUsd(Number(next.cache_read_per_mtok) || 0)
         }
         if ('cache_write_per_mtok' in patch) {
           next.cache_write_quota_per_mtok =
             next.cache_write_per_mtok == null
               ? null
-              : rawFromUsd(Number(next.cache_write_per_mtok) || 0, quotaUnit)
+              : rawFromUsd(Number(next.cache_write_per_mtok) || 0)
         }
         return next
       }),
@@ -207,12 +218,22 @@ export function AdminModelPricesPage({ path }: { path: string }) {
     setSavingUnit(true)
     setErr(null)
     try {
-      const d = await api.put<{ quota_per_unit: number }>('/api/admin/quota-unit', {
-        quota_per_unit: Number(quotaUnitDraft),
-      })
-      setQuotaUnit(d.quota_per_unit)
-      setQuotaUnitDraft(String(d.quota_per_unit))
-      setQuotaPerUnit(d.quota_per_unit)
+      const parsed = parseRawPerPoint(quotaUnitDraft)
+      if (parsed == null) {
+        throw new Error(P('无效换算值（支持数字或 K/M/B，如 0.5M、500K、500000）'))
+      }
+      const d = await api.put<{ quota_per_unit: number; raw_per_point?: number; usd_to_raw?: number }>(
+        '/api/admin/quota-unit',
+        {
+          raw_per_point: parsed,
+          quota_per_unit: parsed,
+        },
+      )
+      const rp = Number(d.raw_per_point || d.quota_per_unit) || parsed
+      setQuotaUnit(rp)
+      setRawPerPoint(rp)
+      setQuotaUnitDraft(formatRawPerPointCompact(rp))
+      setQuotaPerUnit(rp)
       showToast(P('点数换算已保存'))
       await load()
     } catch (e) {
@@ -292,33 +313,41 @@ export function AdminModelPricesPage({ path }: { path: string }) {
       <ConsoleHero
         title={P('模型价格')}
         subtitle={P(
-          '支持模型目录价格表（非 11k 全集）。USD/MTok 与平台点并列；计费按 aily 公式 raw = round(USD × quota_per_unit)。aily/ 继承裸名。',
+          '支持模型目录价格表（非 11k 全集）。USD/MTok 与平台点并列；计费 raw = round(USD × 500000 固定)；展示点 = raw ÷ N。aily/ 继承裸名。',
         )}
       />
 
       <div className="panel" style={{ marginTop: 12 }}>
         <h3 style={{ marginTop: 0 }}>{P('点数 ↔ 内部单位')}</h3>
         <p className="muted" style={{ marginTop: 0 }}>
-          {P('展示点与内部额度单位换算（aily 对齐：默认 1 点 = 1 USD = 500000 内部单位）。价格同步、计费扣减、密钥额度、用户组滚动窗口共用此设置。')}
+          {P(
+            '1 点 = N 内部单位（可配置，支持 0.5M / 500K / 500000）。1 USD = 500000 内部单位（固定）。刷新/同步时按 raw = USD×500000、点 = raw÷N 重算。',
+          )}
         </p>
         <div className="price-book-unit">
           <div className="field">
             <label>{P('1 点 = N 内部单位')}</label>
             <input
               className="field-input"
-              type="number"
-              min={1}
-              step={1}
+              type="text"
+              inputMode="decimal"
+              placeholder="0.5M"
               value={quotaUnitDraft}
               onChange={(e) => setQuotaUnitDraft(e.target.value)}
+              onBlur={() => {
+                const p = parseRawPerPoint(quotaUnitDraft)
+                if (p != null) setQuotaUnitDraft(formatRawPerPointCompact(p))
+              }}
+              aria-label={P('1 点 = N 内部单位')}
             />
           </div>
           <button type="button" className="button compact" onClick={saveQuotaUnit} disabled={savingUnit}>
             <Save size={14} /> {savingUnit ? P('保存中…') : P('保存换算')}
           </button>
           <div className="muted" style={{ fontSize: 13 }}>
-            {P('当前')}：1 {P('点')} = {quotaUnit.toLocaleString('zh-CN')} {P('内部单位')} · 1 USD ={' '}
-            {quotaUnit.toLocaleString('zh-CN')} {P('内部单位')}
+            {P('当前')}：1 {P('点')} = {rawPerPoint.toLocaleString('zh-CN')} {P('内部单位')}（
+            {formatRawPerPointCompact(rawPerPoint)}） · 1 USD = {FIXED_USD_TO_RAW.toLocaleString('zh-CN')}{' '}
+            {P('内部单位')}（0.5M {P('固定')}）
           </div>
         </div>
       </div>
@@ -366,7 +395,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
           {P('新增')} {lastSync.imported ?? 0} · {P('更新')} {lastSync.updated ?? 0}
           {lastSync.failed_sources?.length ? ` · ${P('失败源')} ${lastSync.failed_sources.join(', ')}` : ''}
           {lastSync.quota_per_unit != null
-            ? ` · ${P('换算')} 1=${lastSync.quota_per_unit.toLocaleString('zh-CN')}`
+            ? ` · ${P('点换算')} N=${lastSync.quota_per_unit.toLocaleString('zh-CN')}`
             : ''}
         </p>
       ) : (
@@ -428,7 +457,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
         ) : null}
         <p className="muted" style={{ marginTop: 0 }}>
           {P(
-            '提示：无需为 aily/xxx 单独定价。手动编辑会标记 manual。USD/MTok 旁显示对应平台点（quota = round(USD×N)）。',
+            '提示：无需为 aily/xxx 单独定价。手动编辑会标记 manual。USD/MTok 旁显示对应平台点（raw = round(USD×500000)，点 = raw÷N）。',
           )}
         </p>
         <div className="table-wrap price-book-table">
@@ -467,7 +496,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                   </td>
                   <td>
                     <span className="muted" style={{ fontSize: 12 }}>
-                      {formatPoints(pointsFromRaw(p.input_quota_per_mtok ?? rawFromUsd(p.input_per_mtok, quotaUnit), rawPerPoint))}
+                      {formatPoints(pointsFromRaw(p.input_quota_per_mtok ?? rawFromUsd(p.input_per_mtok), rawPerPoint))}
                     </span>
                   </td>
                   <td>
@@ -481,7 +510,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                   </td>
                   <td>
                     <span className="muted" style={{ fontSize: 12 }}>
-                      {formatPoints(pointsFromRaw(p.output_quota_per_mtok ?? rawFromUsd(p.output_per_mtok, quotaUnit), rawPerPoint))}
+                      {formatPoints(pointsFromRaw(p.output_quota_per_mtok ?? rawFromUsd(p.output_per_mtok), rawPerPoint))}
                     </span>
                   </td>
                   <td>

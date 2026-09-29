@@ -12,7 +12,8 @@
  * Auto-sync: FILTER to supported catalog only (CPA /v1/models + aily when routed).
  * Rebuild automatic portion; preserve manual overrides; remove stale auto rows.
  * Then apply VARIANT_INHERITANCE for unpriced supported aliases/variants.
- * Quota fields use aily formula: quota_per_mtok = round(usd_per_mtok * quota_per_unit).
+ * Quota fields: quota_per_mtok = round(usd_per_mtok * FIXED_USD_TO_RAW) (1 USD = 500000 raw, fixed).
+ * Display 点 = raw / N where N = raw_per_point (configurable).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -21,6 +22,7 @@ import { fetchOfficialPrices } from './modelPriceSync.js'
 import { applyVariantInheritance, VARIANT_INHERITANCE } from './modelPriceInheritance.js'
 import {
   DEFAULT_QUOTA_PER_UNIT,
+  FIXED_USD_TO_RAW,
   dollarsToQuota,
   quotaToPoints,
   usdPerMtokToQuotaPerMtok,
@@ -62,18 +64,18 @@ function optionalNonNeg(raw) {
   return n
 }
 
-function attachQuotaFields(row, unit = DEFAULT_QUOTA_PER_UNIT) {
+function attachQuotaFields(row, _unitIgnored) {
   if (!row) return row
-  const u = Number(unit) > 0 ? Number(unit) : DEFAULT_QUOTA_PER_UNIT
-  row.input_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.input_per_mtok, u)
-  row.output_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.output_per_mtok, u)
+  // Always FIXED_USD_TO_RAW — N (raw_per_point) only affects display points, not stored raw.
+  row.input_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.input_per_mtok)
+  row.output_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.output_per_mtok)
   if (row.cache_read_per_mtok != null) {
-    row.cache_read_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.cache_read_per_mtok, u)
+    row.cache_read_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.cache_read_per_mtok)
   } else {
     delete row.cache_read_quota_per_mtok
   }
   if (row.cache_write_per_mtok != null) {
-    row.cache_write_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.cache_write_per_mtok, u)
+    row.cache_write_quota_per_mtok = usdPerMtokToQuotaPerMtok(row.cache_write_per_mtok)
   } else {
     delete row.cache_write_quota_per_mtok
   }
@@ -165,8 +167,8 @@ function costForTokens(price, promptTokens, completionTokens, opts = {}) {
  */
 function quotaForTokens(price, promptTokens, completionTokens, opts = {}) {
   const usd = costForTokens(price, promptTokens, completionTokens, opts)
-  const unit = opts.quotaUnit != null ? Number(opts.quotaUnit) : DEFAULT_QUOTA_PER_UNIT
-  return dollarsToQuota(usd, unit)
+  // USD → raw always FIXED; opts.quotaUnit ignored for billing raw
+  return dollarsToQuota(usd)
 }
 
 /** Normalize supported catalog ids to bare keys used in the price book. */
@@ -192,33 +194,38 @@ export function createModelPricesStore(filePath, deps = {}) {
   let syncTimer = null
   let syncInFlight = false
 
-  const resolveUnit = () => {
+  /** Configurable N: 1 点 = N raw (display only). USD→raw always FIXED_USD_TO_RAW. */
+  const resolveRawPerPoint = () => {
     if (typeof deps.getQuotaUnit === 'function') {
       const n = Number(deps.getQuotaUnit())
       if (Number.isFinite(n) && n > 0) return n
     }
     return DEFAULT_QUOTA_PER_UNIT
   }
+  const resolveUnit = resolveRawPerPoint
 
   function persist() {
     store.updated_at = new Date().toISOString()
     writeStore(filePath, store)
   }
 
-  function recomputeQuotaFields(unit = resolveUnit()) {
-    store.prices = store.prices.map((p) => attachQuotaFields({ ...p }, unit))
+  function recomputeQuotaFields(_unitIgnored) {
+    // Recalc raw from stored USD with FIXED 500000; N only affects display getters.
+    store.prices = store.prices.map((p) => attachQuotaFields({ ...p }))
     persist()
     return getPrices()
   }
 
   function getPrices() {
-    const unit = resolveUnit()
+    const rawPerPoint = resolveRawPerPoint()
     return {
       updated_at: store.updated_at,
       last_sync: store.last_sync || null,
-      prices: store.prices.map((p) => attachQuotaFields({ ...p }, unit)),
+      prices: store.prices.map((p) => attachQuotaFields({ ...p })),
       path: filePath,
-      quota_per_unit: unit,
+      quota_per_unit: rawPerPoint,
+      raw_per_point: rawPerPoint,
+      usd_to_raw: FIXED_USD_TO_RAW,
     }
   }
 
@@ -426,7 +433,9 @@ export function createModelPricesStore(filePath, deps = {}) {
         priced_manual,
         unpriced_count: unpriced,
         matched_from_sources: matchedSupported.size,
-        quota_per_unit: unit,
+        quota_per_unit: resolveRawPerPoint(),
+        raw_per_point: resolveRawPerPoint(),
+        usd_to_raw: FIXED_USD_TO_RAW,
         inherited_count: inheritance.inherited_count,
         inheritance_missed_count: inheritance.inheritance_missed_count,
         inherited: inheritance.inherited,
@@ -449,7 +458,7 @@ export function createModelPricesStore(filePath, deps = {}) {
       typeof siteUsage.activityByModel === 'function'
         ? siteUsage.activityByModel({ period })
         : []
-    const unit = resolveUnit()
+    const rawPerPoint = resolveRawPerPoint()
     let totalCost = 0
     let totalQuota = 0
     const rows = byModel.map((row) => {
@@ -465,7 +474,7 @@ export function createModelPricesStore(filePath, deps = {}) {
         cacheReadTokens: cacheRead,
         cacheWriteTokens: cacheWrite,
       })
-      const quota = dollarsToQuota(cost, unit)
+      const quota = dollarsToQuota(cost) // FIXED 500000
       totalCost += cost
       totalQuota += quota
       const resolvedVia =
@@ -488,7 +497,7 @@ export function createModelPricesStore(filePath, deps = {}) {
         currency: price?.currency || 'USD',
         cost: Math.round(cost * 1e6) / 1e6,
         quota_raw: quota,
-        quota_points: quota / unit,
+        quota_points: quotaToPoints(quota, rawPerPoint),
         priced: !!price,
         price_model: price?.model || null,
         resolved_via: resolvedVia,
@@ -498,13 +507,15 @@ export function createModelPricesStore(filePath, deps = {}) {
       period,
       total_cost: Math.round(totalCost * 1e6) / 1e6,
       total_quota_raw: totalQuota,
-      total_quota_points: totalQuota / unit,
+      total_quota_points: quotaToPoints(totalQuota, rawPerPoint),
       currency: 'USD',
-      quota_per_unit: unit,
+      quota_per_unit: rawPerPoint,
+      raw_per_point: rawPerPoint,
+      usd_to_raw: FIXED_USD_TO_RAW,
       by_model: rows.sort((a, b) => b.cost - a.cost || b.tokens - a.tokens),
       priced_models: store.prices.length,
       note:
-        'Cost = site-usage tokens × local price book (per MTok). Raw quota = round(USD × quota_per_unit). Cache-read tokens billed at cache_read_per_mtok when present. aily/{model} inherits bare {model} price. Unpriced models show cost 0.',
+        'Cost = site-usage tokens × local price book (per MTok). Raw = round(USD × 500000 fixed). Points = raw ÷ raw_per_point. Cache-read tokens billed at cache_read_per_mtok when present. aily/{model} inherits bare {model} price. Unpriced models show cost 0.',
     }
   }
 
@@ -562,22 +573,20 @@ export function createModelPricesStore(filePath, deps = {}) {
 
   /**
    * Console 模型广场 display fields: points per MTok from price book.
-   * Same conversion as admin: points = raw_quota_per_mtok / raw_per_point
-   * (raw_per_point === quota_per_unit under aily parity; default 500000 → 1 USD ≈ 1 点).
+   * raw = round(usd × FIXED_USD_TO_RAW); points = raw / raw_per_point (N).
    * Returns null when model has no price-book row.
    */
   function plazaPriceFields(modelId) {
     const price = lookupPrice(modelId)
     if (!price) return null
-    const unit = resolveUnit()
-    // Re-attach with live unit — never trust stale quota fields (readStore used to
-    // pass Array.map index as unit and corrupt input_quota_per_mtok).
-    const fresh = attachQuotaFields({ ...price }, unit)
+    const rawPerPoint = resolveRawPerPoint()
+    // Re-attach with FIXED USD→raw — never trust stale quota fields.
+    const fresh = attachQuotaFields({ ...price })
     const inRaw = Number(fresh.input_quota_per_mtok) || 0
     const outRaw = Number(fresh.output_quota_per_mtok) || 0
     return {
-      text_price: quotaToPoints(inRaw, unit),
-      text_out_price: quotaToPoints(outRaw, unit),
+      text_price: quotaToPoints(inRaw, rawPerPoint),
+      text_out_price: quotaToPoints(outRaw, rawPerPoint),
       input_per_mtok: Number(fresh.input_per_mtok) || 0,
       output_per_mtok: Number(fresh.output_per_mtok) || 0,
       input_quota_per_mtok: inRaw,
@@ -596,7 +605,7 @@ export function createModelPricesStore(filePath, deps = {}) {
     plazaPriceFields,
     costForTokens,
     quotaForTokens: (price, prompt, completion, opts = {}) =>
-      quotaForTokens(price, prompt, completion, { ...opts, quotaUnit: resolveUnit() }),
+      quotaForTokens(price, prompt, completion, opts),
     isProtectedManual,
     recomputeQuotaFields,
     startScheduledSync,
@@ -634,6 +643,7 @@ export {
   bareSupportedSet,
   dollarsToQuota,
   usdPerMtokToQuotaPerMtok,
+  FIXED_USD_TO_RAW,
   VARIANT_INHERITANCE,
   applyVariantInheritance,
 }

@@ -260,5 +260,11 @@
   "无限点数": "Unlimited points",
   "剩余点数": "Points remaining",
   "模型列表来自 CPA + 本站 Aily（若已配置路由/凭证），经本站服务端合并。同名时 CPA 用原名，Aily 用 aily/ 前缀（如 aily/glm-5.3）。消耗标准（点）来自本站模型价格簿（raw÷raw_per_point，默认 50 万 → 约 1 USD = 1 点 / MTok）；— 表示暂未定价。": "Model list merges CPA + site Aily (when routing/credentials are configured). On name clash CPA keeps the bare id; Aily uses the aily/ prefix (e.g. aily/glm-5.3). Consumption points come from the site price book (raw ÷ raw_per_point; default 500k → ≈ 1 USD = 1 point / MTok); — means unpriced.",
-  "消耗标准（点）": "Rate (points)"
+  "消耗标准（点）": "Rate (points)",
+  "固定": "fixed",
+  "点换算": "point mapping",
+  "无效换算值（支持数字或 K/M/B，如 0.5M、500K、500000）": "Invalid mapping (use a number or K/M/B, e.g. 0.5M, 500K, 500000)",
+  "支持模型目录价格表（非 11k 全集）。USD/MTok 与平台点并列；计费 raw = round(USD × 500000 固定)；展示点 = raw ÷ N。aily/ 继承裸名。": "Supported-catalog price book (not the 11k universe). USD/MTok alongside platform points; billing raw = round(USD × 500000 fixed); display points = raw ÷ N. aily/ inherits bare id.",
+  "1 点 = N 内部单位（可配置，支持 0.5M / 500K / 500000）。1 USD = 500000 内部单位（固定）。刷新/同步时按 raw = USD×500000、点 = raw÷N 重算。": "1 point = N raw units (configurable; 0.5M / 500K / 500000 OK). 1 USD = 500000 raw (fixed). Refresh/sync recalculate raw = USD×500000, points = raw÷N.",
+  "提示：无需为 aily/xxx 单独定价。手动编辑会标记 manual。USD/MTok 旁显示对应平台点（raw = round(USD×500000)，点 = raw÷N）。": "Tip: no need to price aily/xxx separately. Manual edits mark manual. Points beside USD/MTok use raw = round(USD×500000), points = raw÷N."
 }

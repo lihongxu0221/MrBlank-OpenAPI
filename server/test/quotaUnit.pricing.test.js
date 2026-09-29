@@ -8,8 +8,12 @@ import {
   dollarsToQuota,
   quotaToDollars,
   pointsToQuota,
+  quotaToPoints,
   usdPerMtokToQuotaPerMtok,
+  parseRawPerPoint,
+  formatRawPerPointCompact,
   DEFAULT_QUOTA_PER_UNIT,
+  FIXED_USD_TO_RAW,
 } from '../quotaUnit.js'
 import {
   createModelPricesStore,
@@ -32,19 +36,53 @@ test('aily formula: dollars↔quota and usd/mtok→quota_per_mtok', () => {
   assert.equal(Math.round(0.000001 * 500000), 1)
 })
 
-test('quota unit store persists and drives conversion', () => {
+test('quota unit store persists N; USD→raw stays FIXED 500000', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qu-'))
   const store = createQuotaUnitStore(path.join(dir, 'quota-unit.json'))
   assert.equal(store.getUnit(), 500_000)
+  assert.equal(FIXED_USD_TO_RAW, 500_000)
   store.setUnit(100_000)
   assert.equal(store.getUnit(), 100_000)
-  assert.equal(store.dollarsToQuota(1), 100_000)
+  // USD → raw always FIXED regardless of N
+  assert.equal(store.dollarsToQuota(1), 500_000)
+  assert.equal(store.usdPerMtokToQuotaPerMtok(3), 1_500_000)
+  // points use N
+  assert.equal(store.quotaToPoints(500_000), 5) // 500000/100000
+  assert.equal(store.pointsToQuota(2), 200_000)
   assert.equal(store.creditUnitInfo().raw_per_point, 100_000)
+  assert.equal(store.creditUnitInfo().usd_to_raw, 500_000)
+  assert.equal(store.get().usd_to_raw, 500_000)
+  // B/M/K parse on setUnit
+  store.setUnit('0.5M')
+  assert.equal(store.getUnit(), 500_000)
+  store.setUnit('500K')
+  assert.equal(store.getUnit(), 500_000)
+  store.setUnit('1B')
+  assert.equal(store.getUnit(), 1_000_000_000)
+  assert.throws(() => store.setUnit('nope'), /raw_per_point/)
   // reload
   const store2 = createQuotaUnitStore(path.join(dir, 'quota-unit.json'))
-  assert.equal(store2.getUnit(), 100_000)
-  store2.setUnit(500_000) // restore default for other tests sharing nothing
+  assert.equal(store2.getUnit(), 1_000_000_000)
+  store2.setUnit(500_000)
   fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('parseRawPerPoint accepts B/M/K and plain numbers; rejects invalid', () => {
+  assert.equal(parseRawPerPoint('0.5M'), 500_000)
+  assert.equal(parseRawPerPoint('0.5m'), 500_000)
+  assert.equal(parseRawPerPoint('500K'), 500_000)
+  assert.equal(parseRawPerPoint('500k'), 500_000)
+  assert.equal(parseRawPerPoint('1B'), 1_000_000_000)
+  assert.equal(parseRawPerPoint('500000'), 500_000)
+  assert.equal(parseRawPerPoint(500_000), 500_000)
+  assert.equal(parseRawPerPoint('1.25M'), 1_250_000)
+  assert.equal(parseRawPerPoint(''), null)
+  assert.equal(parseRawPerPoint('abc'), null)
+  assert.equal(parseRawPerPoint('-1'), null)
+  assert.equal(parseRawPerPoint('0'), null)
+  assert.equal(formatRawPerPointCompact(500_000), '0.5M')
+  assert.equal(formatRawPerPointCompact(1_000_000_000), '1B')
+  assert.equal(formatRawPerPointCompact(5_000), '5K')
 })
 
 test('costForTokens → quotaForTokens uses unit', () => {
@@ -58,7 +96,8 @@ test('costForTokens → quotaForTokens uses unit', () => {
   const usd = costForTokens(price, 1_000_000, 1_000_000)
   assert.equal(usd, 3)
   assert.equal(quotaForTokens(price, 1_000_000, 1_000_000), 1_500_000)
-  assert.equal(quotaForTokens(price, 1_000_000, 1_000_000, { quotaUnit: 100_000 }), 300_000)
+  // quotaUnit opt ignored for USD→raw (always FIXED 500000)
+  assert.equal(quotaForTokens(price, 1_000_000, 1_000_000, { quotaUnit: 100_000 }), 1_500_000)
   // cache: 500k cached @0.1 + 500k uncached @1 + 0 out = 0.05+0.5 = 0.55 → 275000
   const usd2 = costForTokens(price, 1_000_000, 0, { cacheReadTokens: 500_000 })
   assert.ok(Math.abs(usd2 - 0.55) < 1e-9)
@@ -96,11 +135,15 @@ test('syncOfficial filters to supported; removes stale auto; attaches quota fiel
   assert.equal(grok.input_quota_per_mtok, Math.round(0.25 * 500_000))
   assert.equal(prices.lookupPrice('aily/glm-5.3')?.input_per_mtok, 1)
 
-  // unit change recomputes quota fields
+  // N change does NOT alter raw quota fields (USD→raw fixed); display points use new N
   unit = 100_000
   prices.recomputeQuotaFields()
   const grok2 = prices.getPrices().prices.find((p) => p.model === 'grok-4.7')
-  assert.equal(grok2.input_quota_per_mtok, Math.round(0.25 * 100_000))
+  assert.equal(grok2.input_quota_per_mtok, Math.round(0.25 * 500_000))
+  assert.equal(prices.getPrices().usd_to_raw, 500_000)
+  assert.equal(prices.getPrices().raw_per_point, 100_000)
+  // plaza: raw 125000 / N 100000 = 1.25 points
+  assert.equal(prices.plazaPriceFields('grok-4.7').text_price, 1.25)
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
@@ -186,12 +229,13 @@ test('plazaPriceFields returns points per MTok matching admin conversion', () =>
 
   assert.equal(prices.plazaPriceFields('no-such-model'), null)
 
-  // custom raw_per_point (= quota_per_unit): $3 → 3*100000 raw → 3 points still when unit matches
+  // custom N: raw stays usd×500000; points = raw/N → $3 → 1.5M raw → 15 points at N=100000
   unitStore.setUnit(100_000)
-  prices.recomputeQuotaFields(100_000)
+  prices.recomputeQuotaFields()
   const grok2 = prices.plazaPriceFields('grok-4')
-  assert.equal(grok2.text_price, 3)
-  assert.equal(grok2.input_quota_per_mtok, 300_000)
+  assert.equal(grok2.input_quota_per_mtok, 1_500_000)
+  assert.equal(grok2.text_price, 15)
+  assert.equal(grok2.text_out_price, 75)
 
   fs.rmSync(dir, { recursive: true, force: true })
 })

@@ -8,8 +8,9 @@ export function getQuotaPerUnit() {
   return quotaPerUnit
 }
 
-/** Default aily / new-api: $1 = 1 点 = 500000 raw (overridden at runtime via /api/status). */
+/** Fixed: 1 USD = 500000 raw (Blank Li rule — not configurable). */
 export const QUOTA_PER_USD = 500_000
+export const FIXED_USD_TO_RAW = 500_000
 
 export function formatCredits(raw: number, unit = quotaPerUnit): string {
   const credits = raw / unit
@@ -36,21 +37,68 @@ export function fmtUsd(n: number) {
   )
 }
 
-export function quotaToUsd(q: number, unit = quotaPerUnit) {
-  return (Number(q) || 0) / (unit || QUOTA_PER_USD)
+/** Raw → USD (always FIXED 500000). */
+export function quotaToUsd(q: number, _unitIgnored?: number) {
+  return (Number(q) || 0) / FIXED_USD_TO_RAW
 }
 
-export function usdToQuota(usd: number, unit = quotaPerUnit) {
-  return Math.round((Number(usd) || 0) * (unit || QUOTA_PER_USD))
+/** USD → raw (always FIXED 500000). */
+export function usdToQuota(usd: number, _unitIgnored?: number) {
+  return Math.round((Number(usd) || 0) * FIXED_USD_TO_RAW)
 }
 
-/** Display 点 → raw (same N as USD under aily parity). */
+/** Display 点 → raw = round(points × N). */
 export function pointsToQuota(points: number, unit = quotaPerUnit) {
-  return usdToQuota(points, unit)
+  return Math.round((Number(points) || 0) * (unit || FIXED_USD_TO_RAW))
 }
 
+/** Raw → display 点 = raw / N. */
 export function quotaToPoints(q: number, unit = quotaPerUnit) {
-  return quotaToUsd(q, unit)
+  return (Number(q) || 0) / (unit || FIXED_USD_TO_RAW)
+}
+
+/**
+ * Parse 「1 点 = N」 input: plain number or B/M/K suffix (case-insensitive).
+ * 0.5M = 500000, 500K = 500000, 1B = 1000000000. Returns null if invalid.
+ */
+export function parseRawPerPoint(input: unknown): number | null {
+  if (typeof input === 'number') {
+    if (!Number.isFinite(input) || input < 1 || input > 1e12) return null
+    return Math.round(input)
+  }
+  const s = String(input ?? '')
+    .trim()
+    .replace(/,/g, '')
+    .replace(/_/g, '')
+  if (!s) return null
+  const m = s.match(/^([+-]?\d+(?:\.\d+)?)\s*([kKmMbB])?$/)
+  if (!m) return null
+  let n = Number(m[1])
+  if (!Number.isFinite(n) || n <= 0) return null
+  const suf = (m[2] || '').toUpperCase()
+  if (suf === 'K') n *= 1e3
+  else if (suf === 'M') n *= 1e6
+  else if (suf === 'B') n *= 1e9
+  if (!Number.isFinite(n) || n < 1 || n > 1e12) return null
+  return Math.round(n)
+}
+
+/** Compact form for N: 500000 → "0.5M", 1e9 → "1B", 5000 → "5K". */
+export function formatRawPerPointCompact(n: number): string {
+  const v = Math.round(Number(n) || FIXED_USD_TO_RAW)
+  if (v >= 1e9 && v % 1e9 === 0) return `${v / 1e9}B`
+  if (v >= 1e5) {
+    const m = v / 1e6
+    const rounded = Math.round(m * 1000) / 1000
+    if (Math.abs(rounded * 1e6 - v) < 0.5) {
+      const s = String(rounded)
+        .replace(/(\.\d*?)0+$/, '$1')
+        .replace(/\.$/, '')
+      return `${s}M`
+    }
+  }
+  if (v >= 1e3 && v % 1e3 === 0) return `${v / 1e3}K`
+  return String(v)
 }
 
 export function stName(s: number) {

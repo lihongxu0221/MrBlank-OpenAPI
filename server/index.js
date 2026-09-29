@@ -1026,7 +1026,7 @@ async function buildPool() {
 
 function publicHandlers() {
   return {
-    status: () => ok({ quota_per_unit: quotaUnitStore.getUnit(), credit_unit: creditUnitInfo() }),
+    status: () => ok({ quota_per_unit: quotaUnitStore.getUnit(), raw_per_point: quotaUnitStore.getUnit(), usd_to_raw: 500_000, credit_unit: creditUnitInfo() }),
     config: () =>
       ok({
         loginEnabled: true,
@@ -1997,6 +1997,8 @@ app.get('/api/token/options', requireAuth, async (req, res) => {
         cpa_count: (cpaModels || []).length,
         priced_count,
         quota_per_unit: quotaUnitStore.getUnit(),
+        raw_per_point: quotaUnitStore.getUnit(),
+        usd_to_raw: 500_000,
         filtered: !!(groupInfo.group?.model_ids || []).length,
       }),
     )
@@ -4421,10 +4423,12 @@ app.get('/api/admin/quota-unit', requireAdmin, (_req, res) => {
 app.put('/api/admin/quota-unit', requireAdmin, (req, res) => {
   try {
     const body = req.body || {}
-    const next = body.quota_per_unit ?? body.raw_per_point ?? body.value
+    // N only (1 点 = N raw). Accepts number or B/M/K string. USD→raw stays FIXED 500000.
+    const next = body.raw_per_point ?? body.quota_per_unit ?? body.value
     const data = quotaUnitStore.setUnit(next)
     try {
-      modelPrices.recomputeQuotaFields(data.quota_per_unit)
+      // Re-attach raw from stored USD with FIXED 500000 (N change does not alter raw rates).
+      modelPrices.recomputeQuotaFields()
     } catch (e) {
       console.warn('[quota-unit] recompute price quota fields:', e?.message || e)
     }
