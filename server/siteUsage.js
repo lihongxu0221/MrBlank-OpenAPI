@@ -621,7 +621,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
       ? new Set([...allow.values()].map((m) => String(m.userId || '')).filter(Boolean))
       : null
 
-    /** @type {Map<string, { calls: number, success: number, tokens: number, userId: string|null }>} */
+    /** @type {Map<string, { calls: number, success: number, tokens: number, rawQuota: number, userId: string|null }>} */
     const byKey = new Map()
     for (const e of eventsInPeriod(period)) {
       const h = e.keyHash
@@ -633,12 +633,14 @@ export function createSiteUsageStore(filePath, opts = {}) {
       const key = h || `user:${e.userId || 'unknown'}`
       let row = byKey.get(key)
       if (!row) {
-        row = { calls: 0, success: 0, tokens: 0, userId: e.userId }
+        row = { calls: 0, success: 0, tokens: 0, rawQuota: 0, userId: e.userId }
         byKey.set(key, row)
       }
       row.calls += 1
       if (e.success) row.success += 1
       row.tokens += Number(e.tokens) || 0
+      // 点数 = rawQuota (internal units); callers convert via raw÷raw_per_point for display.
+      row.rawQuota += Number(e.rawQuota ?? e.quota) || 0
       if (!row.userId && e.userId) row.userId = e.userId
     }
 
@@ -663,7 +665,9 @@ export function createSiteUsageStore(filePath, opts = {}) {
         name,
         mapped: !!display,
         calls: stats.success || stats.calls,
-        credits: stats.tokens,
+        // Raw quota units (not LLM tokens). Display 点 = credits / raw_per_point.
+        credits: stats.rawQuota,
+        tokens: stats.tokens,
       }
     })
 

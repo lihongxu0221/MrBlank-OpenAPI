@@ -933,7 +933,18 @@ function enrichHashToUserMap(hashMap) {
 async function buildLeaderboard(period = 'today', sort = 'credits', p = 1) {
   try {
     const hashMap = enrichHashToUserMap(userKeyStore.hashToUserMap())
-    const ranked = siteUsage.leaderboard({ period, sort, hashToUser: hashMap })
+    const rankedRaw = siteUsage.leaderboard({ period, sort, hashToUser: hashMap })
+    // siteUsage.credits is raw quota; API 点数 = raw ÷ raw_per_point (N).
+    const ranked = rankedRaw.map((r) => {
+      const raw = Number(r.credits) || 0
+      const points = quotaUnitStore.quotaToPoints(raw)
+      let credits = 0
+      if (Number.isFinite(points)) {
+        if (Math.abs(points - Math.round(points)) < 1e-9) credits = Math.round(points)
+        else credits = points < 10 ? Math.round(points * 100) / 100 : Math.round(points * 10) / 10
+      }
+      return { ...r, credits }
+    })
     const mapped = ranked.filter((r) => r.mapped).length
     const pageSize = 10
     const pageNum = Math.max(1, Number(p) || 1)
