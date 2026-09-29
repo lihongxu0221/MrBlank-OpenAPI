@@ -2047,6 +2047,8 @@ app.put(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
   }
 })
 
+// Console「已接入模型」(Overview → /models) + 模型广场: CPA+Aily merge then groupStore.filterModels
+// (empty model_ids = all; non-empty = allowlist). Same rules as GET /v1/models (v1Proxy.filterModelsBody).
 app.get('/api/token/options', requireAuth, async (req, res) => {
   try {
     const groupInfo = resolveAuthGroup(req)
