@@ -102,6 +102,13 @@ import {
 } from './cpampQuota.js'
 import { normalizeAuthFileModels, parseExcludedModels } from './credModels.js'
 import { convertPasteToAuthFiles } from './authFileConvert.js'
+import {
+  fetchCpaConfigYamlRaw,
+  prepareAndPutConfigYaml,
+  buildMaskedConfigPayload,
+  isConfigYamlWriteEnabled,
+  parseConfigYaml,
+} from './configYaml.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -3332,6 +3339,7 @@ app.get('/api/admin/config', requireAdmin, async (_req, res) => {
     } catch {
       requestLog = null
     }
+    const yamlWrite = isConfigYamlWriteEnabled()
     res.json(
       ok({
         config: sanitizeConfig(raw || {}),
@@ -3340,12 +3348,47 @@ app.get('/api/admin/config', requireAdmin, async (_req, res) => {
         writable: {
           request_log: true,
           openai_compatibility: true,
-          note: 'Full config PUT / config.yaml write is not exposed; use /api/admin/settings field endpoints + providers + openai-compatibility.',
+          config_yaml: yamlWrite,
+          note: yamlWrite
+            ? 'Protected config.yaml GET/PUT via /api/admin/config.yaml (auto-backup, reject empty/{}). Field endpoints remain for known settings.'
+            : 'config.yaml write disabled (CONFIG_YAML_WRITE_ENABLED). Use field endpoints + providers + openai-compatibility.',
         },
       }),
     )
   } catch (err) {
     res.status(502).json(fail(err?.message || 'config failed'))
+  }
+})
+
+app.get('/api/admin/config.yaml', requireAdmin, async (_req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const rawText = await fetchCpaConfigYamlRaw(cpaCfg)
+    const payload = buildMaskedConfigPayload(rawText)
+    payload.write_enabled = isConfigYamlWriteEnabled()
+    payload.source = 'cpa:/v0/management/config.yaml'
+    res.json(ok(payload))
+  } catch (err) {
+    const status = err?.status && Number.isFinite(err.status) ? err.status : 502
+    res.status(status).json(fail(err?.message || 'config.yaml get failed'))
+  }
+})
+
+app.put('/api/admin/config.yaml', requireAdmin, async (req, res) => {
+  try {
+    if (!cpaCfg.managementKey) {
+      res.status(503).json(fail('CPA Management Key 未配置'))
+      return
+    }
+    const result = await prepareAndPutConfigYaml(cpaCfg, req.body || {})
+    result.source = 'cpa:/v0/management/config.yaml'
+    res.json(ok(result))
+  } catch (err) {
+    const status = err?.status && Number.isFinite(err.status) ? err.status : 502
+    res.status(status).json(fail(err?.message || 'config.yaml put failed'))
   }
 })
 

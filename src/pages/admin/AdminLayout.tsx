@@ -1,7 +1,6 @@
 import { useEffect, type ReactNode } from 'react'
 import {
   Activity,
-  Cable,
   KeyRound,
   LayoutDashboard,
   Shield,
@@ -10,8 +9,6 @@ import {
   UserRound,
   Gift,
   Settings,
-  Blocks,
-  SlidersHorizontal,
   KeySquare,
   LogIn,
   FileText,
@@ -25,7 +22,7 @@ import { useSession } from '../../hooks/useStore'
 
 const ITEMS = [
   { path: '/admin', label: '管理概览', icon: LayoutDashboard },
-  { path: '/admin/settings', label: '基础设置', icon: SlidersHorizontal },
+  { path: '/admin/config', label: '配置面板', icon: Settings },
   { path: '/admin/oauth', label: 'OAuth 登录', icon: LogIn },
   { path: '/admin/accounts', label: '凭证管理', icon: KeyRound },
   { path: '/admin/providers', label: 'AI 提供商', icon: KeySquare },
@@ -33,11 +30,7 @@ const ITEMS = [
   { path: '/admin/monitoring', label: '请求监控', icon: LineChart },
   { path: '/admin/codex-inspection', label: 'Codex 巡检', icon: ScanSearch },
   { path: '/admin/model-prices', label: '模型价格', icon: DollarSign },
-  { path: '/admin/keys', label: 'CPA 密钥', icon: KeyRound },
   { path: '/admin/usage', label: '用量监控', icon: Activity },
-  { path: '/admin/connection', label: '连接状态', icon: Cable },
-  { path: '/admin/config', label: 'CPA 配置', icon: Settings },
-  { path: '/admin/compat', label: 'OpenAI 兼容', icon: Blocks },
   { path: '/admin/constellation', label: '模型星座', icon: Sparkles },
   { path: '/admin/groups', label: '用户组', icon: UserCog },
   { path: '/admin/credits', label: '签到兑换', icon: Gift },

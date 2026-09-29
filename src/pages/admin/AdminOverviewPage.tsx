@@ -122,7 +122,7 @@ export function AdminOverviewPage({ path }: { path: string }) {
           <button type="button" className="button secondary compact" onClick={() => navigateWithQuery('/admin/accounts', { tab: 'health' })}>
             <Users size={14} /> {P('认证异常')}
           </button>
-          <button type="button" className="button secondary compact" onClick={() => navigate('/admin/connection')}>
+          <button type="button" className="button secondary compact" onClick={() => navigate('/admin/config?tab=connection')}>
             <Cable size={14} /> {P('连接状态')}
           </button>
         </div>

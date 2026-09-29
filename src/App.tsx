@@ -20,17 +20,13 @@ import { ModelsPage } from './pages/console/ModelsPage'
 import { ChannelsPage } from './pages/console/ChannelsPage'
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage'
 import { AdminAccountsPage } from './pages/admin/AdminAccountsPage'
-import { AdminKeysPage } from './pages/admin/AdminKeysPage'
 import { AdminUsagePage } from './pages/admin/AdminUsagePage'
-import { AdminConnectionPage } from './pages/admin/AdminConnectionPage'
 import { AdminConstellationPage } from './pages/admin/AdminConstellationPage'
 import { AdminGroupsPage } from './pages/admin/AdminGroupsPage'
 import { AdminUsersPage } from './pages/admin/AdminUsersPage'
 import { AdminAilyPage } from './pages/admin/AdminAilyPage'
 import { AdminCreditsPage } from './pages/admin/AdminCreditsPage'
 import { AdminConfigPage } from './pages/admin/AdminConfigPage'
-import { AdminCompatPage } from './pages/admin/AdminCompatPage'
-import { AdminSettingsPage } from './pages/admin/AdminSettingsPage'
 import { AdminProvidersPage } from './pages/admin/AdminProvidersPage'
 import { AdminOauthPage } from './pages/admin/AdminOauthPage'
 import { AdminLogsPage } from './pages/admin/AdminLogsPage'
@@ -114,25 +110,25 @@ export default function App() {
       page = <AdminAccountsPage path={path} />
       break
     case '/admin/keys':
-      page = <AdminKeysPage path={path} />
+      page = <LegacyAdminRedirect to="/admin/config?tab=visual" />
       break
     case '/admin/usage':
       page = <AdminUsagePage path={path} />
       break
     case '/admin/connection':
-      page = <AdminConnectionPage path={path} />
+      page = <LegacyAdminRedirect to="/admin/config?tab=connection" />
       break
     case '/admin/config':
       page = <AdminConfigPage path={path} />
       break
     case '/admin/compat':
-      page = <AdminCompatPage path={path} />
+      page = <LegacyAdminRedirect to="/admin/providers?tab=openai-compatibility" />
       break
     case '/admin/request-log':
-      page = <LegacyAdminRedirect to="/admin/settings" />
+      page = <LegacyAdminRedirect to="/admin/config" />
       break
     case '/admin/settings':
-      page = <AdminSettingsPage path={path} />
+      page = <LegacyAdminRedirect to="/admin/config" />
       break
     case '/admin/providers':
       page = <AdminProvidersPage path={path} />

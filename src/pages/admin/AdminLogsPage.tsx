@@ -44,7 +44,7 @@ export function AdminLogsPage({ path }: { path: string }) {
           <RefreshCw size={14} /> {P('刷新')}
         </button>
         {disabledHint ? (
-          <button type="button" className="button compact" onClick={() => navigate('/admin/settings')}>
+          <button type="button" className="button compact" onClick={() => navigate('/admin/config')}>
             {P('前往基础设置')}
           </button>
         ) : null}
