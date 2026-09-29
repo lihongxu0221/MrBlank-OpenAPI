@@ -32,7 +32,9 @@ export function AdminConfigPage({ path }: { path: string }) {
   const { showToast } = useToast()
   const qs = getHashQuery()
   const initialTab = (qs.get('tab') as ConfigTab) || 'visual'
-  const [tab, setTab] = useState<ConfigTab>(['visual', 'source', 'connection'].includes(initialTab) ? initialTab : 'visual')
+  const [tab, setTab] = useState<ConfigTab>(
+    ['visual', 'source', 'connection'].includes(initialTab) ? initialTab : 'visual',
+  )
 
   const [baselineYaml, setBaselineYaml] = useState('')
   const [baselineConfig, setBaselineConfig] = useState<Record<string, unknown>>({})
@@ -88,7 +90,6 @@ export function AdminConfigPage({ path }: { path: string }) {
   function switchTab(next: ConfigTab) {
     if (dirty && next !== tab) {
       if (!confirm(P('切换标签将丢弃未保存的修改，确定继续吗？'))) return
-      // reset draft from baseline
       setDraftConfig(structuredClone(baselineConfig))
       setSourceText(baselineYaml)
       setSecretKeyAction(secretMeta.present ? 'keep' : 'replace')
@@ -176,114 +177,126 @@ export function AdminConfigPage({ path }: { path: string }) {
         ? P('未保存')
         : P('已加载')
 
+  const showFloating = tab !== 'connection'
+
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
-      <ConsoleHero
-        title={P('配置面板')}
-        subtitle={P('通过可视化或者源文件方式编辑 config.yaml；第三页为本站连接（非 CPAMP usage-service）。')}
-      />
+      <div className={`cfg-page${showFloating ? ' cfg-page--with-fab' : ''}`}>
+        <ConsoleHero
+          title={P('配置面板')}
+          subtitle={P('通过可视化或者源文件方式编辑 config.yaml；第三页为本站基础配置（非 CPAMP usage-service）。')}
+        />
 
-      <div className="channels-toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div className="cfg-tabs" role="tablist" aria-label={P('配置模式')}>
           {(
             [
-              ['visual', P('可视化')],
-              ['source', P('源文件')],
-              ['connection', P('本站连接')],
+              ['visual', P('可视化编辑')],
+              ['source', P('源文件编辑')],
+              ['connection', P('本站基础配置')],
             ] as const
           ).map(([id, label]) => (
             <button
               key={id}
               type="button"
-              className={`button compact ${tab === id ? '' : 'secondary'}`}
+              role="tab"
+              aria-selected={tab === id}
+              className={`cfg-tab${tab === id ? ' is-active' : ''}`}
               onClick={() => switchTab(id)}
             >
               {label}
             </button>
           ))}
         </div>
-        <span className={`muted ${dirty ? 'cred-models-dirty is-dirty' : ''}`} style={{ marginLeft: 'auto' }}>
-          {statusLabel}
-          {lastBackup ? ` · bak ${lastBackup}` : ''}
-          {writeEnabled ? '' : ` · ${P('只读')}`}
-        </span>
-        <button type="button" className="button secondary compact" onClick={reloadConfirm} disabled={loading}>
-          <RefreshCw size={14} /> {P('重新加载')}
-        </button>
-        {tab !== 'connection' ? (
-          <button type="button" className="button compact" onClick={requestSave} disabled={loading || saving || !dirty || !writeEnabled}>
-            <Save size={14} /> {P('保存')}
-          </button>
-        ) : null}
-      </div>
 
-      {err ? <p style={{ color: 'var(--error)' }}>{err}</p> : null}
+        {err ? <p style={{ color: 'var(--error)' }}>{err}</p> : null}
 
-      {tab === 'visual' ? (
-        <ConfigVisualForm
-          draft={draftConfig}
-          onChange={setDraftConfig}
-          secretKeyAction={secretKeyAction}
-          onSecretKeyAction={setSecretKeyAction}
-          secretKeyInput={secretKeyInput}
-          onSecretKeyInput={setSecretKeyInput}
-          secretKeyPresent={secretMeta.present}
-          secretKeyMasked={secretMeta.masked}
-          enabled={gate.allowed}
-        />
-      ) : null}
-      {tab === 'source' ? (
-        <div className="panel" style={{ marginTop: 12 }}>
-          <ConfigSourceEditor
-            value={sourceText}
-            onChange={setSourceText}
-            baseline={baselineYaml}
-            writeEnabled={writeEnabled}
+        {tab === 'visual' ? (
+          <ConfigVisualForm
+            draft={draftConfig}
+            onChange={setDraftConfig}
+            secretKeyAction={secretKeyAction}
+            onSecretKeyAction={setSecretKeyAction}
+            secretKeyInput={secretKeyInput}
+            onSecretKeyInput={setSecretKeyInput}
+            secretKeyPresent={secretMeta.present}
+            secretKeyMasked={secretMeta.masked}
+            enabled={gate.allowed}
           />
-        </div>
-      ) : null}
-      {tab === 'connection' ? (
-        <div style={{ marginTop: 12 }}>
-          <ConfigConnectionPanel enabled={gate.allowed} />
-        </div>
-      ) : null}
+        ) : null}
+        {tab === 'source' ? (
+          <div className="panel" style={{ marginTop: 12 }}>
+            <ConfigSourceEditor
+              value={sourceText}
+              onChange={setSourceText}
+              baseline={baselineYaml}
+              writeEnabled={writeEnabled}
+            />
+          </div>
+        ) : null}
+        {tab === 'connection' ? (
+          <div style={{ marginTop: 12 }}>
+            <ConfigConnectionPanel enabled={gate.allowed} />
+          </div>
+        ) : null}
 
-      {diffOpen ? (
-        <div
-          role="dialog"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.55)',
-            zIndex: 80,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 16,
-          }}
-          onClick={() => !saving && setDiffOpen(false)}
-        >
-          <div
-            className="panel"
-            style={{ maxWidth: 720, width: '100%', maxHeight: '90vh', overflow: 'auto' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 style={{ marginTop: 0 }}>{P('确认保存配置')}</h3>
-            <p className="muted">
-              {P('保存前将自动备份当前 CPA config.yaml。secret-key 动作')} · {secretKeyAction}
-            </p>
-            <ConfigDiffPreview before={baselineYaml} after={pendingYaml || ''} />
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
-              <button type="button" className="button secondary" disabled={saving} onClick={() => setDiffOpen(false)}>
-                {P('取消')}
+        {showFloating ? (
+          <div className="cfg-fab" role="toolbar" aria-label={P('保存并加载')}>
+            <div className="cfg-fab__pill">
+              <span className={`cfg-fab__status${dirty ? ' is-dirty' : ''}${err ? ' is-error' : ''}`}>
+                {statusLabel}
+                {lastBackup ? ` · bak ${lastBackup}` : ''}
+                {writeEnabled ? '' : ` · ${P('只读')}`}
+              </span>
+              <button
+                type="button"
+                className="cfg-fab__btn"
+                onClick={reloadConfirm}
+                disabled={loading || saving}
+                title={P('重新加载')}
+                aria-label={P('重新加载')}
+              >
+                <RefreshCw size={16} />
               </button>
-              <button type="button" className="button" disabled={saving} onClick={confirmSave}>
-                {saving ? P('保存中') : P('确认')}
+              <button
+                type="button"
+                className="cfg-fab__btn cfg-fab__btn--save"
+                onClick={requestSave}
+                disabled={loading || saving || !dirty || !writeEnabled}
+                title={P('保存并加载')}
+                aria-label={P('保存并加载')}
+              >
+                <Save size={16} />
+                <span className="cfg-fab__save-label">{P('保存并加载')}</span>
+                {dirty ? <span className="cfg-fab__dirty-dot" aria-hidden /> : null}
               </button>
             </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
+
+        {diffOpen ? (
+          <div
+            role="dialog"
+            className="cfg-diff-overlay"
+            onClick={() => !saving && setDiffOpen(false)}
+          >
+            <div className="panel cfg-diff-dialog" onClick={(e) => e.stopPropagation()}>
+              <h3 style={{ marginTop: 0 }}>{P('确认保存配置')}</h3>
+              <p className="muted">
+                {P('保存前将自动备份当前 CPA config.yaml。secret-key 动作')} · {secretKeyAction}
+              </p>
+              <ConfigDiffPreview before={baselineYaml} after={pendingYaml || ''} />
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+                <button type="button" className="button secondary" disabled={saving} onClick={() => setDiffOpen(false)}>
+                  {P('取消')}
+                </button>
+                <button type="button" className="button" disabled={saving} onClick={confirmSave}>
+                  {saving ? P('保存中') : P('确认')}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </AdminLayout>
   )
 }
