@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Boxes, RefreshCw, Save, Search } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { formatQuotaUnitLabel, getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
+import { formatQuotaCompact, formatQuotaUnitLabel, getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
@@ -15,6 +15,8 @@ type Group = {
   description?: string
   model_ids: string[]
   model_quotas?: Record<string, number>
+  /** API raw quotas (window_5h / week / month) */
+  quotas?: { window_5h?: number; week?: number; month?: number }
   enabled?: boolean
 }
 
@@ -44,6 +46,13 @@ export function AdminGroupModelsPage({ path }: { path: string }) {
     () => groups.find((g) => g.id === selectedId) || null,
     [groups, selectedId],
   )
+
+  /** Selected group's 5h rolling quota in raw tokens (API storage). */
+  const group5hRaw = Number(selectedGroup?.quotas?.window_5h) || 0
+  const group5hHint =
+    group5hRaw > 0
+      ? `${P('0 = 不限')} · ${P('本组近5小时额度')} ≈ ${formatQuotaCompact(group5hRaw)} token`
+      : `${P('0 = 不限')} · ${P('本组近5小时额度')} ≈ ${P('不限')}`
 
   function applyGroupToEditor(g: Group | null, unit: number) {
     if (!g) {
@@ -358,11 +367,11 @@ export function AdminGroupModelsPage({ path }: { path: string }) {
                               step="0.01"
                               min={0}
                               value={pts}
-                              title={P('0 = 不限')}
+                              title={group5hHint}
                               onChange={(e) => setModelQuotaPoints(m.id, Number(e.target.value) || 0)}
                               style={{ width: '100%' }}
                             />
-                            <div className="field-note">{P('0 = 不限')}</div>
+                            <div className="field-note">{group5hHint}</div>
                           </td>
                           <td className="muted" style={{ fontSize: 12 }}>
                             {pts > 0
