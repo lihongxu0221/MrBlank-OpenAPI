@@ -35,7 +35,7 @@ function defaultConfig() {
     daily_grant_min: 2 * Q,
     daily_grant_max: 2 * Q,
     timezone: TZ,
-    note: '签到与兑换码发放本站额度（点）；点数↔内部单位见 /api/status quota_per_unit（默认 500000）。日界 Asia/Shanghai。',
+    note: '签到与兑换码发放本站额度（点）；1 点 = 500,000 token。日界 Asia/Shanghai。',
   }
 }
 

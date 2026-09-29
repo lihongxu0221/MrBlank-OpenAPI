@@ -2771,7 +2771,7 @@ app.post('/api/admin/credits/grant', requireAdmin, (req, res) => {
       return
     }
     if (!Number.isFinite(amount) || amount <= 0) {
-      res.status(400).json(fail('amount 须为正数（内部单位）'))
+      res.status(400).json(fail('amount 须为正数（token）'))
       return
     }
     const result = creditStore.adminGrant(userId, amount, String(req.body?.note || ''))

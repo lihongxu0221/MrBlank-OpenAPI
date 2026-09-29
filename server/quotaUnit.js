@@ -129,7 +129,7 @@ export function buildCreditUnitInfo(rawPerPoint = DEFAULT_RAW_PER_POINT) {
     quota_per_unit: n,
     usd_to_raw: FIXED_USD_TO_RAW,
     display_name: '点',
-    note: `1 点 = ${n} 内部额度单位；1 USD = ${FIXED_USD_TO_RAW} 内部单位（固定）。展示点 = raw ÷ N；计费 raw = round(USD × ${FIXED_USD_TO_RAW})。`,
+    note: `1 点 = ${n.toLocaleString('en-US')} token`,
     windows: ['window_5h', 'week', 'month'],
     formula: {
       point_to_raw: `1 点 = ${n} raw`,

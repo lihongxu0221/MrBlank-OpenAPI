@@ -62,7 +62,7 @@ export const handlers = {
       credit_unit: {
         raw_per_point: Q,
         display_name: '点',
-        note: '1 点 = 500000 内部额度单位',
+        note: '1 点 = 500,000 token',
       },
     }),
   config: () =>

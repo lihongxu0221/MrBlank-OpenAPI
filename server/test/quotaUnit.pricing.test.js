@@ -14,6 +14,7 @@ import {
   formatRawPerPointCompact,
   DEFAULT_QUOTA_PER_UNIT,
   FIXED_USD_TO_RAW,
+  buildCreditUnitInfo,
 } from '../quotaUnit.js'
 import {
   createModelPricesStore,
@@ -34,6 +35,11 @@ test('aily formula: dollars↔quota and usd/mtok→quota_per_mtok', () => {
   // rounding
   assert.equal(dollarsToQuota(0.000001), 1) // round(0.5)=1? 0.000001*500000=0.5 → 1 or 0
   assert.equal(Math.round(0.000001 * 500000), 1)
+})
+
+test('credit-unit help text is the short token label', () => {
+  assert.equal(buildCreditUnitInfo(1_000_000).note, '1 点 = 1,000,000 token')
+  assert.equal(buildCreditUnitInfo(500_000).note, '1 点 = 500,000 token')
 })
 
 test('quota unit store persists N; USD→raw stays FIXED 500000', () => {

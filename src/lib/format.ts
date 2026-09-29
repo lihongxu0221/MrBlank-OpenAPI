@@ -116,6 +116,12 @@ export function formatQuotaWithCompact(n: number): string {
   return Math.abs(v) >= 1e3 ? `${full} ≈ ${formatQuotaCompact(v)}` : full
 }
 
+/** Short quota-unit help text shared by console and admin surfaces. */
+export function formatQuotaUnitLabel(n = quotaPerUnit): string {
+  const v = Math.round(Number(n) || FIXED_USD_TO_RAW)
+  return `1 点 = ${v.toLocaleString('en-US')} token`
+}
+
 /** Compact form for N: 500000 → "0.5M", 1e9 → "1B", 5000 → "5K". */
 export function formatRawPerPointCompact(n: number): string {
   const v = Math.round(Number(n) || FIXED_USD_TO_RAW)

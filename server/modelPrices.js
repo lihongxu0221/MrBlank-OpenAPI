@@ -514,8 +514,7 @@ export function createModelPricesStore(filePath, deps = {}) {
       usd_to_raw: FIXED_USD_TO_RAW,
       by_model: rows.sort((a, b) => b.cost - a.cost || b.tokens - a.tokens),
       priced_models: store.prices.length,
-      note:
-        'Cost = site-usage tokens × local price book (per MTok). Raw = round(USD × 500000 fixed). Points = raw ÷ raw_per_point. Cache-read tokens billed at cache_read_per_mtok when present. aily/{model} inherits bare {model} price. Unpriced models show cost 0.',
+      note: `1 点 = ${rawPerPoint.toLocaleString('en-US')} token`,
     }
   }
 

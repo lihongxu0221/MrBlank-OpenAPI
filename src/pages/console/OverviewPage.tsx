@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { CalendarCheck2, Copy, Gift, Settings2, Shield, Wand2 } from 'lucide-react'
 import { api } from '../../lib/api'
-import { formatCredits, setQuotaPerUnit } from '../../lib/format'
+import { formatCredits, formatQuotaUnitLabel, setQuotaPerUnit } from '../../lib/format'
 import { P, qt } from '../../i18n'
 import { navigate } from '../../router/hash'
 import { getSiteConfig, subscribeSiteConfig } from '../../config/site'
@@ -85,7 +85,7 @@ export function OverviewPage({ path }: { path: string }) {
             {groupInfo.group.description || P('你的额度窗口与可用模型由用户组决定。')}
           </p>
           <p className="muted" style={{ fontSize: 12, marginTop: -4 }}>
-            {groupInfo.credit_unit?.note || P('额度单位见 /api/status quota_per_unit；滚动窗口按价格表 raw 额度计入。')}
+            {formatQuotaUnitLabel(groupInfo.credit_unit?.raw_per_point || groupInfo.credit_unit?.quota_per_unit)}
           </p>
           <div className="stats-grid">
             <div className="stat-card">

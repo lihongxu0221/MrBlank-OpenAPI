@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Plus, RefreshCw, Save, Trash2, Users } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
+import { formatQuotaUnitLabel, getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
@@ -164,7 +164,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
       setGroups((saved.groups || []).map((row) => fromApiGroup(row, unit)))
       setMsg(
         P('用户组已保存。') +
-          ` （${P('已按')} 1 ${P('点')}=${unit.toLocaleString('zh-CN')} ${P('内部单位')} ${P('换算入库')}）`,
+          ` （${P('已按')} 1 ${P('点')}=${unit.toLocaleString('en-US')} token ${P('换算入库')}）`,
       )
     } catch (e) {
       setErr((e as Error).message)
@@ -197,13 +197,12 @@ export function AdminGroupsPage({ path }: { path: string }) {
       <ConsoleHero
         title={P('用户组')}
         subtitle={P(
-          `类 Linux.do 信任等级：5h/周/月额度以「点」编辑，入库为内部单位（当前 1 点 = ${quotaUnit.toLocaleString('zh-CN')}）。计费扣减的 raw 额度计入滚动窗口。`,
+          `类 Linux.do 信任等级：5h/周/月额度以「点」编辑。${formatQuotaUnitLabel(quotaUnit)}`,
         )}
       />
       <div className="channels-toolbar">
         <span className="muted">
-          {loading ? P('加载中…') : `${groups.length} ${P('个用户组')}`} · 1 {P('点')} ={' '}
-          {quotaUnit.toLocaleString('zh-CN')} {P('内部单位')}
+          {loading ? P('加载中…') : `${groups.length} ${P('个用户组')}`} · {formatQuotaUnitLabel(quotaUnit)}
         </span>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" className="button secondary compact" onClick={load} disabled={loading || saving}>
@@ -263,7 +262,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
                 onChange={(e) => updateQuota(index, 'window_5h', Number(e.target.value) || 0)}
               />
               <div className="field-note">
-                = {pointsToQuota(g.quotas.window_5h, quotaUnit).toLocaleString('zh-CN')} {P('内部单位')}
+                = {pointsToQuota(g.quotas.window_5h, quotaUnit).toLocaleString('zh-CN')} token
               </div>
             </div>
             <div className="field">
@@ -277,7 +276,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
                 onChange={(e) => updateQuota(index, 'week', Number(e.target.value) || 0)}
               />
               <div className="field-note">
-                = {pointsToQuota(g.quotas.week, quotaUnit).toLocaleString('zh-CN')} {P('内部单位')}
+                = {pointsToQuota(g.quotas.week, quotaUnit).toLocaleString('zh-CN')} token
               </div>
             </div>
             <div className="field">
@@ -291,7 +290,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
                 onChange={(e) => updateQuota(index, 'month', Number(e.target.value) || 0)}
               />
               <div className="field-note">
-                = {pointsToQuota(g.quotas.month, quotaUnit).toLocaleString('zh-CN')} {P('内部单位')}
+                = {pointsToQuota(g.quotas.month, quotaUnit).toLocaleString('zh-CN')} token
               </div>
             </div>
             <div className="field">
@@ -337,7 +336,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
               />
               <div className="field-note">
                 = {pointsToQuota(g.promotion.min_used_quota, quotaUnit).toLocaleString('zh-CN')}{' '}
-                {P('内部单位')}
+                token
               </div>
             </div>
             <div className="field">

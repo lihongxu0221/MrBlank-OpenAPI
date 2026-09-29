@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Gift, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { formatCredits, getQuotaPerUnit, setQuotaPerUnit } from '../../lib/format'
+import { formatCredits, formatQuotaUnitLabel, getQuotaPerUnit, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
@@ -164,11 +164,9 @@ export function AdminCreditsPage({ path }: { path: string }) {
       />
 
       <div className="panel" style={{ marginTop: 12 }}>
-        <strong>{P('点数 ↔ 内部单位')}</strong>
+        <strong>{P('点数 ↔ token')}</strong>
         <p className="muted" style={{ margin: '6px 0 0' }}>
-          {P('当前')}：1 {P('点')} = {getQuotaPerUnit().toLocaleString('zh-CN')} {P('内部单位')}
-          （{P('与 $1 同换算')}）。{P('修改入口在')}{' '}
-          <a href="/admin/model-prices">{P('模型价格')}</a>。
+          {formatQuotaUnitLabel(getQuotaPerUnit())}
         </p>
       </div>
 
@@ -189,7 +187,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
         {config ? (
           <>
             <p className="muted" style={{ fontSize: 13 }}>
-              {config.note || data?.credit_unit?.note || P('1 点 = N 内部单位（见上方 / 模型价格页）；日界 Asia/Shanghai。')}
+              {formatQuotaUnitLabel(data?.credit_unit?.raw_per_point || getQuotaPerUnit())}
             </p>
             <div className="stats-grid" style={{ marginTop: 8 }}>
               <div className="field">

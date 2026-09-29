@@ -70,7 +70,7 @@ export function ModelsPage({ path }: { path: string }) {
       <div className="panel models-panel">
         <div className="info-banner">
           {P(
-            '模型列表来自 CPA + 本站 Aily（若已配置路由/凭证），经本站服务端合并。同名时 CPA 用原名，Aily 用 aily/ 前缀（如 aily/glm-5.3）。消耗标准（点）来自本站模型价格簿（raw÷raw_per_point，默认 50 万 → 约 1 USD = 1 点 / MTok）；— 表示暂未定价。',
+            '模型列表来自 CPA + 本站 Aily（若已配置路由/凭证），经本站服务端合并。同名时 CPA 用原名，Aily 用 aily/ 前缀（如 aily/glm-5.3）。消耗标准（点）来自本站模型价格簿；— 表示暂未定价。',
           )}{' '}
           <button type="button" className="text-link inline" onClick={() => navigate('/channels')}>
             {P('服务状态')}

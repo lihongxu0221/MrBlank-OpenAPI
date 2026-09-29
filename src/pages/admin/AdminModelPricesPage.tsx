@@ -5,6 +5,7 @@ import { P } from '../../i18n'
 import {
   FIXED_USD_TO_RAW,
   formatCredits,
+  formatQuotaUnitLabel,
   formatRawPerPointCompact,
   getQuotaPerUnit,
   parseRawPerPoint,
@@ -313,20 +314,18 @@ export function AdminModelPricesPage({ path }: { path: string }) {
       <ConsoleHero
         title={P('模型价格')}
         subtitle={P(
-          '支持模型目录价格表（非 11k 全集）。USD/MTok 与平台点并列；计费 raw = round(USD × 500000 固定)；展示点 = raw ÷ N。aily/ 继承裸名。',
+          '支持模型目录价格表（非 11k 全集）。USD/MTok 与平台点并列；aily/ 继承裸名。',
         )}
       />
 
       <div className="panel" style={{ marginTop: 12 }}>
-        <h3 style={{ marginTop: 0 }}>{P('点数 ↔ 内部单位')}</h3>
+        <h3 style={{ marginTop: 0 }}>{P('点数 ↔ token')}</h3>
         <p className="muted" style={{ marginTop: 0 }}>
-          {P(
-            '1 点 = N 内部单位（可配置，支持 0.5M / 500K / 500000）。1 USD = 500000 内部单位（固定）。刷新/同步时按 raw = USD×500000、点 = raw÷N 重算。',
-          )}
+          {formatQuotaUnitLabel(rawPerPoint)}
         </p>
         <div className="price-book-unit">
           <div className="field">
-            <label>{P('1 点 = N 内部单位')}</label>
+            <label>{P('1 点 = N token')}</label>
             <input
               className="field-input"
               type="text"
@@ -338,16 +337,14 @@ export function AdminModelPricesPage({ path }: { path: string }) {
                 const p = parseRawPerPoint(quotaUnitDraft)
                 if (p != null) setQuotaUnitDraft(formatRawPerPointCompact(p))
               }}
-              aria-label={P('1 点 = N 内部单位')}
+              aria-label={P('1 点 = N token')}
             />
           </div>
           <button type="button" className="button compact" onClick={saveQuotaUnit} disabled={savingUnit}>
             <Save size={14} /> {savingUnit ? P('保存中…') : P('保存换算')}
           </button>
           <div className="muted" style={{ fontSize: 13 }}>
-            {P('当前')}：1 {P('点')} = {rawPerPoint.toLocaleString('zh-CN')} {P('内部单位')}（
-            {formatRawPerPointCompact(rawPerPoint)}） · 1 USD = {FIXED_USD_TO_RAW.toLocaleString('zh-CN')}{' '}
-            {P('内部单位')}（0.5M {P('固定')}）
+            {formatQuotaUnitLabel(rawPerPoint)}
           </div>
         </div>
       </div>
@@ -456,9 +453,7 @@ export function AdminModelPricesPage({ path }: { path: string }) {
           </p>
         ) : null}
         <p className="muted" style={{ marginTop: 0 }}>
-          {P(
-            '提示：无需为 aily/xxx 单独定价。手动编辑会标记 manual。USD/MTok 旁显示对应平台点（raw = round(USD×500000)，点 = raw÷N）。',
-          )}
+          {P('提示：无需为 aily/xxx 单独定价。手动编辑会标记 manual。')}
         </p>
         <div className="table-wrap price-book-table">
           <table className="data">
