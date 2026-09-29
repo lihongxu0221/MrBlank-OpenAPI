@@ -41,7 +41,7 @@ function readStore(filePath) {
       version: 1,
       updated_at: raw?.updated_at || null,
       last_sync: raw?.last_sync || null,
-      prices: prices.map(normalizePrice).filter(Boolean),
+      prices: prices.map((row) => normalizePrice(row)).filter(Boolean),
     }
   } catch {
     return { version: 1, updated_at: null, last_sync: null, prices: [] }
@@ -570,19 +570,16 @@ export function createModelPricesStore(filePath, deps = {}) {
     const price = lookupPrice(modelId)
     if (!price) return null
     const unit = resolveUnit()
-    const inRaw =
-      price.input_quota_per_mtok != null
-        ? Number(price.input_quota_per_mtok)
-        : usdPerMtokToQuotaPerMtok(price.input_per_mtok, unit)
-    const outRaw =
-      price.output_quota_per_mtok != null
-        ? Number(price.output_quota_per_mtok)
-        : usdPerMtokToQuotaPerMtok(price.output_per_mtok, unit)
+    // Re-attach with live unit — never trust stale quota fields (readStore used to
+    // pass Array.map index as unit and corrupt input_quota_per_mtok).
+    const fresh = attachQuotaFields({ ...price }, unit)
+    const inRaw = Number(fresh.input_quota_per_mtok) || 0
+    const outRaw = Number(fresh.output_quota_per_mtok) || 0
     return {
       text_price: quotaToPoints(inRaw, unit),
       text_out_price: quotaToPoints(outRaw, unit),
-      input_per_mtok: Number(price.input_per_mtok) || 0,
-      output_per_mtok: Number(price.output_per_mtok) || 0,
+      input_per_mtok: Number(fresh.input_per_mtok) || 0,
+      output_per_mtok: Number(fresh.output_per_mtok) || 0,
       input_quota_per_mtok: inRaw,
       output_quota_per_mtok: outRaw,
       priced: true,

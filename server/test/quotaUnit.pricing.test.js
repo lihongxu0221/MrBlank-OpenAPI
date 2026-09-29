@@ -195,3 +195,25 @@ test('plazaPriceFields returns points per MTok matching admin conversion', () =>
 
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+test('readStore must not pass Array.map index as quota unit', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaza-mapidx-'))
+  const pricesPath = path.join(dir, 'prices.json')
+  // Persist with correct quotas for unit=500000, then reload
+  const first = createModelPricesStore(pricesPath, { getQuotaUnit: () => 500_000 })
+  first.putPrices([
+    { model: 'm0', input_per_mtok: 3, output_per_mtok: 15, manual: true, source: 'manual' },
+    { model: 'm1', input_per_mtok: 1, output_per_mtok: 2, manual: true, source: 'manual' },
+    { model: 'm2', input_per_mtok: 0.5, output_per_mtok: 1, manual: true, source: 'manual' },
+    { model: 'm3', input_per_mtok: 3, output_per_mtok: 15, manual: true, source: 'manual' },
+  ])
+  // Fresh store from disk — previously normalizePrice(row, index) set m3 unit=3 → quota=9
+  const reloaded = createModelPricesStore(pricesPath, { getQuotaUnit: () => 500_000 })
+  const m3 = reloaded.lookupPrice('m3')
+  assert.equal(m3.input_quota_per_mtok, 1_500_000)
+  assert.equal(m3.output_quota_per_mtok, 7_500_000)
+  const plaza = reloaded.plazaPriceFields('m3')
+  assert.equal(plaza.text_price, 3)
+  assert.equal(plaza.text_out_price, 15)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
