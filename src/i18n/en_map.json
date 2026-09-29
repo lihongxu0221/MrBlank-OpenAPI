@@ -258,5 +258,7 @@
   "1 点 = N 内部单位（见上方 / 模型价格页）；日界 Asia/Shanghai。": "1 point = N raw units (see above / Model prices); day boundary Asia/Shanghai.",
   "额度单位见 /api/status quota_per_unit；滚动窗口按价格表 raw 额度计入。": "Unit from /api/status quota_per_unit; rolling windows use price-book raw quota.",
   "无限点数": "Unlimited points",
-  "剩余点数": "Points remaining"
+  "剩余点数": "Points remaining",
+  "模型列表来自 CPA + 本站 Aily（若已配置路由/凭证），经本站服务端合并。同名时 CPA 用原名，Aily 用 aily/ 前缀（如 aily/glm-5.3）。消耗标准（点）来自本站模型价格簿（raw÷raw_per_point，默认 50 万 → 约 1 USD = 1 点 / MTok）；— 表示暂未定价。": "Model list merges CPA + site Aily (when routing/credentials are configured). On name clash CPA keeps the bare id; Aily uses the aily/ prefix (e.g. aily/glm-5.3). Consumption points come from the site price book (raw ÷ raw_per_point; default 500k → ≈ 1 USD = 1 point / MTok); — means unpriced.",
+  "消耗标准（点）": "Rate (points)"
 }

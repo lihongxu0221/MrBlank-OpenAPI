@@ -17,14 +17,28 @@ type Model = {
   image_price?: number
   video_price?: number
   planned?: boolean
+  priced?: boolean
+}
+
+function formatPoints(n: number) {
+  const v = Number(n) || 0
+  if (!Number.isFinite(v)) return '0'
+  return v.toLocaleString('zh-CN', { maximumFractionDigits: 6 })
 }
 
 function costLabel(m: Model) {
-  if (m.kind === 'image' || m.image_price) return `${m.image_price ?? 0} / img`
-  if (m.kind === 'video' || m.video_price) return `${m.video_price ?? 0} / s`
+  if (m.kind === 'image' || m.image_price) {
+    const p = m.image_price ?? 0
+    return p ? `${formatPoints(p)} / img` : '—'
+  }
+  if (m.kind === 'video' || m.video_price) {
+    const p = m.video_price ?? 0
+    return p ? `${formatPoints(p)} / s` : '—'
+  }
   const inn = m.text_price ?? 0
   const out = m.text_out_price ?? inn
-  return `${inn} in · ${out} out`
+  if (!inn && !out && !m.priced) return '—'
+  return `${formatPoints(inn)} in · ${formatPoints(out)} out / MTok`
 }
 
 function kindLabel(kind: string) {
@@ -55,7 +69,9 @@ export function ModelsPage({ path }: { path: string }) {
 
       <div className="panel models-panel">
         <div className="info-banner">
-          {P('模型列表来自 CPA + 本站 Aily（若已配置路由/凭证），经本站服务端合并。同名时 CPA 用原名，Aily 用 aily/ 前缀（如 aily/glm-5.3）。价格字段若为 0 表示暂未接入计费展示。')}{' '}
+          {P(
+            '模型列表来自 CPA + 本站 Aily（若已配置路由/凭证），经本站服务端合并。同名时 CPA 用原名，Aily 用 aily/ 前缀（如 aily/glm-5.3）。消耗标准（点）来自本站模型价格簿（raw÷raw_per_point，默认 50 万 → 约 1 USD = 1 点 / MTok）；— 表示暂未定价。',
+          )}{' '}
           <button type="button" className="text-link inline" onClick={() => navigate('/channels')}>
             {P('服务状态')}
           </button>

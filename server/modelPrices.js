@@ -22,6 +22,7 @@ import { applyVariantInheritance, VARIANT_INHERITANCE } from './modelPriceInheri
 import {
   DEFAULT_QUOTA_PER_UNIT,
   dollarsToQuota,
+  quotaToPoints,
   usdPerMtokToQuotaPerMtok,
 } from './quotaUnit.js'
 
@@ -559,6 +560,35 @@ export function createModelPricesStore(filePath, deps = {}) {
     }
   }
 
+  /**
+   * Console 模型广场 display fields: points per MTok from price book.
+   * Same conversion as admin: points = raw_quota_per_mtok / raw_per_point
+   * (raw_per_point === quota_per_unit under aily parity; default 500000 → 1 USD ≈ 1 点).
+   * Returns null when model has no price-book row.
+   */
+  function plazaPriceFields(modelId) {
+    const price = lookupPrice(modelId)
+    if (!price) return null
+    const unit = resolveUnit()
+    const inRaw =
+      price.input_quota_per_mtok != null
+        ? Number(price.input_quota_per_mtok)
+        : usdPerMtokToQuotaPerMtok(price.input_per_mtok, unit)
+    const outRaw =
+      price.output_quota_per_mtok != null
+        ? Number(price.output_quota_per_mtok)
+        : usdPerMtokToQuotaPerMtok(price.output_per_mtok, unit)
+    return {
+      text_price: quotaToPoints(inRaw, unit),
+      text_out_price: quotaToPoints(outRaw, unit),
+      input_per_mtok: Number(price.input_per_mtok) || 0,
+      output_per_mtok: Number(price.output_per_mtok) || 0,
+      input_quota_per_mtok: inRaw,
+      output_quota_per_mtok: outRaw,
+      priced: true,
+    }
+  }
+
   return {
     getPrices,
     putPrices,
@@ -566,6 +596,7 @@ export function createModelPricesStore(filePath, deps = {}) {
     usageSummaryCosted,
     priceMap,
     lookupPrice,
+    plazaPriceFields,
     costForTokens,
     quotaForTokens: (price, prompt, completion, opts = {}) =>
       quotaForTokens(price, prompt, completion, { ...opts, quotaUnit: resolveUnit() }),

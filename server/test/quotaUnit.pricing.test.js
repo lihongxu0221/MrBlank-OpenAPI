@@ -154,3 +154,44 @@ test('mock request usage deducts price-based raw not token count', () => {
   assert.notEqual(raw, tokenCountQuota)
   assert.ok(raw < tokenCountQuota)
 })
+
+test('plazaPriceFields returns points per MTok matching admin conversion', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaza-price-'))
+  const unitPath = path.join(dir, 'quota-unit.json')
+  const pricesPath = path.join(dir, 'prices.json')
+  const unitStore = createQuotaUnitStore(unitPath)
+  assert.equal(unitStore.getUnit(), 500_000)
+
+  const prices = createModelPricesStore(pricesPath, {
+    getQuotaUnit: () => unitStore.getUnit(),
+  })
+  prices.putPrices([
+    { model: 'grok-4', input_per_mtok: 3, output_per_mtok: 15, currency: 'USD', source: 'manual', manual: true },
+    { model: 'glm-5.3', input_per_mtok: 0.15, output_per_mtok: 0.6, currency: 'USD', source: 'models.dev' },
+  ])
+
+  const grok = prices.plazaPriceFields('grok-4')
+  assert.ok(grok)
+  assert.equal(grok.priced, true)
+  // default unit 500000 → points ≈ USD
+  assert.equal(grok.text_price, 3)
+  assert.equal(grok.text_out_price, 15)
+  assert.equal(grok.input_quota_per_mtok, 1_500_000)
+
+  // aily/ prefix inherits bare price
+  const aily = prices.plazaPriceFields('aily/glm-5.3')
+  assert.ok(aily)
+  assert.equal(aily.text_price, 0.15)
+  assert.equal(aily.text_out_price, 0.6)
+
+  assert.equal(prices.plazaPriceFields('no-such-model'), null)
+
+  // custom raw_per_point (= quota_per_unit): $3 → 3*100000 raw → 3 points still when unit matches
+  unitStore.setUnit(100_000)
+  prices.recomputeQuotaFields(100_000)
+  const grok2 = prices.plazaPriceFields('grok-4')
+  assert.equal(grok2.text_price, 3)
+  assert.equal(grok2.input_quota_per_mtok, 300_000)
+
+  fs.rmSync(dir, { recursive: true, force: true })
+})

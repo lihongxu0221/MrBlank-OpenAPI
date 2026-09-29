@@ -1952,7 +1952,27 @@ app.get('/api/token/options', requireAuth, async (req, res) => {
       byId.set(id, m)
     }
     const merged = [...byId.values()]
-    const model_details = groupStore.filterModels(merged, groupInfo.group)
+    // Wire 消耗标准（点） from price book — same raw→点 conversion as admin.
+    const withPrices = merged.map((m) => {
+      const id = String(m?.id || m?.name || '').trim()
+      if (!id) return m
+      const fields = modelPrices.plazaPriceFields(id)
+      if (!fields) return m
+      const kind = String(m.kind || 'text')
+      if (kind === 'image' || kind === 'video') {
+        return { ...m, priced: true, input_per_mtok: fields.input_per_mtok, output_per_mtok: fields.output_per_mtok }
+      }
+      return {
+        ...m,
+        text_price: fields.text_price,
+        text_out_price: fields.text_out_price,
+        priced: true,
+        input_per_mtok: fields.input_per_mtok,
+        output_per_mtok: fields.output_per_mtok,
+      }
+    })
+    const model_details = groupStore.filterModels(withPrices, groupInfo.group)
+    const priced_count = model_details.filter((m) => m?.priced).length
 
     if (!cpaModels.length && !ailyModels.length && cpaErr) {
       return res.status(502).json(fail(cpaErr || '无法拉取模型列表'))
@@ -1975,6 +1995,8 @@ app.get('/api/token/options', requireAuth, async (req, res) => {
         source: cpaErr ? (ailyModels.length ? 'aily' : 'error') : ailyModels.length ? 'cpa+aily' : 'cpa',
         aily_count: ailyModels.length,
         cpa_count: (cpaModels || []).length,
+        priced_count,
+        quota_per_unit: quotaUnitStore.getUnit(),
         filtered: !!(groupInfo.group?.model_ids || []).length,
       }),
     )
