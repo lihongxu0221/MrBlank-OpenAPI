@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Boxes, Plus, RefreshCw, Save, Trash2, Users } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { formatQuotaUnitLabel, getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
+import { formatQuotaCompact, formatQuotaUnitLabel, getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { navigate } from '../../router/hash'
@@ -89,6 +89,14 @@ function toApiGroup(g: Group, unit: number): Group {
       min_used_quota: pointsToQuota(g.promotion.min_used_quota, unit),
     },
   }
+}
+
+/** Points (UI) → compact token hint under quota inputs (matches 组模型配额). */
+function quotaPointsHint(points: number, unit: number): string {
+  const pts = Number(points) || 0
+  if (pts <= 0) return `${P('0 = 不限')} · ≈ ${P('不限')}`
+  const raw = pointsToQuota(pts, unit)
+  return `${P('0 = 不限')} · ≈ ${formatQuotaCompact(raw)} token`
 }
 
 export function AdminGroupsPage({ path }: { path: string }) {
@@ -308,6 +316,9 @@ export function AdminGroupsPage({ path }: { path: string }) {
                       {g.enabled ? P('启用') : P('停用')}
                       {' · '}
                       5h {g.quotas.window_5h || 0} {P('点')}
+                      {Number(g.quotas.window_5h) > 0
+                        ? ` ≈ ${formatQuotaCompact(pointsToQuota(g.quotas.window_5h, quotaUnit))} token`
+                        : ''}
                     </span>
                   </span>
                 </button>
@@ -400,7 +411,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
                     onChange={(e) => updateQuota('window_5h', Number(e.target.value) || 0)}
                   />
                   <div className="field-note">
-                    = {pointsToQuota(selectedGroup.quotas.window_5h, quotaUnit).toLocaleString('zh-CN')} token
+                    {quotaPointsHint(selectedGroup.quotas.window_5h, quotaUnit)}
                   </div>
                 </div>
                 <div className="field">
@@ -414,7 +425,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
                     onChange={(e) => updateQuota('week', Number(e.target.value) || 0)}
                   />
                   <div className="field-note">
-                    = {pointsToQuota(selectedGroup.quotas.week, quotaUnit).toLocaleString('zh-CN')} token
+                    {quotaPointsHint(selectedGroup.quotas.week, quotaUnit)}
                   </div>
                 </div>
                 <div className="field">
@@ -428,7 +439,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
                     onChange={(e) => updateQuota('month', Number(e.target.value) || 0)}
                   />
                   <div className="field-note">
-                    = {pointsToQuota(selectedGroup.quotas.month, quotaUnit).toLocaleString('zh-CN')} token
+                    {quotaPointsHint(selectedGroup.quotas.month, quotaUnit)}
                   </div>
                 </div>
               </div>
