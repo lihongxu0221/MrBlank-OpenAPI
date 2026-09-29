@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { CalendarCheck2, Copy, Gift, Settings2, Shield, Wand2 } from 'lucide-react'
+import { Copy, Gift, Settings2, Shield, Wand2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { formatCredits, formatQuotaUnitLabel, setQuotaPerUnit } from '../../lib/format'
 import { P, qt } from '../../i18n'
@@ -8,6 +8,7 @@ import { getSiteConfig, subscribeSiteConfig } from '../../config/site'
 import { useSession, useToast } from '../../hooks/useStore'
 import { ConsoleLayout } from './ConsoleLayout'
 import { ConsoleHero } from '../../components/ConsoleHero'
+import { CheckinClaimCard } from '../../components/CheckinClaimCard'
 
 export function OverviewPage({ path }: { path: string }) {
   const session = useSession()
@@ -248,47 +249,20 @@ export function OverviewPage({ path }: { path: string }) {
             </strong>
           </button>
           <p className="workspace-note">
-            {P('注册不会直接获得额度。完成每日签到可领取 0–5 点公益额度（以当日社区池为准）。')}
+            {qt(P('注册不会直接获得额度。完成每日签到可领取 {min}–{max} 点公益额度（以当日社区池为准）。'), {
+              min: formatCredits(checkin?.min_quota ?? 0),
+              max: formatCredits(checkin?.max_quota ?? 0),
+            })}
           </p>
         </div>
       </div>
 
       <div className="dashboard-grid duo-cards">
-        <div className="panel action-card">
-          <div className="action-card-top">
-            <div className="action-icon">
-              <CalendarCheck2 size={18} />
-            </div>
-            <span className="pill">{P('每日一份好奇心')}</span>
-          </div>
-          <h3>
-            {checkin?.stats?.checked_in_today ? P('今天的探索额度，已到账') : P('新的一天，新的可能')}
-          </h3>
-          <p>{P('完成轻量验证，领取今天的公益额度。')}</p>
-          <div className="quota-range">0 {P('点')} — 5 {P('点')}</div>
-          <div className="tag-row">
-            <span className="pill">{P('轻量人机验证')}</span>
-            <span className="pill">{P('后台自动检查')}</span>
-          </div>
-          {checkin?.stats?.checked_in_today ? (
-            <div className="alert-box">{P('今日已签到')}</div>
-          ) : (
-            <>
-              <button type="button" className="button block soft" onClick={() => navigate('/checkin')}>
-                {P('验证并签到')} →
-              </button>
-              {checkin && !checkin.claimable && checkin.unavailable_reason ? (
-                <div className="alert-box">{checkin.unavailable_reason}</div>
-              ) : null}
-            </>
-          )}
-          <div className="action-foot">
-            {qt(P('本月签到 {month} 天 · 累计 {total} 天'), {
-              month: checkin?.stats?.checkin_count ?? 0,
-              total: checkin?.stats?.total_checkins ?? 0,
-            })}
-          </div>
-        </div>
+        <CheckinClaimCard
+          data={checkin}
+          actionDisabled={!checkin?.claimable}
+          onAction={() => navigate('/checkin')}
+        />
 
         <div className="panel action-card">
           <div className="action-card-top">
