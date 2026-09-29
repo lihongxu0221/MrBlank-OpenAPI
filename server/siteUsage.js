@@ -270,6 +270,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
       diagnosis_id: evt.diagnosis_id ? String(evt.diagnosis_id) : String(id),
       content: evt.content ? String(evt.content).slice(0, 300) : null,
       has_detail: evt.has_detail != null ? !!evt.has_detail : !!evt.diagnosis_id,
+      // aily field name: reasoning (UI label 推理强度)
+      reasoning: evt.reasoning ? String(evt.reasoning).slice(0, 64) : '',
     }
   }
 
@@ -382,6 +384,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
       diagnosis_id: e.diagnosis_id || e.id,
       has_detail: !!e.has_detail,
       content: e.content || '',
+      reasoning: e.reasoning || '',
     }
   }
 

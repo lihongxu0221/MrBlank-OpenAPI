@@ -36,6 +36,7 @@ test('enriched siteUsage records id/diagnosis link/amount and lists/filters/char
     ip: '1.2.3.4',
     route: 'cpa',
     has_detail: true,
+    reasoning: 'high',
   })
   store.recordEvent({
     userId: 'u2',
@@ -77,6 +78,8 @@ test('enriched siteUsage records id/diagnosis link/amount and lists/filters/char
   assert.ok(list.total >= 2)
   assert.ok(list.items.every((i) => i.id && i.amount != null))
   assert.ok(!list.items.some((i) => i.req_body || i.res_body))
+  const withReason = list.items.find((i) => i.id === id1)
+  assert.equal(withReason.reasoning, 'high')
 
   const scoped = store.listEvents({
     range: 'all',

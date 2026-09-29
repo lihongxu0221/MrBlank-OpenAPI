@@ -4,6 +4,7 @@ import {
   redactHeaders,
   maskTokenNameFromAuth,
   extractModelFromReqBody,
+  extractReasoningFromReqBody,
   extractUsageFromBody,
 } from '../diagnosis.js'
 
@@ -39,5 +40,14 @@ describe('diagnosis redaction helpers', () => {
     assert.equal(usage.prompt_tokens, 3)
     assert.equal(usage.completion_tokens, 7)
     assert.equal(usage.model_name, 'm1')
+  })
+
+  it('extractReasoningFromReqBody matches aily pickReasoning', () => {
+    assert.equal(extractReasoningFromReqBody('{"reasoning_effort":"high"}'), 'high')
+    assert.equal(extractReasoningFromReqBody('{"reasoning":{"effort":"medium"}}'), 'medium')
+    assert.equal(extractReasoningFromReqBody('{"thinking":"low"}'), 'low')
+    assert.equal(extractReasoningFromReqBody('{"thinking":{"type":"enabled"}}'), 'enabled')
+    assert.equal(extractReasoningFromReqBody('{"model":"x"}'), '')
+    assert.equal(extractReasoningFromReqBody('not-json'), '')
   })
 })

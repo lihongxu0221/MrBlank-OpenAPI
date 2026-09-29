@@ -1335,6 +1335,7 @@ app.use(
         content,
         has_detail,
         groupInfo,
+        reasoning,
       }) {
         try {
           if (typeof releaseTokenConcurrency === 'function') releaseTokenConcurrency()
@@ -1407,6 +1408,7 @@ app.use(
             route: route_via || null,
             content: content || null,
             has_detail: has_detail !== false && !!diagId,
+            reasoning: reasoning || '',
           })
         } catch (e) {
           console.error('[siteUsage] recordEvent failed', e?.message || e)

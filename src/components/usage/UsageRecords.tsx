@@ -37,6 +37,8 @@ type UsageItem = {
   has_detail?: boolean
   type?: number
   status_code?: number
+  /** aily: reasoning intensity (推理强度) */
+  reasoning?: string
 }
 
 type Chart = {
@@ -405,6 +407,7 @@ function downloadCsv(rows: UsageItem[], admin: boolean) {
   const headers = (admin ? ['用户'] : []).concat([
     'API密钥',
     '模型',
+    '推理强度',
     '端点',
     'IP',
     '分组',
@@ -422,6 +425,7 @@ function downloadCsv(rows: UsageItem[], admin: boolean) {
     const cols = (admin ? [csvCell(x.username)] : []).concat([
       csvCell(x.token_name),
       csvCell(x.model_name),
+      csvCell(x.reasoning || ''),
       csvCell(x.endpoint || ''),
       csvCell(x.ip || ''),
       csvCell(x.group || '默认分组'),
@@ -925,6 +929,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
                   {admin && <th>用户</th>}
                   <th>API 密钥</th>
                   <th>模型</th>
+                  <th>推理强度</th>
                   <th>端点</th>
                   <th>IP</th>
                   <th>分组</th>
@@ -954,6 +959,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
                       {admin && <td>{x.username || '-'}</td>}
                       <td className="name">{x.token_name}</td>
                       <td>{x.model_name}</td>
+                      <td>{x.reasoning || '-'}</td>
                       <td className="ep">
                         <code>{x.endpoint || '-'}</code>
                       </td>

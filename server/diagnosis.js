@@ -268,6 +268,22 @@ export function extractModelFromReqBody(reqBody) {
   }
 }
 
+/** aily pickReasoning parity — request-side reasoning intensity (推理强度). */
+export function extractReasoningFromReqBody(reqBody) {
+  if (!reqBody) return ''
+  try {
+    const body = typeof reqBody === 'object' ? reqBody : JSON.parse(String(reqBody))
+    if (!body || typeof body !== 'object') return ''
+    if (body.reasoning_effort) return String(body.reasoning_effort).slice(0, 64)
+    if (body.reasoning && body.reasoning.effort) return String(body.reasoning.effort).slice(0, 64)
+    if (typeof body.thinking === 'string') return body.thinking.slice(0, 64)
+    if (body.thinking && body.thinking.type) return String(body.thinking.type).slice(0, 64)
+    return ''
+  } catch {
+    return ''
+  }
+}
+
 export function maskTokenNameFromAuth(authHeader) {
   const raw = String(authHeader || '')
   const m = /^Bearer\s+(.+)$/i.exec(raw)

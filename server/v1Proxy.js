@@ -6,6 +6,7 @@
 import crypto from 'node:crypto'
 import {
   extractModelFromReqBody,
+  extractReasoningFromReqBody,
   extractUsageFromBody,
   maskTokenNameFromAuth,
   redactHeaders,
@@ -155,6 +156,7 @@ export function createV1Proxy({
           endpoint,
           requestedModel,
           apiKey,
+          reasoning,
           ...extra,
         })
       } catch (err) {
@@ -172,6 +174,7 @@ export function createV1Proxy({
 
     const reqBodyText = reqBuf.length ? reqBuf.toString('utf8') : ''
     const requestedModel = extractModelFromReqBody(reqBodyText)
+    const reasoning = extractReasoningFromReqBody(reqBodyText)
 
     /** @type {{ userId?: string, groupInfo?: object, skipUpstream?: boolean }} */
     let govCtx = { apiKey, requestedModel, endpoint, method: req.method }
