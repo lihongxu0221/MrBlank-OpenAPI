@@ -242,4 +242,11 @@ describe('requestIp (no first-XFF spoofing)', () => {
     assert.equal(requestIp({ headers: { 'x-forwarded-for': '6.6.6.6, 7.7.7.7' } }), '7.7.7.7')
     assert.equal(requestIp({ headers: {}, socket: { remoteAddress: '::ffff:10.0.0.1' } }), '10.0.0.1')
   })
+
+  it('ignores proxy headers from a non-loopback peer (direct exposure)', () => {
+    const direct = { headers: { 'x-real-ip': '5.5.5.5', 'x-forwarded-for': '6.6.6.6' }, ip: '6.6.6.6', socket: { remoteAddress: '::ffff:203.0.113.9' } }
+    assert.equal(requestIp(direct), '203.0.113.9')
+    const viaNginx = { headers: { 'x-real-ip': '5.5.5.5' }, ip: '127.0.0.1', socket: { remoteAddress: '::ffff:127.0.0.1' } }
+    assert.equal(requestIp(viaNginx), '5.5.5.5')
+  })
 })

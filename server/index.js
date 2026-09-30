@@ -3013,7 +3013,7 @@ app.post('/api/admin/credits/grant', requireAdmin, (req, res) => {
       res.status(400).json(fail('amount 须为正数（token）'))
       return
     }
-    const result = creditStore.adminGrant(userId, amount, String(req.body?.note || ''), {
+    const result = creditStore.adminGrant(userId, Math.round(amount), String(req.body?.note || '').slice(0, 200), {
       ip: requestIp(req) || null,
       operator: adminOperator(req),
     })
@@ -3040,7 +3040,7 @@ app.post('/api/admin/credits/deduct', requireAdmin, (req, res) => {
       res.status(400).json(fail('amount 须为正数（token）'))
       return
     }
-    const result = creditStore.adminDeduct(userId, amount, String(req.body?.note || ''), {
+    const result = creditStore.adminDeduct(userId, amount, String(req.body?.note || '').slice(0, 200), {
       ip: requestIp(req) || null,
       operator: adminOperator(req),
     })
