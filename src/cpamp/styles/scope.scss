@@ -1,0 +1,66 @@
+/**
+ * MrBlank: scoped entry for cpa-manager-plus (MIT, © 2026 Seakee) global styles.
+ *
+ * CPAMP ships global class names (.btn, .card, .form-group, .hint, .modal, …). They are
+ * loaded verbatim but nested under `.cpamp-scope` so they cannot collide with MrBlank's
+ * own stylesheet. Markup structure:
+ *
+ *   <div class="cpamp-scope"><div class="cpamp-theme-root" data-theme="white|dark"> … </div></div>
+ *
+ * The same structure is used for the body-level portal host (utils/portalRoot.ts).
+ */
+@use 'sass:meta';
+@use './variables.scss' as *;
+
+// `:where()` adds zero specificity, so every CPAMP global rule keeps exactly its original
+// specificity (e.g. reset's `button { font: inherit }` must still lose to CSS-module classes).
+:where(.cpamp-scope) {
+  // Neutralize MrBlank base rules (src/styles/tokens.css / app.css) that CPAMP does not
+  // itself override. Emitted before the CPAMP sheets so CPAMP's own rules still win.
+  :is(button, input, textarea, select) {
+    color: revert;
+  }
+  img {
+    display: revert;
+    max-width: revert;
+  }
+  :is(code, pre) {
+    font-family: revert;
+  }
+  .empty-state {
+    text-align: revert;
+    color: revert;
+  }
+  .muted {
+    color: revert;
+  }
+  .modal {
+    width: auto;
+    padding: 0; // CPAMP reset `* { padding: 0 }` (zero specificity) cannot beat app.css `.modal`
+  }
+
+  @include meta.load-css('./reset');
+  @include meta.load-css('./themes');
+  @include meta.load-css('./components');
+}
+
+.cpamp-scope {
+
+  // body-level rules from CPAMP reset.scss / global.scss applied to the theme root
+  .cpamp-theme-root {
+    font-family: $font-family;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.5;
+    color: var(--text-primary);
+    font-size: 16px; // CPAMP root inherits the browser default
+    text-align: start;
+    letter-spacing: normal;
+    color-scheme: normal; // MrBlank sets `color-scheme: dark` on <html>; CPAMP never does
+  }
+}
+
+.cpamp-portal-host {
+  position: relative;
+  z-index: 1000;
+}

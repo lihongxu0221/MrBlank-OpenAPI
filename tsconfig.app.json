@@ -23,12 +23,23 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
     "resolveJsonModule": true,
-    "allowJs": true
+    "allowJs": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/features/demo/demoFixtures": [
+        "src/cpamp/features/demo/demoFixtures.empty.ts"
+      ],
+      "@/*": [
+        "src/cpamp/*"
+      ]
+    }
   },
   "include": [
     "src"
   ],
   "exclude": [
-    "src/mocks/**"
+    "src/mocks/**",
+    "src/cpamp/**/*.test.ts",
+    "src/cpamp/**/*.test.tsx"
   ]
 }

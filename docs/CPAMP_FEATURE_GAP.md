@@ -151,7 +151,7 @@ Compose env: `USAGE_COLLECTOR_MODE=auto`, `USAGE_POLL_INTERVAL_MS=500`, `USAGE_B
 | `/admin/compat` | openai-compatibility JSON edit |
 | `/admin/request-log` | request-log toggle (also under settings) |
 | `/admin/settings` | Basic settings field writers (Wave A) |
-| `/admin/providers` | AI provider keys CRUD (Wave A) |
+| `/admin/providers` | **1:1 port of CPAMP v1.14.1 AI 提供商 page** (all 8 kinds; see `src/cpamp/PORTING.md`) |
 | `/admin/oauth` | OAuth start/callback/status + aliases (Wave A) |
 | `/admin/plugins` | Plugins list (+ PUT if CPA supports) (Wave A) |
 | `/admin/logs` | CPA file logs viewer (Wave A) |
@@ -184,8 +184,8 @@ Legend — **Native:** implement via CPA Management API. **Rebuild:** needs site
 | Basic settings (debug/proxy/logging/ws-auth/force-prefix/usage-stats) | `/settings` field endpoints | Only `request-log` page; config read-only | Writable toggles for remaining fields | **CPA-native** |
 | API keys CRUD | `/api-keys` → CPA `api-keys` | `/admin/keys` | — mostly done | CPA-native (done) |
 | API key aliases | CPAMP `api-key-aliases` | none | ✅ Wave B: `/admin/api-key-aliases` + site JSON store | **Rebuild** done |
-| AI provider keys (gemini/claude/codex/vertex/xai/interactions) | `/ai-providers/*` | none | Full provider CRUD pages | **CPA-native** |
-| OpenAI compatibility | AI providers + compat | `/admin/compat` | — done (JSON editor) | CPA-native (done) |
+| AI provider keys (gemini/interactions/codex/xai/meta/claude/vertex/openai) | `/ai-providers/*` | `/admin/providers` | — done (CPAMP page ported verbatim, BFF `/api/admin/cpa-mgmt/*`) | **CPA-native (done)** |
+| OpenAI compatibility | AI providers + compat | `/admin/providers?tab=openai-compatibility` (`/admin/compat` redirects) | — done (CPAMP drawers) | CPA-native (done) |
 | Auth-files list / status | `/accounts` | `/admin/accounts` read-only | Mutate: note/priority/disable/delete/download/upload | **CPA-native** (extend accounts) |
 | Per-account quota panels | Accounts + quota-snapshots | none | Quota windows / forecasts | **Rebuild** (header snapshots + site store) or CPAMP |
 | OAuth login flows | `/oauth` + `*-auth-url` / callback / status | none | Start/poll/cancel OAuth in admin | **CPA-native** |

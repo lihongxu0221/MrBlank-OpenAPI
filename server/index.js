@@ -89,6 +89,7 @@ import { requestIp } from './requestIp.js'
 import { createLocalUserStore } from './localUsers.js'
 import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy, extractMaxTokens } from './v1Proxy.js'
+import { createCpaMgmtRouter } from './cpaMgmtProxy.js'
 import { createReservationLedger, estimateRequestQuota } from './reservations.js'
 import { createRateLimiter } from './rateLimiter.js'
 import { securityHeaders, noStoreApi, spaStatic } from './securityHeaders.js'
@@ -5139,6 +5140,9 @@ app.post('/api/admin/usage/import-sessions/:id/cancel', requireAdmin, (req, res)
     res.status(err?.status || 400).json(fail(err?.message || 'import cancel failed'))
   }
 })
+
+/* CPAMP 1:1 AI providers page — admin-only whitelist proxy to CPA management API. */
+app.use('/api/admin/cpa-mgmt', requireAdmin, createCpaMgmtRouter({ cpaCfg, express }))
 
 // Optional: serve the built SPA directly (when not fronted by nginx static). Correct cache headers:
 // index.html no-cache; hashed /assets/* immutable 1y.
