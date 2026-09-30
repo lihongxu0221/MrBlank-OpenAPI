@@ -12,8 +12,9 @@ carries a `MrBlank:` comment at the change.
   NotificationContainer + ConfirmationModal) inside the normal 1240px MrBlank admin column.
 - Look & feel: STRUCTURE and BUTTONS are CPAMP; everything else follows MrBlank's admin UI.
   `styles/mrblankTheme.scss` remaps CPAMP tokens to `src/styles/tokens.css` (light/dark + 主题配色
-  accent via `html[data-accent]`). CPAMP originals are captured on the theme root as `--cpo-*` and
-  restored on `.btn` / the toolbar add trigger, so buttons keep CPAMP's exact look.
+  accent via `html[data-accent]`). Buttons keep CPAMP shape/size/structure/typography (CPAMP radius
+  captured as `--cpo-*` and restored on `.btn` / the toolbar add trigger) while their colours follow
+  the remap — primary buttons use the 主题配色 accent.
 - Data: admin-only BFF `server/cpaMgmtProxy.js` mounted at `/api/admin/cpa-mgmt` → CPA `/v0/management`.
   Whitelist: `GET /config` (reduced to the 8 provider sections), GET/PUT/PATCH/DELETE on the 8 sections,
   `POST /api-call`, `GET /api-key-usage`. Management key is injected server-side only.
