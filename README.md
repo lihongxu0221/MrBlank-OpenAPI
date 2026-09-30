@@ -1,13 +1,12 @@
 # MrBlank OpenAPI
 
-Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn)。支持 **Linux.do OAuth** 与 **本站用户名/密码** 双登录、会话 Cookie，以及对接 **CPA 内核**（与 www CPAMP 同源）的模型 / 密钥 / 用量。
+Vite + React 公益站控制台 + Node BFF。支持 **Linux.do OAuth** 与 **本站用户名/密码** 双登录，对外提供 OpenAI 兼容的 `/v1` 接口；模型、密钥与用量统一经 **CPA 内核** 处理。
 
-> **Base URL**：`https://openapi.juc114.cn/v1`  
-> 本域名 nginx 将 `/v1/` 反代到本机 CPA billing shim（`127.0.0.1:8320`）→ cli-proxy-api。控制台 BFF（`:8787`）用服务端持有的 Management / Admin Key 调用 CPA / CPAMP，**不会把这些密钥下发到浏览器**。
+> 所有上游管理密钥只保存在服务端环境变量 / 文件中，**不会下发到浏览器**，也不应提交到仓库。
 
 ## 站名与 Base URL（可配置）
 
-编辑 `public/site-config.json`（生产可直接改该文件后刷新）：
+编辑 `public/site-config.json`（生产环境可直接修改后刷新）：
 
 ```json
 {
@@ -15,7 +14,7 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
   "brandShort": "公益站",
   "siteTagline": "为每一种好奇，打开可能",
   "siteTaglineEn": "More room for every idea",
-  "apiBaseUrl": "https://openapi.juc114.cn/v1",
+  "apiBaseUrl": "https://your-domain.example/v1",
   "footerLine": "Built for curiosity, shared with care."
 }
 ```
@@ -24,154 +23,129 @@ Vite + React 控制台，部署于 [openapi.juc114.cn](https://openapi.juc114.cn
 
 ## 架构
 
-客户端调用始终经 **CPA 内核**（非并行 aily 网关）：
-
 ```
 浏览器 / SDK
-  → https://openapi.juc114.cn/v1
-  → nginx → BFF :8787
-       ├─ 默认（裸模型名）→ CPA billing :8320 → cli-proxy-api :8317
-       └─ Aily 内嵌桥接（.aily / compat）当且仅当：
-            · model 以 aily/ 开头（广场列出的非冲突 id，如 aily/glm-5.3），或
-            · AILY_MODEL_ROUTES 环境模式命中（可选覆盖裸名），或
-            · Grok/OpenAI 账号白名单/映射命中
-BFF 先做用户组治理（额度 429 / 模型 403 / models 过滤），再落盘诊断（含 route_via）
-站登录 = 本站本地用户 + Linux.do（不用 aily）
-Aily 上游凭证 = 共享 ~/.config/aily-project/.aily，管理入口 #/admin/oauth
-同名消歧：CPA 用原名；Aily 对外用 aily/ 前缀（站点 routing 白名单不再抢占裸名）
+  → https://<站点域名>/v1
+  → 反向代理 → BFF（Node，server/）
+       ├─ 用户组治理：窗口额度 429 / 模型白名单 403 / 单模型硬上限 / models 过滤
+       ├─ 组额度用尽时可使用钱包余额（本站积分）继续调用
+       ├─ 请求诊断落盘（仅管理员可查看）
+       └─ 转发 → CPA 内核（模型源、API Key 管理、计费）
 ```
 
-| 组件 | 地址 | 用途 |
-|---|---|---|
-| 本站静态 + BFF | openapi.juc114.cn → `:8787` | Linux.do / 本站账号登录、控制台 `/api`、诊断捕获 |
-| `/v1` | openapi.juc114.cn/v1 → BFF `:8787` → `:8320`（默认） | 对外 OpenAI 兼容；CPA 为模型源 |
-| CPA | `127.0.0.1:8317` | cli-proxy-api；Management Key 管 api-keys |
-| CPAMP | `127.0.0.1:18317`（www） | 用量汇总；Admin Key **仅服务端**；勿改 www UI |
-| Aily（内嵌） | openapi BFF + `.aily` | 上游凭证与 OpenAI 兼容桥接已并入本站；独立 `:8088` 适配器为可选/遗留 |
+| 组件 | 用途 |
+|---|---|
+| 静态前端（`dist/`） | 首页、接入指南、社区、控制台、运营后台 |
+| BFF（`server/`） | 登录会话、控制台 `/api`、`/v1` 代理与治理、诊断、钱包 / 签到 / 兑换、用户组 |
+| CPA 内核 | 内嵌上游：模型列表、API Key、实际转发与计费 |
 
-控制台能力：
+## 功能
 
-- **模型**：BFF `GET /api/token/options` ← CPA `GET /v1/models` + 可选 Aily（`aily/` 前缀 id，`provider: Aily`）
-- **密钥**：登录用户创建时 BFF 调 CPA `PUT /v0/management/api-keys`，并在磁盘映射 `linux.do user → key`
-- **请求诊断（管理员）**：`#/admin/usage` 双击行打开「请求诊断详情」；正文来自 BFF `/v1` 落盘（CPAMP 汇总无 body）
-- **Aily 上游（管理员）**：`#/admin/oauth`（Aily 区块）管理共享凭证 / 连通测试；可选 `AILY_MODEL_ROUTES` 走内嵌桥接；见 `docs/PHASE_D_CHECKLIST.md`
-- **用户组治理（Phase E）**：`#/admin/groups` 配置额度/白名单/晋级；BFF `/v1` 对映射密钥强制 429/403；控制台展示剩余与晋级进度；见 `docs/PHASE_E_CHECKLIST.md`
-- **用量**：BFF `GET /api/log/self` ← CPAMP `GET /v0/management/usage`，按密钥 sha256 过滤
-- **社区排行 / 号池 / 调用实况 / 服务状态**：BFF 聚合 CPAMP usage + auth-files + CPA `/v1/models` 与 health（短缓存）；无数据时返回空列表
-- **签到 / 兑换（Phase F）**：持久化本站积分钱包；管理员 `#/admin/credits` 配置每日发放与兑换码；组额度用尽时可用站点积分继续调用；见 `docs/PHASE_F_CHECKLIST.md`
+**控制台（普通用户）**
+
+- **概览**：钱包余额、用户组与剩余额度、晋级进度
+- **每日签到 / 兑换码**：发放本站积分（点），日界为北京时间零点
+- **钱包**：收入 / 支出流水（时间、IP、方式、途径、点数、详细信息），支持时间预设（今天 / 昨天 / 近 24 小时 / 近 7 天 / 近 30 天 / 本月 / 上月 / 全部 / 自定义）、方式与途径筛选、分页；时间边界统一为 Asia/Shanghai
+- **API 密钥**：创建 / 管理个人密钥（额度、模型限制、并发）
+- **用量记录**：请求明细、分布与趋势；消费以「点」显示
+- **模型广场 / 服务状态**
+
+**运营后台（管理员）**
+
+- 凭证管理（列表 / 健康巡检 / OAuth / 凭证文件）、AI 提供商、日志与请求监控
+- 模型价格（价格本同步与继承）、用量监控（含请求诊断详情）
+- 用户组：窗口额度（5 小时 / 周 / 月）、模型白名单、晋级规则
+- **组模型配额**：按组为单个模型设置滚动硬上限
+- 签到兑换：签到发放区间、兑换码、手动发放 / 扣减、钱包流水
+- 本站账号、模型星座、配置面板
+
+## 计量单位
+
+- **1 USD = 500,000 token**（固定）
+- **1 点 = N token**，N 由管理员在后台配置（`raw_per_point`）
+- 展示点数 = token ÷ N；模型消费按「Token × 模型单价 → USD → token → 点」折算
+- 钱包流水同时记录 token 原值与记账时的 N，界面按当前 N 显示
 
 ## 环境变量（服务端，勿提交 git）
 
+完整示例见 `server/.env.example`，常用项：
+
 | 变量 | 说明 |
 |---|---|
-| `LINUXDO_CLIENT_ID` / `LINUXDO_CLIENT_SECRET` | Linux.do OAuth |
-| `LINUXDO_REDIRECT_URI` | 如 `https://openapi.juc114.cn/oauth/linuxdo` |
+| `LINUXDO_CLIENT_ID` / `LINUXDO_CLIENT_SECRET` / `LINUXDO_REDIRECT_URI` | Linux.do OAuth |
 | `SESSION_SECRET` | 会话签名 |
-| `PORT` / `HOST` / `SITE_ORIGIN` | 默认 `8787` / `127.0.0.1` / 本站 origin |
-| `CPA_BASE_URL` | 默认 `http://127.0.0.1:8317` |
-| `CPA_BILLING_URL` | 默认 `http://127.0.0.1:8320` |
-| `CPAMP_BASE_URL` | 默认 `http://127.0.0.1:18317` |
-| `PUBLIC_API_BASE_URL` | 默认 `https://openapi.juc114.cn/v1` |
-| `CPA_DEMO_API_KEY_FILE` | demo client key 文件路径 |
-| `CPA_MANAGEMENT_KEY_FILE` | CPA management key 文件路径 |
-| `CPAMP_ADMIN_KEY_FILE` | CPAMP admin key 文件路径 |
-| `USER_KEYS_PATH` | 用户密钥映射 JSON（默认 `server/data/user-keys.json`） |
-| `BOOTSTRAP_ADMIN_USER` / `BOOTSTRAP_ADMIN_PASSWORD` | 首次启动创建本站管理员（若用户名不存在）；勿提交真实密码 |
-| `LOCAL_USERS_PATH` | 本地用户 JSON（默认 `server/data/local-users.json`） |
-| `ADMIN_LOCAL_USERNAMES` | 可选：额外将指定本站用户名视为管理员（本地 `role=admin` 已足够） |
-| `AILY_MODEL_ROUTES` | 可选：裸模型名命中时走内嵌 Aily（覆盖「裸名默认 CPA」）；广场 Aily 模型仍用 `aily/` 前缀；**不用于站登录**；`AILY_ADAPTER_*` 为遗留可选 |
-| `SITE_CREDITS_PATH` | 签到/兑换/站点积分 JSON（默认 `server/data/site-credits.json`） |
-| `USER_GROUPS_PATH` | 用户组 JSON（默认 `server/data/user-groups.json`） |
+| `PORT` / `HOST` / `SITE_ORIGIN` | BFF 监听与站点 origin |
+| `CPA_BASE_URL` / `CPA_BILLING_URL` | CPA 内核地址 |
+| `CPA_MANAGEMENT_KEY` 或 `CPA_MANAGEMENT_KEY_FILE` | CPA 管理密钥（仅服务端） |
+| `PUBLIC_API_BASE_URL` | 对外展示的 `/v1` 地址 |
+| `BOOTSTRAP_ADMIN_USER` / `BOOTSTRAP_ADMIN_PASSWORD` | 首次启动创建本站管理员；勿提交真实密码 |
+| `ADMIN_LINUXDO_IDS` / `ADMIN_LINUXDO_USERNAMES` / `ADMIN_LINUXDO_EMAILS` / `ADMIN_LOCAL_USERNAMES` | 管理员白名单 |
+| `SITE_CREDITS_PATH` / `WALLET_LEDGER_PATH` | 站点积分 JSON / 钱包流水 JSONL（默认 `server/data/`） |
+| `USER_GROUPS_PATH` / `USER_KEYS_PATH` / `LOCAL_USERS_PATH` | 用户组 / 密钥映射 / 本站用户（默认 `server/data/`） |
 
-也可用 `CPA_DEMO_API_KEY` / `CPA_MANAGEMENT_KEY` / `CPAMP_ADMIN_KEY` 直接注入（勿写入仓库）。示例见 `server/.env.example`。
+`server/data/` 为运行时数据目录，已被 git 忽略；部署时请保留，勿覆盖。
 
 ## 本地开发
 
 ```bash
-# 终端 1：OAuth + API
-cp server/.env.example .env   # 填入真实密钥
+# 终端 1：BFF
+cp server/.env.example .env   # 填入本地配置
 npm install --prefix server
 npm run server
 
-# 终端 2：前端（代理 /api 与 /oauth → :8787）
+# 终端 2：前端（开发服务器代理 /api 与 /oauth 到 BFF）
 npm install
 npm run dev
 ```
 
-Linux.do 登录需使用已登记的 Redirect URI。生产回调为 `https://openapi.juc114.cn/oauth/linuxdo`。
+测试与构建：
 
-## 生产
+```bash
+npm test         # server/test/*.test.js
+npm run build    # tsc -b && vite build
+```
+
+钱包历史回填（服务启动时会自动执行，幂等）：
+
+```bash
+node server/scripts/backfill-wallet.js --dry-run   # 仅预览
+```
+
+## 生产部署
 
 ```bash
 npm run build
 npm install --omit=dev --prefix server
-npm start   # 建议 systemd：mrblank-openapi.service
+npm start        # 建议使用 systemd 等进程管理
 ```
 
-Nginx：
+反向代理要点：
 
-- 静态根目录 → `dist/`
-- `/api/`、`/oauth/` → `http://127.0.0.1:8787`
-- `/v1/` → `http://127.0.0.1:8787`（BFF 诊断捕获 → CPA billing `:8320`）
+- 静态根目录 → `dist/`，未知路径回退 `index.html`（SPA）
+- `/api/`、`/oauth/`、`/v1/` → BFF
+- 设置 `X-Real-IP`（BFF 以此记录客户端 IP，不信任客户端自带的 `X-Forwarded-For` 首项）
 
 ## 路由
 
-| Hash | 说明 |
+| 路径 | 说明 |
 |---|---|
-| `#/` | 首页 |
-| `#/guide` | 接入指南 |
-| `#/availability` | 服务状态（CPA 探测 + CPAMP 延迟） |
-| `#/community` | 社区动态（排行/号池/调用实况来自 CPAMP） |
-| `#/about` | 关于 |
-| `#/console` 等 | 控制台（需登录；普通用户落地） |
-| `#/admin` 等 | 运营控制台（白名单管理员；CPAMP/CPA 子集） |
-| `#/admin/credits` | 签到发放与兑换码（Phase F） |
-| `#/checkin` / `#/redeem` | 每日签到 / 兑换码 |
+| `/` | 首页 |
+| `/guide` | 接入指南 |
+| `/availability` | 服务状态 |
+| `/community` | 社区动态 |
+| `/about` | 关于 |
+| `/console` | 控制台概览（需登录） |
+| `/checkin` / `/redeem` / `/wallet` | 每日签到 / 兑换码 / 钱包 |
+| `/keys` / `/usage` / `/models` / `/channels` | API 密钥 / 用量记录 / 模型广场 / 服务状态 |
+| `/admin` 等 | 运营后台（仅管理员） |
+
+## 管理员
+
+- 本站密码登录用户按本地 `role=admin`（或 `ADMIN_LOCAL_USERNAMES`）判定；Linux.do 用户按白名单（id / 用户名 / 邮箱）判定
+- 未配置任何管理员时，无人可访问管理接口（403）
+- 管理员登录后进入 `/admin`，普通用户进入 `/console`
+- 浏览器只获得脱敏数据；管理密钥仅服务端读取
 
 ## 声明
 
-站名与布局参考了公开公益站前端；本仓库用于私人部署与学习。请勿冒充官方 Darkforger 服务。模型上游为本地 CPA，而非 Darkforger。
-
-
-## 管理员白名单（`#/admin`）
-
-### 运维分工
-
-| 面板 | 用途 |
-|------|------|
-| **www CPAMP**（`https://www.juc114.cn/management.html`） | **完整运维**：高级配置、供应商/账号深度操作 |
-| **openapi `#/admin`**（本站） | **日常运营子集**（MrBlank Geist / CSS 变量风格）：连接状态、号池健康、CPA 密钥、用量汇总，以及星座 / 用户组 / 签到兑换 / 本站账号 |
-
-**不会** iframe 嵌入或修改 www 的 management UI。清单见 [`docs/PHASE_B_CHECKLIST.md`](docs/PHASE_B_CHECKLIST.md)。
-
-OpenAPI 站内运营控制台是 **CPAMP 能力的兼容风格子集**（概览 / 上游账号 / CPA 密钥 / 用量 / 连接状态）。
-
-在 VPS `.env`（或 systemd 环境）中设置：
-
-```bash
-# 数字 ID、用户名、和/或邮箱（逗号或空格分隔；邮箱/用户名大小写不敏感）
-ADMIN_LINUXDO_IDS=123456
-ADMIN_LINUXDO_USERNAMES=your_linuxdo_name
-ADMIN_LINUXDO_EMAILS=you@example.com
-BOOTSTRAP_ADMIN_USER=admin
-# BOOTSTRAP_ADMIN_PASSWORD=set_on_server_only
-ADMIN_LOCAL_USERNAMES=
-```
-
-匹配 Linux.do OAuth 返回的 `id` / `username` / `name`（display_name）/ `email`；
-本站密码登录用户按本地 `role=admin`（或 `ADMIN_LOCAL_USERNAMES`）判定；Linux.do 仍走白名单。
-管理员登录后进入 `#/admin`，普通用户进入 `#/console`。
-
-- 未配置任一项时：**无人**可进入管理接口（403）
-- 仅白名单用户能看见导航「管理」并访问 `#/admin`
-- 浏览器只拿到脱敏数据；`CPAMP_ADMIN_KEY` / `CPA_MANAGEMENT_KEY` 仅服务端读取
-- 完整高级配置仍使用 www CPAMP 面板
-
-## Cloudflare（可选）
-
-若域名经 Cloudflare 代理（小橙云），请注意：
-
-- 源站仍监听本机 BFF `:8787`；nginx 终止或回源 HTTPS 均可
-- WebSocket / 长连接若遇超时，可在 CF 网络层调大或对 `/v1` 绕过部分优化
-- Turnstile 等人机验证仅在启用时需要；本站签到当前不强制 Turnstile
-- 管理接口与密钥仍只在源站 `.env` / 文件中，切勿写入 Pages 或仓库
+站名与布局参考了公开公益站前端；本仓库用于私人部署与学习。请勿冒充官方 Darkforger 服务。
