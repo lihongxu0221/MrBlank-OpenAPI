@@ -67,7 +67,6 @@ import { createQuotaUnitStore, DEFAULT_QUOTA_PER_UNIT, buildCreditUnitInfo } fro
 import { createApiKeyAliasesStore } from './apiKeyAliases.js'
 import { createAccountActionsStore } from './accountActions.js'
 import { createUsageImportSessions } from './usageImportSessions.js'
-import { createCodexInspectionStore } from './codexInspection.js'
 import { createCpaCollector } from './cpaCollector.js'
 import { createUserKeyStore } from './userKeys.js'
 import {
@@ -176,51 +175,6 @@ const quotaSnapshots = createQuotaSnapshotStore(
 const usageImportSessions = createUsageImportSessions(
   process.env.USAGE_IMPORTS_DIR || path.join(__dirname, 'data', 'usage-imports'),
   siteUsage,
-)
-const codexInspection = createCodexInspectionStore(
-  process.env.CODEX_INSPECTION_PATH || path.join(__dirname, 'data', 'codex-inspection.json'),
-  {
-    listAccounts: async () => {
-      let payload = cpaCollector.getAuthFilesPayload?.() || null
-      if (!payload && cpaCfg.managementKey) {
-        try {
-          await cpaCollector.refresh({ force: true })
-          payload = cpaCollector.getAuthFilesPayload?.() || null
-        } catch {
-          payload = null
-        }
-      }
-      return payload ? mapAdminAccounts(payload) : []
-    },
-    refreshAuthFile: async (name) => {
-      const result = await refreshAuthFile(cpaCfg, name)
-      try {
-        await cpaCollector.refresh({ force: true })
-      } catch {
-        /* ignore */
-      }
-      return result
-    },
-    setAuthFileDisabled: async (name, disabled) => {
-      const result = await setAuthFileDisabled(cpaCfg, name, disabled)
-      try {
-        await cpaCollector.refresh({ force: true })
-      } catch {
-        /* ignore */
-      }
-      return result
-    },
-    deleteAuthFile: async (name) => {
-      const result = await deleteAuthFile(cpaCfg, name)
-      try {
-        await cpaCollector.refresh({ force: true })
-      } catch {
-        /* ignore */
-      }
-      return result
-    },
-    refreshCollector: async () => cpaCollector.refresh({ force: true }),
-  },
 )
 const cpaCollector = createCpaCollector({
   intervalMs: Number(process.env.CPA_COLLECTOR_INTERVAL_MS || 20_000) || 20_000,
@@ -4900,7 +4854,7 @@ app.delete('/api/admin/api-key-aliases', requireAdmin, (req, res) => {
 })
 
 
-// ——— Wave C: usage import/export + site-side Codex inspection ———
+// ——— Wave C: usage import/export ———
 
 app.get('/api/admin/usage/export', requireAdmin, (req, res) => {
   try {
@@ -4979,37 +4933,6 @@ app.post('/api/admin/usage/import-sessions/:id/cancel', requireAdmin, (req, res)
     res.status(err?.status || 400).json(fail(err?.message || 'import cancel failed'))
   }
 })
-
-app.post('/api/admin/codex-inspection/run', requireAdmin, async (req, res) => {
-  try {
-    const asyncMode = req.body?.async === true || String(req.query?.async || '') === '1'
-    const run = await codexInspection.startRun({ async: asyncMode })
-    res.status(asyncMode ? 202 : 200).json(ok(run))
-  } catch (err) {
-    console.error('[admin] codex-inspection/run', err?.message || err)
-    res.status(err?.status || 500).json(fail(err?.message || 'codex inspection run failed'))
-  }
-})
-
-app.get('/api/admin/codex-inspection/runs', requireAdmin, (req, res) => {
-  try {
-    const limit = req.query?.limit != null ? Number(req.query.limit) : 30
-    res.json(ok(codexInspection.listRuns({ limit })))
-  } catch (err) {
-    res.status(500).json(fail(err?.message || 'codex inspection list failed'))
-  }
-})
-
-app.get('/api/admin/codex-inspection/runs/:id', requireAdmin, (req, res) => {
-  try {
-    res.json(ok(codexInspection.getRun(req.params.id)))
-  } catch (err) {
-    res.status(err?.status || 404).json(fail(err?.message || 'run not found'))
-  }
-})
-
-// Codex 巡检 standalone page removed (cancel / bulk-actions routes were used only by it).
-// Run / list / detail remain for 凭证管理 → 健康巡检.
 
 app.use((req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/oauth/')) {

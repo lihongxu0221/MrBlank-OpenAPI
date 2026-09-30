@@ -16,7 +16,6 @@ import {
   Eye,
   EyeOff,
   X,
-  ScanSearch,
   Copy,
 } from 'lucide-react'
 import { api } from '../../lib/api'
@@ -94,34 +93,9 @@ type Pool = {
   by_provider: { provider: string; count: number }[]
 }
 
-type TabId = 'list' | 'health' | 'oauth' | 'credentials'
+type TabId = 'list' | 'oauth' | 'credentials'
 type ViewMode = 'table' | 'card'
 type DetailTab = 'overview' | 'quota' | 'config' | 'models' | 'diagnosis'
-
-type InspectionFinding = {
-  id: string
-  name?: string | null
-  label?: string | null
-  provider?: string | null
-  status?: string | null
-  status_message?: string
-  disabled?: boolean
-  verdict?: string
-  severity?: string
-  suggested_actions?: string[]
-}
-
-type InspectionRun = {
-  id: string
-  status: string
-  created_at?: string
-  finished_at?: string | null
-  summary?: { scanned?: number; ok?: number; expired?: number; error?: number; disabled?: number } | null
-  finding_count?: number
-  findings?: InspectionFinding[]
-  note?: string
-  error?: string | null
-}
 
 const OAUTH_PROVIDERS = [
   'anthropic',
@@ -219,7 +193,9 @@ function fmtRatio(r?: number | null) {
 
 function readInitialTab(): TabId {
   const t = getHashQuery().get('tab')
-  if (t === 'health' || t === 'oauth' || t === 'credentials' || t === 'list') return t
+  // 'health' (Codex 巡检) was removed → default list tab, and drop the stale query
+  if (t === 'health' && typeof history !== 'undefined') history.replaceState(null, '', '/admin/accounts')
+  if (t === 'oauth' || t === 'credentials' || t === 'list') return t
   return 'list'
 }
 
@@ -311,11 +287,6 @@ export function AdminAccountsPage({ path }: { path: string }) {
   const [uploadContent, setUploadContent] = useState('')
   const [credProviderFilter, setCredProviderFilter] = useState('all')
 
-  // Health tab
-  const [inspList, setInspList] = useState<{ items: InspectionRun[]; note?: string } | null>(null)
-  const [inspSelected, setInspSelected] = useState<InspectionRun | null>(null)
-  const [inspBusy, setInspBusy] = useState<string | null>(null)
-  const [inspErr, setInspErr] = useState<string | null>(null)
 
   function switchTab(next: TabId) {
     setTab(next)
@@ -369,17 +340,6 @@ export function AdminAccountsPage({ path }: { path: string }) {
     }
   }
 
-  const loadInspection = useCallback(async () => {
-    if (!gate.allowed) return
-    setInspErr(null)
-    try {
-      const d = await api.get<{ items: InspectionRun[]; note?: string }>('/api/admin/codex-inspection/runs?limit=20')
-      setInspList(d)
-    } catch (e) {
-      setInspErr((e as Error).message)
-    }
-  }, [gate.allowed])
-
   useEffect(() => {
     if (!gate.allowed) return
     load()
@@ -396,10 +356,6 @@ export function AdminAccountsPage({ path }: { path: string }) {
       window.removeEventListener('mrblank:route', sync)
     }
   }, [path])
-
-  useEffect(() => {
-    if (tab === 'health' && gate.allowed) loadInspection()
-  }, [tab, gate.allowed, loadInspection])
 
   useEffect(() => {
     if (!detail) return
@@ -913,31 +869,6 @@ export function AdminAccountsPage({ path }: { path: string }) {
     }
   }
 
-  async function runInspection() {
-    setInspBusy('run')
-    try {
-      await api.post('/api/admin/codex-inspection/run', {})
-      showToast(P('已启动巡检'))
-      await loadInspection()
-    } catch (e) {
-      showToast((e as Error).message)
-    } finally {
-      setInspBusy(null)
-    }
-  }
-
-  async function openInspection(id: string) {
-    setInspBusy(id)
-    try {
-      const d = await api.get<InspectionRun>(`/api/admin/codex-inspection/runs/${encodeURIComponent(id)}`)
-      setInspSelected(d)
-    } catch (e) {
-      showToast((e as Error).message)
-    } finally {
-      setInspBusy(null)
-    }
-  }
-
   const aliasPreview = useMemo(() => previewAliasRules(aliasJson, excludedJson), [aliasJson, excludedJson])
 
   const credItems = useMemo(() => {
@@ -984,7 +915,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
       <ConsoleHero
         title={P('凭证管理')}
         subtitle={P(
-          '统一管理登录凭证、可用状态、剩余额度和巡检结果。完整 CPA OAuth 九大提供商仍在「OAuth 登录」页。',
+          '统一管理登录凭证、可用状态与剩余额度。完整 CPA OAuth 九大提供商仍在「OAuth 登录」页。',
         )}
       />
 
@@ -993,14 +924,14 @@ export function AdminAccountsPage({ path }: { path: string }) {
           {P('凭证列表')}
           {pool ? <span className="n">{pool.total}</span> : null}
         </button>
-        <button type="button" className={tab === 'health' ? 'on' : ''} onClick={() => switchTab('health')}>
-          {P('健康巡检')}
-        </button>
         <button type="button" className={tab === 'oauth' ? 'on' : ''} onClick={() => switchTab('oauth')}>
           {P('OAuth 配置')}
         </button>
         <button type="button" className={tab === 'credentials' ? 'on' : ''} onClick={() => switchTab('credentials')}>
           {P('登录凭证')}
+        </button>
+        <button type="button" style={{ marginLeft: 'auto' }} onClick={() => navigate('/admin/account-actions')}>
+          {P('认证异常候选')}
         </button>
       </div>
 
@@ -1058,110 +989,6 @@ export function AdminAccountsPage({ path }: { path: string }) {
           onBatch={runBatch}
           batchBusy={batchBusy}
         />
-      ) : null}
-
-      {tab === 'health' ? (
-        <>
-          <div className="panel" style={{ marginBottom: 16 }}>
-            <h3>
-              <ScanSearch size={14} /> {P('健康巡检')}
-            </h3>
-            <p className="muted" style={{ fontSize: 13 }}>
-              {P(
-                '本站 lite 巡检（基于 CPA auth-files 判定凭证有效 / 过期 / 异常）。',
-              )}
-            </p>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button type="button" className="button" disabled={!!inspBusy} onClick={runInspection}>
-                {P('启动巡检')}
-              </button>
-              <button type="button" className="button secondary" disabled={!!inspBusy} onClick={loadInspection}>
-                <RefreshCw size={14} /> {P('刷新记录')}
-              </button>
-              <button type="button" className="button secondary" onClick={() => navigate('/admin/account-actions')}>
-                {P('认证异常候选')}
-              </button>
-            </div>
-            {inspList?.note ? <p className="muted" style={{ marginTop: 8 }}>{inspList.note}</p> : null}
-            {inspErr ? <p style={{ color: 'var(--error)' }}>{inspErr}</p> : null}
-          </div>
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>{P('状态')}</th>
-                  <th>{P('摘要')}</th>
-                  <th>{P('时间')}</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {(inspList?.items || []).map((r) => (
-                  <tr key={r.id}>
-                    <td>
-                      <code>{r.id.slice(0, 8)}</code>
-                    </td>
-                    <td>{r.status}</td>
-                    <td>
-                      {r.summary
-                        ? `scan ${r.summary.scanned ?? 0} · ok ${r.summary.ok ?? 0} · exp ${r.summary.expired ?? 0} · err ${r.summary.error ?? 0}`
-                        : r.finding_count != null
-                          ? `${r.finding_count} findings`
-                          : '—'}
-                    </td>
-                    <td>{fmtTime(r.created_at)}</td>
-                    <td>
-                      <button type="button" className="button secondary compact" onClick={() => openInspection(r.id)}>
-                        {P('查看')}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {inspSelected ? (
-            <div className="panel" style={{ marginTop: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <h3>
-                  {P('巡检详情')} · <code>{inspSelected.id.slice(0, 8)}</code>
-                </h3>
-                <button type="button" className="button secondary compact" onClick={() => setInspSelected(null)}>
-                  <X size={14} />
-                </button>
-              </div>
-              {inspSelected.error ? <p style={{ color: 'var(--error)' }}>{inspSelected.error}</p> : null}
-              <div className="table-wrap">
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>{P('凭证')}</th>
-                      <th>{P('判定')}</th>
-                      <th>{P('建议')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(inspSelected.findings || []).map((f) => (
-                      <tr key={f.id}>
-                        <td>
-                          <div>{f.label || f.name}</div>
-                          <div className="muted" style={{ fontSize: 12 }}>
-                            {f.provider} · {f.status}
-                          </div>
-                        </td>
-                        <td>
-                          {f.verdict || '—'} {f.severity ? `(${f.severity})` : ''}
-                        </td>
-                        <td>{(f.suggested_actions || []).join(', ') || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : null}
-        </>
       ) : null}
 
       {tab === 'oauth' ? (
@@ -1723,7 +1550,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
                   {diagCandidates == null ? <p className="muted">{P('加载中…')}</p> : null}
                   {diagCandidates && !diagCandidates.length ? (
                     <div className="cred-diag-empty">
-                      {P('暂无与该凭证匹配的认证异常候选。巡检/Header 证据需本站 Rebuild；完整巡检见「健康巡检」Tab。')}
+                      {P('暂无与该凭证匹配的认证异常候选。全部候选见「认证异常候选」页。')}
                     </div>
                   ) : null}
                   {diagCandidates && diagCandidates.length ? (

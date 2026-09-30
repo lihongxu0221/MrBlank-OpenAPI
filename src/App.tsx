@@ -153,8 +153,8 @@ export default function App() {
       page = <AdminModelPricesPage path={path} />
       break
     case '/admin/codex-inspection':
-      // Codex 巡检 standalone page removed → credential workbench 健康巡检 tab
-      page = <LegacyAdminRedirect to="/admin/accounts?tab=health" />
+      // Codex 巡检 removed entirely → default credentials tab
+      page = <LegacyAdminRedirect to="/admin/accounts" />
       break
     case '/admin/constellation':
       page = <AdminConstellationPage path={path} />
