@@ -17,6 +17,9 @@ export function loadCpaConfig(env = process.env) {
     env.CPA_MANAGEMENT_KEY || readSecretFile(env.CPA_MANAGEMENT_KEY_FILE) || ''
   const adminKey =
     env.CPAMP_ADMIN_KEY || readSecretFile(env.CPAMP_ADMIN_KEY_FILE) || ''
+  // Dedicated key the BFF uses to call CPA /v1 (site keys are never registered in CPA).
+  const upstreamKey =
+    env.CPA_UPSTREAM_API_KEY || readSecretFile(env.CPA_UPSTREAM_API_KEY_FILE) || ''
   return {
     cpaBaseUrl: (env.CPA_BASE_URL || 'http://127.0.0.1:8317').replace(/\/$/, ''),
     billingBaseUrl: (env.CPA_BILLING_URL || env.CPA_BASE_URL || 'http://127.0.0.1:8320').replace(
@@ -31,6 +34,7 @@ export function loadCpaConfig(env = process.env) {
     demoKey,
     managementKey,
     adminKey,
+    upstreamKey,
   }
 }
 
@@ -628,9 +632,41 @@ export async function setCpaRequestLog(cfg, enabled) {
 }
 
 /** PUT openai-compatibility — body is the raw array. */
+/** Fields that only exist in the BFF's GET-reshaped view (never valid CPA config). */
+const COMPAT_RESHAPED_FIELDS = ['base_url', 'api_key_count', 'api_key_entries', 'display_name']
+
+/**
+ * Guard against round-tripping the reshaped GET view back into CPA (would wipe every
+ * upstream api-key-entries / headers). Returns an error string or null.
+ */
+export function validateOpenaiCompatPayload(entries) {
+  if (!Array.isArray(entries)) return 'body must be an array'
+  for (let i = 0; i < entries.length; i++) {
+    const it = entries[i]
+    if (!it || typeof it !== 'object' || Array.isArray(it)) return `entry[${i}] must be an object`
+    for (const f of COMPAT_RESHAPED_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(it, f)) {
+        return `entry[${i}] contains read-only view field "${f}" — refusing to overwrite CPA config`
+      }
+    }
+    if (!String(it['base-url'] || '').trim()) return `entry[${i}] missing "base-url"`
+    if (!Array.isArray(it['api-key-entries']) || !it['api-key-entries'].length) {
+      return `entry[${i}] missing "api-key-entries"`
+    }
+    for (const [j, k] of it['api-key-entries'].entries()) {
+      if (!k || typeof k !== 'object' || !String(k['api-key'] || '').trim()) {
+        return `entry[${i}].api-key-entries[${j}] missing "api-key"`
+      }
+    }
+  }
+  return null
+}
+
 export async function setOpenaiCompatibility(cfg, entries) {
   if (!cfg.managementKey) throw new Error('CPA management key not configured')
-  const list = Array.isArray(entries) ? entries : []
+  const bad = validateOpenaiCompatPayload(entries)
+  if (bad) throw Object.assign(new Error(bad), { status: 400 })
+  const list = entries
   return cpaFetch(cfg, '/v0/management/openai-compatibility', {
     method: 'PUT',
     body: list,
@@ -654,21 +690,14 @@ export async function fetchCpampAuthFilesCached(cfg, { force = false } = {}) {
   return authFilesCache.set(data)
 }
 
-/** Mask email / label for public pool cards. */
-export function maskAccountLabel(raw) {
+/**
+ * Public pool card label: never derived from the account identity (email / name).
+ * Stable, non-reversible short tag from a hash so cards stay distinguishable.
+ */
+export function maskAccountLabel(raw, index = 0) {
   const s = String(raw || '').trim()
-  if (!s) return 'account***'
-  const at = s.indexOf('@')
-  if (at > 0) {
-    const local = s.slice(0, at)
-    const domain = s.slice(at + 1)
-    const keep = Math.min(3, Math.max(1, local.length - 1))
-    const domKeep = domain.includes('.') ? domain.slice(domain.indexOf('.')) : ''
-    const domHead = domain.split('.')[0] || ''
-    return `${local.slice(0, keep)}***@${domHead.slice(0, 2)}***${domKeep}`
-  }
-  if (s.length <= 4) return `${s[0]}***`
-  return `${s.slice(0, 2)}***${s.slice(-2)}`
+  const tag = s ? crypto.createHash('sha256').update(s).digest('hex').slice(0, 4) : String(index + 1)
+  return `账号 #${tag}`
 }
 
 function poolStatusFromFile(f) {
@@ -697,7 +726,7 @@ export function mapAuthFilesToPoolItems(authFilesPayload) {
     const recentFail = recent.reduce((s, r) => s + (Number(r.failed) || 0), 0)
     const label = f.label || f.email || f.account || f.name || `account-${i + 1}`
     return {
-      name: maskAccountLabel(label),
+      name: maskAccountLabel(label, i),
       provider: String(f.provider || f.type || f.account_type || 'cpa'),
       tier: String(f.account_type || f.type || 'oauth'),
       status: poolStatusFromFile(f),
@@ -888,15 +917,20 @@ export async function addCpaProviderKey(cfg, type, apiKey, extra = {}) {
   return listCpaProviderKeys(cfg, type)
 }
 
-/** Delete by exact api-key query param. */
-export async function removeCpaProviderKey(cfg, type, apiKey) {
+/**
+ * Delete one provider key by exact api-key; pass baseUrl (may be '') to disambiguate
+ * entries that share an api-key across different base-urls (CPA matches api-key AND base-url).
+ */
+export async function removeCpaProviderKey(cfg, type, apiKey, { baseUrl } = {}) {
   requireMgmt(cfg)
   if (!CPA_PROVIDER_KEY_TYPES.includes(type)) {
     throw Object.assign(new Error(`unsupported provider key type: ${type}`), { status: 400 })
   }
   const key = String(apiKey || '').trim()
   if (!key) throw Object.assign(new Error('api-key required'), { status: 400 })
-  const url = `${cfg.cpaBaseUrl}/v0/management/${type}?api-key=${encodeURIComponent(key)}`
+  const qs = new URLSearchParams({ 'api-key': key })
+  if (baseUrl !== undefined && baseUrl !== null) qs.set('base-url', String(baseUrl).trim())
+  const url = `${cfg.cpaBaseUrl}/v0/management/${type}?${qs.toString()}`
   const res = await fetch(url, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${cfg.managementKey}`, Accept: 'application/json' },
@@ -926,6 +960,20 @@ export function matchMaskedProviderKey(rawEntries, masked) {
     if (maskKey(k) === m || maskSecretLike(k) === m) return k
   }
   return null
+}
+
+/** All raw entries whose masked api-key matches → [{ key, baseUrl, index }]. */
+export function matchMaskedProviderEntries(rawEntries, masked) {
+  const m = String(masked || '')
+  const out = []
+  ;(rawEntries || []).forEach((it, index) => {
+    const k = typeof it === 'string' ? it : it?.['api-key'] || it?.api_key || ''
+    if (!k) return
+    if (maskKey(k) === m || maskSecretLike(k) === m) {
+      out.push({ key: k, baseUrl: typeof it === 'string' ? '' : String(it?.['base-url'] || it?.base_url || ''), index })
+    }
+  })
+  return out
 }
 
 function maskSecretLike(fullKey) {

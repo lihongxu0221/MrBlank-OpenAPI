@@ -27,58 +27,31 @@ export function loadAdminAllowlist(env = process.env) {
 }
 
 /**
- * Match session user against allowlist / local role.
- * - Local password users: role === 'admin' OR username in ADMIN_LOCAL_USERNAMES
- * - Linux.do: id, username, display_name/name, email allowlists
+ * Decide whether a session user is an administrator.
+ * - Local password users: ONLY role === 'admin' (persisted in local-users.json).
+ *   ADMIN_LOCAL_USERNAMES / BOOTSTRAP_ADMIN_USER are used solely to seed that role
+ *   for an existing/bootstrap account at startup — never as a live username match
+ *   (a re-registered username must not inherit admin).
+ * - Linux.do users: immutable numeric id in ADMIN_LINUXDO_IDS, or the OAuth-provided
+ *   email field in ADMIN_LINUXDO_EMAILS. Never username / display_name (user-editable).
+ * - Legacy aily sessions: never admin (login path removed).
  */
 export function isAdminUser(user, allowlist) {
   if (!user || !allowlist) return false
-
   const provider = String(user.auth_provider || 'linuxdo').toLowerCase()
 
   if (provider === 'local') {
-    if (String(user.role || '').toLowerCase() === 'admin') return true
-    const username = String(user.username || '').toLowerCase()
-    if (username && allowlist.localUsernames && allowlist.localUsernames.has(username)) {
-      return true
-    }
-    return false
+    return String(user.role || '').toLowerCase() === 'admin'
   }
+  if (provider !== 'linuxdo') return false
 
-  // Legacy sessions from old aily-adapter login path
-  if (provider === 'aily') {
-    if (user.aily_admin === true) return true
-    const role = Number(user.aily_role || 0)
-    if (role >= 10) return true
-    const username = String(user.username || '').toLowerCase()
-    if (username && allowlist.localUsernames && allowlist.localUsernames.has(username)) {
-      return true
-    }
+  const id = String(user.id ?? '').trim()
+  if (id && /^\d+$/.test(id) && allowlist.ids && allowlist.ids.has(id)) return true
+
+  const email = String(user.oauth_email ?? user.email ?? '').trim().toLowerCase()
+  if (email && email.includes('@') && allowlist.emails && allowlist.emails.has(email)) {
+    return user.email_verified !== false
   }
-
-  const hasAny =
-    (allowlist.ids && allowlist.ids.size > 0) ||
-    (allowlist.usernames && allowlist.usernames.size > 0) ||
-    (allowlist.emails && allowlist.emails.size > 0) ||
-    (allowlist.localUsernames && allowlist.localUsernames.size > 0)
-  if (!hasAny && provider !== 'aily') return false
-
-  const id = String(user.id ?? '')
-  if (id && allowlist.ids.has(id)) return true
-
-  const username = String(user.username || '').toLowerCase()
-  if (username && allowlist.usernames.has(username)) return true
-
-  const name = String(user.display_name || user.name || '').toLowerCase()
-  if (name && allowlist.usernames.has(name)) return true
-
-  const email = String(user.email || '').toLowerCase()
-  if (allowlist.emails && allowlist.emails.size) {
-    for (const candidate of [email, username, name]) {
-      if (candidate && allowlist.emails.has(candidate)) return true
-    }
-  }
-
   return false
 }
 

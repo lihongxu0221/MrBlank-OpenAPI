@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, Save, Trash2 } from 'lucide-react'
+import { RefreshCw, Trash2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
 import { ConsoleHero } from '../../components/ConsoleHero'
@@ -19,7 +19,7 @@ const TYPES = [
 
 type ProviderTab = (typeof TYPES)[number] | 'openai-compatibility'
 
-type KeyItem = { id: number; 'api-key': string; length: number; auth_index?: string | null }
+type KeyItem = { id: number; 'api-key': string; length: number; auth_index?: string | null; 'base-url'?: string }
 
 type CompatItem = {
   name: string
@@ -91,32 +91,16 @@ export function AdminProvidersPage({ path }: { path: string }) {
     }
   }
 
-  async function remove(masked: string) {
+  async function remove(masked: string, baseUrl: string) {
     if (tab === 'openai-compatibility') return
     if (!confirm(P('确认删除该提供商密钥？'))) return
     setBusy(true)
     try {
-      await api.delete(`/api/admin/providers/${tab}`, { masked })
+      // base-url disambiguates entries sharing one api-key across different upstreams
+      await api.delete(`/api/admin/providers/${tab}`, { masked, 'base-url': baseUrl })
       showToast(P('已删除'))
       await load()
     } catch (e) {
-      showToast((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function saveCompat() {
-    setBusy(true)
-    setErr(null)
-    try {
-      const parsed = JSON.parse(compatRaw)
-      const d = await api.put<{ items: CompatItem[] }>('/api/admin/openai-compatibility', { items: parsed })
-      setCompatItems(d.items || [])
-      setCompatRaw(JSON.stringify(d.items || [], null, 2))
-      showToast(P('已保存到 CPA。'))
-    } catch (e) {
-      setErr((e as Error).message)
       showToast((e as Error).message)
     } finally {
       setBusy(false)
@@ -157,10 +141,7 @@ export function AdminProvidersPage({ path }: { path: string }) {
         <>
           <div className="panel" style={{ marginTop: 12 }}>
             <div className="channels-toolbar">
-              <h3 style={{ margin: 0 }}>{P('OpenAI 兼容')} · openai-compatibility</h3>
-              <button type="button" className="button compact" onClick={saveCompat} disabled={busy}>
-                <Save size={14} /> {P('保存')}
-              </button>
+              <h3 style={{ margin: 0 }}>{P('OpenAI 兼容')} · openai-compatibility（{P('只读')}）</h3>
             </div>
             <div className="table-wrap" style={{ marginTop: 10 }}>
               <table className="data">
@@ -195,12 +176,15 @@ export function AdminProvidersPage({ path }: { path: string }) {
             {!busy && !compatItems.length ? <p className="empty-state">{P('暂无条目。')}</p> : null}
           </div>
           <div className="panel" style={{ marginTop: 16 }}>
-            <h3>{P('原始 JSON')}</h3>
+            <h3>{P('原始 JSON（只读视图）')}</h3>
+            <p className="muted">
+              {P('此处为脱敏后的摘要视图（不含上游密钥与请求头），不能写回 CPA。编辑 OpenAI 兼容上游请使用 CPA 管理面板。')}
+            </p>
             <textarea
               rows={16}
+              readOnly
               style={{ width: '100%', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
               value={compatRaw}
-              onChange={(e) => setCompatRaw(e.target.value)}
               spellCheck={false}
             />
           </div>
@@ -232,6 +216,7 @@ export function AdminProvidersPage({ path }: { path: string }) {
                   <th>#</th>
                   <th>{P('密钥')}</th>
                   <th>{P('长度')}</th>
+                  <th>base-url</th>
                   <th>auth-index</th>
                   <th></th>
                 </tr>
@@ -245,6 +230,9 @@ export function AdminProvidersPage({ path }: { path: string }) {
                     </td>
                     <td>{k.length}</td>
                     <td>
+                      <code>{k['base-url'] || '—'}</code>
+                    </td>
+                    <td>
                       <code>{k.auth_index || '—'}</code>
                     </td>
                     <td>
@@ -252,7 +240,7 @@ export function AdminProvidersPage({ path }: { path: string }) {
                         type="button"
                         className="button secondary compact"
                         disabled={busy}
-                        onClick={() => remove(k['api-key'])}
+                        onClick={() => remove(k['api-key'], k['base-url'] || '')}
                       >
                         <Trash2 size={14} /> {P('删除')}
                       </button>

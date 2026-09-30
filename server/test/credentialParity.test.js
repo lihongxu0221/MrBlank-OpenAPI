@@ -313,7 +313,11 @@ test('cred list CSS: no forced 1240 min-width; models panel not height-clipped',
   assert.ok(!/height:\s*100%/.test(panelNoComments))
   assert.ok(/height:\s*auto/.test(panel[0]))
   assert.ok(!/minmax\(280px,\s*3fr\)/.test(css))
-  assert.ok(/minmax\(0,\s*3fr\)/.test(css), 'quota column should be minmax(0, 3fr)')
+  // af18d42: quota 2x2 bars stack under the metrics strip (row 2) instead of a 3fr column
+  assert.ok(
+    /\.cred-card-row\s*>\s*\.cred-cell-quota\s*\{[^}]*grid-row:\s*2/.test(css),
+    'quota cell should stack on row 2 under the metrics strip',
+  )
   for (const cls of ['.cred-grid-card-header', '.cred-grid-history', '.cred-grid-recent', '.cred-spark-h', '.cred-quota-stack', '.cred-grid-card-footer', '.cred-plan-badge']) {
     assert.ok(css.includes(cls), `missing ${cls}`)
   }

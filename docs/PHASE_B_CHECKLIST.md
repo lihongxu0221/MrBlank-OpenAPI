@@ -64,7 +64,7 @@ Ephemeral smoke user created then deleted; passwords never logged.
 
 ## Permissions
 
-- Admin if: local `role=admin` **or** `ADMIN_LOCAL_USERNAMES` **or** Linux.do allowlist (`ADMIN_LINUXDO_IDS|USERNAMES|EMAILS`)
+- Admin if: local `role=admin` **or** Linux.do allowlist (`ADMIN_LINUXDO_IDS|EMAILS`; usernames ignored)
 - Nav: `NavShell` fetches `/api/admin/me`; non-admins never see「管理」
 - Gate: `useAdminGate` + `requireAdmin` middleware
 - Native local auth (Phase A) unchanged

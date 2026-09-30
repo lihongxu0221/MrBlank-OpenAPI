@@ -79,7 +79,7 @@ Vite + React 公益站控制台 + Node BFF。支持 **Linux.do OAuth** 与 **本
 | `CPA_MANAGEMENT_KEY` 或 `CPA_MANAGEMENT_KEY_FILE` | CPA 管理密钥（仅服务端） |
 | `PUBLIC_API_BASE_URL` | 对外展示的 `/v1` 地址 |
 | `BOOTSTRAP_ADMIN_USER` / `BOOTSTRAP_ADMIN_PASSWORD` | 首次启动创建本站管理员；勿提交真实密码 |
-| `ADMIN_LINUXDO_IDS` / `ADMIN_LINUXDO_USERNAMES` / `ADMIN_LINUXDO_EMAILS` / `ADMIN_LOCAL_USERNAMES` | 管理员白名单 |
+| `ADMIN_LINUXDO_IDS` / `ADMIN_LINUXDO_EMAILS` | Linux.do 管理员白名单（数字 ID / OAuth 邮箱；用户名不再生效）；`ADMIN_LOCAL_USERNAMES` 仅用于首次引导 |
 | `SITE_CREDITS_PATH` / `WALLET_LEDGER_PATH` | 站点积分 JSON / 钱包流水 JSONL（默认 `server/data/`） |
 | `USER_GROUPS_PATH` / `USER_KEYS_PATH` / `LOCAL_USERS_PATH` | 用户组 / 密钥映射 / 本站用户（默认 `server/data/`） |
 
@@ -141,7 +141,7 @@ npm start        # 建议使用 systemd 等进程管理
 
 ## 管理员
 
-- 本站密码登录用户按本地 `role=admin`（或 `ADMIN_LOCAL_USERNAMES`）判定；Linux.do 用户按白名单（id / 用户名 / 邮箱）判定
+- 本站密码登录用户仅按本地 `role=admin` 判定；Linux.do 用户仅按数字 id 或 OAuth 邮箱白名单判定
 - 未配置任何管理员时，无人可访问管理接口（403）
 - 管理员登录后进入 `/admin`，普通用户进入 `/console`
 - 浏览器只获得脱敏数据；管理密钥仅服务端读取

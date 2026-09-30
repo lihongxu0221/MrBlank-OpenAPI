@@ -75,34 +75,137 @@ function readRawBody(req, limit = 32 * 1024 * 1024) {
   })
 }
 
-function forwardHeaders(req, { authOverride } = {}) {
+/** Request headers that may be forwarded upstream (allowlist; everything else is dropped). */
+const FORWARD_ALLOW = new Set([
+  'content-type',
+  'accept',
+  'user-agent',
+  'anthropic-version',
+  'anthropic-beta',
+  'openai-beta',
+  'idempotency-key',
+  'x-request-id',
+])
+const FORWARD_ALLOW_PREFIX = ['x-stainless-']
+
+/** Header names that can carry a client credential (all stripped before forwarding). */
+const AUTH_HEADERS = ['authorization', 'x-api-key', 'x-goog-api-key', 'api-key']
+/** Query params that can carry a client credential (stripped before forwarding). */
+const AUTH_QUERY_PARAMS = ['key', 'api_key', 'api-key']
+
+export function forwardHeaders(req, { authOverride } = {}) {
   const out = {}
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (HOP.has(k.toLowerCase())) continue
+  for (const [k, v] of Object.entries(req.headers || {})) {
+    const lk = k.toLowerCase()
     if (v == null) continue
-    out[k] = Array.isArray(v) ? v.join(', ') : String(v)
+    if (!FORWARD_ALLOW.has(lk) && !FORWARD_ALLOW_PREFIX.some((p) => lk.startsWith(p))) continue
+    out[lk] = Array.isArray(v) ? v.join(', ') : String(v)
   }
-  delete out['accept-encoding']
   if (authOverride) out.authorization = `Bearer ${authOverride}`
   return out
 }
 
-function bearerFromReq(req) {
-  const auth = req.headers.authorization || req.headers['x-api-key'] || ''
-  return String(auth).replace(/^Bearer\s+/i, '').trim()
+/**
+ * Extract the client API key from any supported location
+ * (Authorization Bearer, x-api-key, x-goog-api-key, api-key, ?key=).
+ */
+export function extractClientKey(req, query = null) {
+  const h = req.headers || {}
+  const auth = String(h.authorization || '').trim()
+  if (auth) {
+    const m = /^Bearer\s+(.+)$/i.exec(auth)
+    const v = (m ? m[1] : auth).trim()
+    if (v) return v
+  }
+  for (const name of ['x-api-key', 'x-goog-api-key', 'api-key']) {
+    const v = String(h[name] || '').trim()
+    if (v) return v
+  }
+  if (query) {
+    for (const name of AUTH_QUERY_PARAMS) {
+      const v = String(query.get(name) || '').trim()
+      if (v) return v
+    }
+  }
+  return ''
 }
 
-function isModelsList(endpoint, method) {
-  const pathOnly = String(endpoint || '').split('?')[0]
-  return method === 'GET' && /\/v1\/models\/?$/.test(pathOnly)
+/**
+ * Exact route allowlist for the public /v1 surface.
+ * consuming = billable (quota / credits / key limits enforced).
+ */
+const V1_ROUTES = [
+  { method: 'GET', re: /^\/v1\/models$/, consuming: false, models: true },
+  { method: 'GET', re: /^\/v1\/models\/[A-Za-z0-9._:@+-]{1,128}$/, consuming: false },
+  { method: 'POST', re: /^\/v1\/chat\/completions$/, consuming: true },
+  { method: 'POST', re: /^\/v1\/completions$/, consuming: true },
+  { method: 'POST', re: /^\/v1\/messages$/, consuming: true },
+  { method: 'POST', re: /^\/v1\/messages\/count_tokens$/, consuming: true },
+  { method: 'POST', re: /^\/v1\/responses$/, consuming: true },
+  { method: 'POST', re: /^\/v1\/responses\/compact$/, consuming: true },
+  { method: 'POST', re: /^\/v1\/embeddings$/, consuming: true },
+  { method: 'POST', re: /^\/v1\/images\/(generations|edits|variations)$/, consuming: true },
+  { method: 'POST', re: /^\/v1\/audio\/(speech|transcriptions|translations)$/, consuming: true },
+  { method: 'POST', re: /^\/v1\/videos$/, consuming: true },
+  { method: 'GET', re: /^\/v1\/videos\/[A-Za-z0-9._:-]{1,128}$/, consuming: false },
+]
+
+/**
+ * Validate + normalize a raw /v1 request URL.
+ * Rejects any percent-encoding, backslashes, dot segments, empty segments ("//").
+ * Returns { ok, status, error } or { ok:true, path, query, route, consuming, models }.
+ */
+export function resolveV1Request(rawUrl, method) {
+  const raw = String(rawUrl || '')
+  const qIdx = raw.indexOf('?')
+  let pathPart = qIdx >= 0 ? raw.slice(0, qIdx) : raw
+  const queryPart = qIdx >= 0 ? raw.slice(qIdx + 1) : ''
+  if (!pathPart.startsWith('/v1')) pathPart = `/v1${pathPart.startsWith('/') ? '' : '/'}${pathPart}`
+  if (/%/.test(pathPart) || /\\/.test(pathPart)) {
+    return { ok: false, status: 400, error: 'encoded or escaped characters are not allowed in the request path' }
+  }
+  if (pathPart.length > 1 && pathPart.endsWith('/')) pathPart = pathPart.slice(0, -1)
+  const segs = pathPart.split('/').slice(1)
+  if (segs.some((s) => s === '' || s === '.' || s === '..')) {
+    return { ok: false, status: 400, error: 'malformed request path' }
+  }
+  const m = String(method || 'GET').toUpperCase()
+  const route = V1_ROUTES.find((r) => r.method === m && r.re.test(pathPart))
+  if (!route) {
+    return { ok: false, status: 404, error: `unsupported endpoint: ${m} ${pathPart}` }
+  }
+  const query = new URLSearchParams(queryPart)
+  return { ok: true, path: pathPart, query, consuming: route.consuming, models: !!route.models }
 }
 
-function isConsumingEndpoint(endpoint, method) {
-  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false
-  const pathOnly = String(endpoint || '').split('?')[0]
-  return /\/v1\/(chat\/completions|completions|messages|responses|embeddings|images\/|audio\/|videos)/.test(
-    pathOnly,
-  )
+/** Upstream query string with credential params removed. */
+export function sanitizedQueryString(query) {
+  const q = new URLSearchParams(query)
+  for (const name of AUTH_QUERY_PARAMS) q.delete(name)
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
+
+/** Extract requested completion budget (max_tokens etc.) from a JSON body. */
+export function extractMaxTokens(bodyText) {
+  if (!bodyText) return 0
+  try {
+    const o = JSON.parse(bodyText)
+    const n = Number(
+      o?.max_tokens ?? o?.max_completion_tokens ?? o?.max_output_tokens ?? o?.generationConfig?.maxOutputTokens ?? 0,
+    )
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
+  } catch {
+    return 0
+  }
+}
+
+const CORS_HEADERS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, OPTIONS',
+  'access-control-allow-headers':
+    'authorization, content-type, x-api-key, x-goog-api-key, api-key, anthropic-version, anthropic-beta, openai-beta, x-stainless-arch, x-stainless-lang, x-stainless-os, x-stainless-package-version, x-stainless-runtime, x-stainless-runtime-version, x-stainless-retry-count, x-stainless-timeout',
+  'access-control-max-age': '600',
 }
 
 /**
@@ -130,6 +233,13 @@ export function createV1Proxy({
   const ailyEmbedded = ailyRoute?.embedded !== false
 
   return async function v1Proxy(req, res) {
+    // CORS preflight: answer locally (never forward, never needs a key).
+    if (req.method === 'OPTIONS') {
+      for (const [k, v] of Object.entries(CORS_HEADERS)) res.setHeader(k, v)
+      res.status(204).end()
+      return
+    }
+    res.setHeader('access-control-allow-origin', '*')
     if (!enabled) {
       res.status(503).json({ error: { message: 'BFF /v1 proxy disabled' } })
       return
@@ -139,12 +249,25 @@ export function createV1Proxy({
       return
     }
 
+    const resolved = resolveV1Request(req.originalUrl || req.url || '/v1', req.method)
+    if (!resolved.ok) {
+      res.status(resolved.status).json({
+        error: { message: resolved.error, type: 'invalid_request_error', code: resolved.status === 404 ? 'unknown_endpoint' : 'bad_path' },
+      })
+      return
+    }
+    const routeConsuming = resolved.consuming
+    const routeIsModels = resolved.models
+    // Canonical endpoint (normalized path + query without credentials) — used for routing, logs, upstream.
+    const endpoint = `${resolved.path}${sanitizedQueryString(resolved.query)}`
+    const isModelsList = () => routeIsModels
+    const isConsumingEndpoint = () => routeConsuming
+
     const started = Date.now()
     let ttft_ms = null
-    const endpoint = req.originalUrl || req.url || '/v1'
-    const apiKey = bearerFromReq(req)
+    const apiKey = extractClientKey(req, resolved.query)
     const eventId = `${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`
-    const tokenNameMasked = maskTokenNameFromAuth(req.headers.authorization || req.headers['x-api-key'])
+    const tokenNameMasked = maskTokenNameFromAuth(apiKey ? `Bearer ${apiKey}` : '')
     const ip = clientIp(req)
 
     function emitComplete(extra = {}) {
@@ -183,7 +306,11 @@ export function createV1Proxy({
 
     /** @type {{ userId?: string, groupInfo?: object, skipUpstream?: boolean }} */
     let govCtx = { apiKey, requestedModel, endpoint, method: req.method }
-    if (typeof governance?.enforce === 'function') {
+    if (typeof governance?.enforce !== 'function') {
+      res.status(503).json({ error: { message: 'governance not configured', type: 'server_error' } })
+      return
+    }
+    {
       try {
         const decision = await governance.enforce({
           req,
@@ -193,6 +320,7 @@ export function createV1Proxy({
           method: req.method,
           isModelsList: isModelsList(endpoint, req.method),
           isConsuming: isConsumingEndpoint(endpoint, req.method),
+          reqBodyText,
         })
         if (decision && decision.allow === false) {
           const status = decision.status || 403
@@ -222,7 +350,7 @@ export function createV1Proxy({
               ip: clientIp(req),
               model_name: requestedModel,
               requested_model: requestedModel,
-              token_name: maskTokenNameFromAuth(req.headers.authorization),
+              token_name: tokenNameMasked,
               req_headers: redactHeaders(req.headers),
               req_body: reqBodyText,
               res_headers: {},
@@ -251,9 +379,13 @@ export function createV1Proxy({
           res.status(status).json(decision.body || { error: { message: 'forbidden' } })
           return
         }
-        if (decision && decision.allow !== false) {
-          govCtx = { ...govCtx, ...decision, apiKey, requestedModel, endpoint, method: req.method }
+        if (!decision || decision.allow !== true || !decision.userId) {
+          try { decision?.releaseTokenConcurrency?.() } catch { /* ignore */ }
+          // Fail closed: an allow without an identified owner / upstream credential is a bug.
+          res.status(401).json({ error: { message: '无效的 API Key', type: 'invalid_request_error', code: 'invalid_api_key' } })
+          return
         }
+        govCtx = { ...govCtx, ...decision, apiKey, requestedModel, endpoint, method: req.method }
       } catch (err) {
         console.error('[v1] governance enforce failed', err?.message || err)
         res.status(503).json({
@@ -278,6 +410,15 @@ export function createV1Proxy({
     let routeVia = selected.routeVia
     let upstreamBase = selected.upstreamBase
     let authOverride = selected.authOverride
+    if (routeVia === 'cpa') {
+      // BFF talks to CPA with its own dedicated upstream key; client credentials never leave the BFF.
+      authOverride = govCtx.upstreamKey || null
+      if (!authOverride) {
+        try { govCtx.releaseTokenConcurrency?.() } catch { /* ignore */ }
+        res.status(503).json({ error: { message: 'upstream key not configured', type: 'server_error' } })
+        return
+      }
+    }
 
     // ── Embedded Aily bridge (in-process) ──
     if (routeVia === 'aily' && selected.mode === 'embedded' && typeof ailyRoute?.handleV1 === 'function') {
@@ -302,7 +443,7 @@ export function createV1Proxy({
           ip: clientIp(req),
           model_name: requestedModel,
           requested_model: requestedModel,
-          token_name: maskTokenNameFromAuth(req.headers.authorization),
+          token_name: tokenNameMasked,
           req_headers: redactHeaders(req.headers),
           req_body: reqBodyText,
           res_headers: {},
@@ -343,7 +484,7 @@ export function createV1Proxy({
           ip: clientIp(req),
           model_name: handled?.model_name || requestedModel,
           requested_model: requestedModel,
-          token_name: maskTokenNameFromAuth(req.headers.authorization),
+          token_name: tokenNameMasked,
           prompt_tokens: handled?.usage?.prompt_tokens || 0,
           completion_tokens: handled?.usage?.completion_tokens || 0,
           cache_tokens: handled?.usage?.cache_tokens || 0,
@@ -398,7 +539,7 @@ export function createV1Proxy({
         ip: clientIp(req),
         model_name: requestedModel,
         requested_model: requestedModel,
-        token_name: maskTokenNameFromAuth(req.headers.authorization),
+        token_name: tokenNameMasked,
         req_headers: redactHeaders(req.headers),
         req_body: reqBodyText,
         res_headers: {},
@@ -495,7 +636,7 @@ export function createV1Proxy({
           ip: clientIp(req),
           model_name: usage.model_name || requestedModel,
           requested_model: requestedModel,
-          token_name: maskTokenNameFromAuth(req.headers.authorization),
+          token_name: tokenNameMasked,
           prompt_tokens: usage.prompt_tokens,
           completion_tokens: usage.completion_tokens,
           cache_tokens: usage.cache_tokens,
@@ -663,7 +804,7 @@ export function createV1Proxy({
         ip: clientIp(req),
         model_name: resolvedModelName || requestedModel,
         requested_model: requestedModel,
-        token_name: maskTokenNameFromAuth(req.headers.authorization),
+        token_name: tokenNameMasked,
         prompt_tokens: usage.prompt_tokens,
         completion_tokens: usage.completion_tokens,
         cache_tokens: usage.cache_tokens,

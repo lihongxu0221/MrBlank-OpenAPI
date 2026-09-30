@@ -12,11 +12,23 @@ const DEFAULT_MAX_TOTAL_EVENTS = 100_000
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000
 
 function ensureDir(dir) {
-  fs.mkdirSync(dir, { recursive: true })
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+}
+
+const SESSION_ID_RE = /^[a-f0-9]{16}$/
+
+function assertSessionId(id) {
+  const sid = String(id ?? "")
+  if (!SESSION_ID_RE.test(sid)) {
+    const err = new Error('invalid import session id')
+    err.status = 400
+    throw err
+  }
+  return sid
 }
 
 function sessionDir(baseDir, id) {
-  return path.join(baseDir, id)
+  return path.join(baseDir, assertSessionId(id))
 }
 
 function metaPath(baseDir, id) {
@@ -41,7 +53,7 @@ function writeMeta(baseDir, id, meta) {
   const dir = sessionDir(baseDir, id)
   ensureDir(dir)
   const tmp = `${metaPath(baseDir, id)}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(meta, null, 2), 'utf8')
+  fs.writeFileSync(tmp, JSON.stringify(meta, null, 2), { encoding: 'utf8', mode: 0o600 })
   fs.renameSync(tmp, metaPath(baseDir, id))
 }
 
@@ -95,7 +107,7 @@ export function createUsageImportSessions(baseDir, siteUsage) {
   }
 
   function get(id) {
-    return readMeta(baseDir, String(id || '').trim())
+    return readMeta(baseDir, assertSessionId(id))
   }
 
   /**
@@ -103,7 +115,7 @@ export function createUsageImportSessions(baseDir, siteUsage) {
    * @param {{ events?: any[], chunk?: any[], index?: number }} body
    */
   function addChunk(id, body = {}) {
-    const sid = String(id || '').trim()
+    const sid = assertSessionId(id)
     const meta = readMeta(baseDir, sid)
     if (meta.status !== 'open') {
       const err = new Error(`session is ${meta.status}`)
@@ -137,7 +149,7 @@ export function createUsageImportSessions(baseDir, siteUsage) {
     }
     const index = meta.chunks_received
     const tmp = `${chunkPath(baseDir, sid, index)}.tmp`
-    fs.writeFileSync(tmp, JSON.stringify({ events }), 'utf8')
+    fs.writeFileSync(tmp, JSON.stringify({ events }), { encoding: 'utf8', mode: 0o600 })
     fs.renameSync(tmp, chunkPath(baseDir, sid, index))
     meta.chunks_received += 1
     meta.events_received += events.length
@@ -152,7 +164,7 @@ export function createUsageImportSessions(baseDir, siteUsage) {
   }
 
   function complete(id) {
-    const sid = String(id || '').trim()
+    const sid = assertSessionId(id)
     const meta = readMeta(baseDir, sid)
     if (meta.status !== 'open') {
       const err = new Error(`session is ${meta.status}`)
@@ -198,7 +210,7 @@ export function createUsageImportSessions(baseDir, siteUsage) {
   }
 
   function cancel(id) {
-    const sid = String(id || '').trim()
+    const sid = assertSessionId(id)
     const meta = readMeta(baseDir, sid)
     meta.status = 'cancelled'
     meta.updated_at = new Date().toISOString()

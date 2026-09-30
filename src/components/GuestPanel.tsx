@@ -15,6 +15,19 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [password2, setPassword2] = useState('')
+  const [registrationEnabled, setRegistrationEnabled] = useState(true)
+
+  useEffect(() => {
+    api
+      .get<{ registrationEnabled?: boolean }>('/api/welfare/config', { auth: false })
+      .then((c) => {
+        if (c && c.registrationEnabled === false) {
+          setRegistrationEnabled(false)
+          setMode('login')
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     const params = new URLSearchParams(location.search)
@@ -164,6 +177,7 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
         </button>
       </form>
 
+      {registrationEnabled || mode === 'register' ? (
       <button
         type="button"
         className="guest-switch"
@@ -176,6 +190,7 @@ export function GuestPanel({ onLoggedIn }: { onLoggedIn?: () => void }) {
       >
         {mode === 'login' ? P('没有账号？注册') : P('已有账号？去登录')}
       </button>
+      ) : null}
 
       <div className="guest-divider" role="separator">
         <span>{P('或', 'or')}</span>

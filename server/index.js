@@ -18,6 +18,7 @@ import {
   fetchCpaRequestLog,
   setCpaRequestLog,
   setOpenaiCompatibility,
+  validateOpenaiCompatPayload,
   flattenUsageForHashes,
   hashApiKey,
   maskKey,
@@ -40,6 +41,7 @@ import {
   addCpaProviderKey,
   removeCpaProviderKey,
   matchMaskedProviderKey,
+  matchMaskedProviderEntries,
   setAuthFileDisabled,
   patchAuthFileFields,
   refreshAuthFile,
@@ -86,7 +88,10 @@ import { WALLET_RANGES } from './shanghaiRange.js'
 import { requestIp } from './requestIp.js'
 import { createLocalUserStore } from './localUsers.js'
 import { createDiagnosisStore } from './diagnosis.js'
-import { createV1Proxy } from './v1Proxy.js'
+import { createV1Proxy, extractMaxTokens } from './v1Proxy.js'
+import { createReservationLedger, estimateRequestQuota } from './reservations.js'
+import { createRateLimiter } from './rateLimiter.js'
+import { securityHeaders, noStoreApi, spaStatic } from './securityHeaders.js'
 import { createAilyManager, loadAilyConfig } from './aily.js'
 import { createAilyUpstream } from './ailyUpstream.js'
 import { createAilyModelRoutingStore, publicModelList, normalizeModelRouting, exposedModelNames, isAilyPrefixed, stripAilyPrefix } from './ailyModelRouting.js'
@@ -140,6 +145,10 @@ loadEnvFile(path.join(rootDir, '.env'))
 loadEnvFile(path.join(__dirname, '.env'))
 
 const cpaCfg = loadCpaConfig(process.env)
+const cpaUpstreamKey = cpaCfg.upstreamKey
+/** Max concurrent billable /v1 requests per site user (across all of their keys). */
+const V1_USER_MAX_INFLIGHT = Math.max(1, Number(process.env.V1_USER_MAX_INFLIGHT || 4))
+const reservations = createReservationLedger({ maxPerUser: V1_USER_MAX_INFLIGHT })
 const diagnosisStore = createDiagnosisStore(
   process.env.DIAGNOSIS_PATH || path.join(__dirname, 'data', 'diagnosis'),
 )
@@ -457,6 +466,14 @@ try {
 } catch (e) {
   console.error('[server] bootstrap admin failed', e?.message || e)
 }
+// First-bootstrap only: ADMIN_LOCAL_USERNAMES promotes existing accounts to role=admin ONLY while
+// no local admin exists yet. After that, admin is purely role-based (managed in 用户管理).
+try {
+  const seeded = localUserStore.seedAdminsIfNone([...(adminAllowlist.localUsernames || [])])
+  if (seeded.length) console.log(`[server] seeded local admin role for ${seeded.length} account(s)`)
+} catch (e) {
+  console.error('[server] local admin seed failed', e?.message || e)
+}
 
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
@@ -573,8 +590,23 @@ function getSession(req) {
   return rec || null
 }
 
+/** Re-validate local users against the store on every request (disabled / deleted / demoted). */
+function liveSessionUser(session) {
+  const u = session?.user
+  if (!u || String(u.auth_provider || '').toLowerCase() !== 'local') return u
+  const row = localUserStore.findById(u.id)
+  if (!row || row.disabled) return null
+  if (row.role !== u.role) u.role = row.role
+  return u
+}
+
 function requireAuth(req, res, next) {
   const session = getSession(req)
+  if (session && !liveSessionUser(session)) {
+    sessionStore.delete(session.sid)
+    res.status(401).json(fail('请先登录。'))
+    return
+  }
   if (!session) {
     res.status(401).json(fail('请先登录。'))
     return
@@ -586,6 +618,11 @@ function requireAuth(req, res, next) {
 
 function requireAdmin(req, res, next) {
   const session = getSession(req)
+  if (session && !liveSessionUser(session)) {
+    sessionStore.delete(session.sid)
+    res.status(401).json(fail('请先登录。'))
+    return
+  }
   if (!session) {
     res.status(401).json(fail('请先登录。'))
     return
@@ -1086,6 +1123,7 @@ function publicHandlers() {
     config: () =>
       ok({
         loginEnabled: true,
+        registrationEnabled: siteContent.getAuthSettings().registration_enabled,
         turnstileSiteKey: '',
         linuxdoClientId: CLIENT_ID,
       }),
@@ -1140,7 +1178,10 @@ function publicHandlers() {
 const pub = publicHandlers()
 
 const app = express()
+app.disable('x-powered-by')
 app.set('trust proxy', 1)
+app.use(securityHeaders())
+app.use(['/api', '/oauth'], noStoreApi())
 app.use(cookieParser(SESSION_SECRET))
 const v1ProxyEnabled = String(process.env.V1_PROXY_ENABLED || '1') !== '0'
 app.use(
@@ -1170,37 +1211,46 @@ app.use(
       apiKey: ailyManager.cfg.adapterApiKey,
     },
     governance: {
-      async enforce({ apiKey, model, isModelsList, isConsuming }) {
-        // Unmapped keys (CPA demo / external) bypass site group rules.
-        // Site-issued sk- keys: enforce aily-parity status / quota / rate / concurrency.
+      async enforce({ apiKey, model, isModelsList, isConsuming, reqBodyText }) {
+        // Default-deny: every /v1 call must present a valid, site-issued key (owner required).
+        // Unknown / missing keys never reach CPA or the embedded Aily bridge.
         let owner = null
         let releaseTokenConcurrency = () => {}
-        if (apiKey) {
-          const validated = userKeyStore.validateSiteKey(apiKey)
-          if (validated.error) {
-            // Unknown key → fall through as unmapped (CPA demo etc.)
-            if (validated.error === '无效的 API Key') {
-              owner = null
-            } else {
-              return {
-                allow: false,
-                status: validated.code || 401,
+        const deny401 = (message = '无效的 API Key', code = 'invalid_api_key') => ({
+          allow: false,
+          status: 401,
+          code,
+          headers: { 'x-mrblank-governance': code, 'www-authenticate': 'Bearer' },
+          body: { error: { message, type: 'invalid_request_error', code } },
+        })
+        if (!apiKey) return deny401('缺少 API Key（Authorization: Bearer / x-api-key / x-goog-api-key）', 'missing_api_key')
+        const validated = userKeyStore.validateSiteKey(apiKey)
+        if (validated.error) {
+          if (validated.error === '无效的 API Key') return deny401()
+          return {
+            allow: false,
+            status: validated.code || 401,
+            code: validated.code === 429 ? 'key_quota_exhausted' : 'key_disabled',
+            headers: { 'x-mrblank-governance': 'site_key' },
+            body: {
+              error: {
+                message: validated.error,
+                type: validated.code === 429 ? 'insufficient_quota' : 'invalid_request_error',
                 code: validated.code === 429 ? 'key_quota_exhausted' : 'key_disabled',
-                headers: { 'x-mrblank-governance': 'site_key' },
-                body: {
-                  error: {
-                    message: validated.error,
-                    type: validated.code === 429 ? 'insufficient_quota' : 'invalid_request_error',
-                    code: validated.code === 429 ? 'key_quota_exhausted' : 'key_disabled',
-                  },
-                },
-              }
-            }
-          } else {
-            owner = validated.owner
+              },
+            },
           }
         }
-        if (!owner?.userId) return { allow: true }
+        owner = validated.owner
+        if (!owner?.userId) return deny401()
+        if (!cpaUpstreamKey) {
+          return {
+            allow: false,
+            status: 503,
+            code: 'upstream_key_missing',
+            body: { error: { message: 'upstream key not configured', type: 'server_error', code: 'upstream_key_missing' } },
+          }
+        }
 
         if (isConsuming && owner.token) {
           const rateHit = userKeyStore.checkRateLimit(owner.token)
@@ -1243,9 +1293,64 @@ app.use(
         const groupInfo = resolveUserGroupForId(userId, metrics)
         let useSiteCredits = false
 
+        let reservation = null
         if (isConsuming) {
           const quotaCheck = groupStore.assertQuotaAvailable(userId, metrics)
-          if (!quotaCheck.ok) {
+          // Pre-authorize an estimated cost against the pool that will pay for this call,
+          // net of the user's other in-flight reservations (prevents parallel overdraft).
+          const estimate = estimateRequestQuota({
+            bodyText: reqBodyText || '',
+            maxTokens: extractMaxTokens(reqBodyText || ''),
+            price: (() => {
+              try {
+                return modelPrices.lookupPrice(String(model || '').trim())
+              } catch {
+                return null
+              }
+            })(),
+            costForTokens: (p, a, b, o) => modelPrices.costForTokens(p, a, b, o),
+            dollarsToQuota: (usd) => quotaUnitStore.dollarsToQuota(usd),
+          })
+          const denyReserve = (r, extra = {}) => {
+            try { releaseTokenConcurrency() } catch { /* ignore */ }
+            const isConc = r.code === 'user_concurrency'
+            return {
+              allow: false,
+              status: 429,
+              code: r.code,
+              group_id: groupInfo.group?.id,
+              headers: { 'x-mrblank-governance': r.code, 'retry-after': isConc ? '5' : '300' },
+              body: {
+                error: {
+                  message: r.reason,
+                  type: isConc ? 'rate_limit_exceeded' : 'insufficient_quota',
+                  code: r.code,
+                },
+                estimated_cost: estimate,
+                credit_unit: creditUnitInfo(),
+                ...extra,
+              },
+            }
+          }
+          const rem = quotaCheck.info?.remaining || groupInfo.remaining || {}
+          const groupAvail = Math.min(
+            Number(rem.window_5h) || 0,
+            Number(rem.week) || 0,
+            Number(rem.month) || 0,
+          )
+          let groupReserveOk = false
+          if (quotaCheck.ok) {
+            const r = reservations.reserve(userId, [{ pool: 'group', amount: estimate, available: groupAvail }], {
+              limit: V1_USER_MAX_INFLIGHT,
+            })
+            if (r.ok) {
+              reservation = r
+              groupReserveOk = true
+            } else if (r.code === 'user_concurrency') {
+              return denyReserve(r)
+            }
+          }
+          if (!groupReserveOk) {
             // Phase F: site credits (check-in / redeem) act as overflow capacity
             let siteBal = 0
             try {
@@ -1253,7 +1358,7 @@ app.use(
             } catch {
               siteBal = 0
             }
-            if (siteBal <= 0) {
+            if (siteBal <= 0 && !quotaCheck.ok) {
               try { releaseTokenConcurrency() } catch { /* ignore */ }
               return {
                 allow: false,
@@ -1279,8 +1384,21 @@ app.use(
                 },
               }
             }
+            const r = reservations.reserve(userId, [{ pool: 'credits', amount: estimate, available: siteBal }], {
+              limit: V1_USER_MAX_INFLIGHT,
+            })
+            if (!r.ok) return denyReserve(r, { site_credits: siteBal, remaining: rem })
+            reservation = r
             useSiteCredits = true
-            // allow via site credits; still enforce model allowlist below
+          }
+          if (reservation) {
+            // Any later deny/settle path releases both the key concurrency slot and the reservation.
+            const releaseKey = releaseTokenConcurrency
+            const res0 = reservation
+            releaseTokenConcurrency = () => {
+              try { res0.release() } catch { /* ignore */ }
+              try { releaseKey() } catch { /* ignore */ }
+            }
           }
           // When group has a model allowlist, require an explicit model on consuming calls
           const allowlist = groupInfo.group?.model_ids || []
@@ -1397,6 +1515,7 @@ app.use(
           useSiteCredits,
           siteTokenId: owner.token?.id,
           releaseTokenConcurrency,
+          upstreamKey: cpaUpstreamKey,
         }
       },
       async enrichModelsBody(_ctx, bodyText) {
@@ -1653,15 +1772,35 @@ app.post('/api/welfare/challenge', (req, res) =>
 )
 app.post('/api/welfare/verify', (_req, res) => res.json(pub.verify()))
 
+const OAUTH_STATE_COOKIE = 'mrblank_oauth_state'
+
 app.post('/api/oauth/state', (req, res) => {
   const provider = String(req.body?.provider || '')
-  const intent = String(req.body?.intent || 'login')
+  const intent = String(req.body?.intent || 'login').slice(0, 16)
   if (provider !== 'linuxdo') {
     res.status(400).json(fail('不支持的登录提供方'))
     return
   }
+  const rl = oauthStateIpLimiter.hit(requestIp(req) || 'unknown')
+  if (rl.limited) return tooMany(res, rl, '登录请求过于频繁')
+  if (oauthStates.size >= OAUTH_STATES_MAX) {
+    pruneMaps()
+    if (oauthStates.size >= OAUTH_STATES_MAX) {
+      res.status(503).json(fail('登录服务繁忙，请稍后重试'))
+      return
+    }
+  }
   const flow_token = randomToken(24)
-  oauthStates.set(flow_token, { createdAt: Date.now(), intent })
+  // Bind the state to this browser: callback must present the same value in an HttpOnly cookie.
+  const binding = randomToken(24)
+  oauthStates.set(flow_token, { createdAt: Date.now(), intent, binding })
+  res.cookie(OAUTH_STATE_COOKIE, binding, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax', // must survive the top-level redirect back from connect.linux.do
+    path: '/oauth/',
+    maxAge: STATE_TTL_MS,
+  })
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
     redirect_uri: REDIRECT_URI,
@@ -1690,8 +1829,17 @@ app.get('/oauth/linuxdo', async (req, res) => {
 
   const st = oauthStates.get(state)
   oauthStates.delete(state)
+  const cookieBinding = String(req.cookies?.[OAUTH_STATE_COOKIE] || '')
+  res.clearCookie(OAUTH_STATE_COOKIE, { httpOnly: true, secure: true, sameSite: 'lax', path: '/oauth/' })
   if (!st || Date.now() - st.createdAt > STATE_TTL_MS) {
     return failRedirect('invalid_state')
+  }
+  if (
+    !cookieBinding ||
+    cookieBinding.length !== String(st.binding || '').length ||
+    !crypto.timingSafeEqual(Buffer.from(cookieBinding), Buffer.from(String(st.binding)))
+  ) {
+    return failRedirect('state_mismatch')
   }
 
   try {
@@ -1739,10 +1887,13 @@ app.get('/oauth/linuxdo', async (req, res) => {
     if (!id) return failRedirect('userinfo_empty')
 
     const user = {
-      id,
+      id: String(id),
       username,
       display_name,
       email: email || undefined,
+      // Only the OAuth-provided email field is used for admin email matching (never name/username).
+      oauth_email: email || '',
+      email_verified: ldUser.email_verified === false ? false : undefined,
       auth_provider: 'linuxdo',
     }
     const rec = createUserSession(user)
@@ -1856,15 +2007,41 @@ app.get('/api/wallet/channels', requireAuth, (req, res) => {
 })
 
 
-function handleLocalPasswordLogin(req, res) {
+// ── Auth throttling (per IP and per username; in-memory, single process) ──
+const loginIpLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 20, blockMs: 15 * 60 * 1000 })
+const loginUserLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 8, blockMs: 15 * 60 * 1000 })
+const registerIpLimiter = createRateLimiter({ windowMs: 60 * 60 * 1000, max: 5, blockMs: 60 * 60 * 1000 })
+const registerGlobalLimiter = createRateLimiter({ windowMs: 60 * 60 * 1000, max: 60, blockMs: 60 * 60 * 1000 })
+const oauthStateIpLimiter = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 30, blockMs: 10 * 60 * 1000 })
+const OAUTH_STATES_MAX = 5000
+
+function tooMany(res, rl, message) {
+  const secs = Math.max(1, Math.ceil((rl.retryAfterMs || 60_000) / 1000))
+  res.setHeader('Retry-After', String(secs))
+  res.status(429).json(fail(`${message}（请 ${Math.ceil(secs / 60)} 分钟后再试）`))
+}
+
+async function handleLocalPasswordLogin(req, res) {
   const username = String(req.body?.username || '').trim()
   const password = String(req.body?.password || '')
   if (!username || !password) {
     res.status(400).json(fail('请输入用户名和密码'))
     return
   }
+  const ip = requestIp(req) || 'unknown'
+  const userKey = username.toLowerCase().slice(0, 64)
+  // Check blocks first (no increment), so a blocked user isn't further penalised per request.
+  const ipBlock = loginIpLimiter.peek(ip)
+  if (ipBlock.limited) return tooMany(res, ipBlock, '登录尝试过于频繁')
+  const userBlock = loginUserLimiter.peek(userKey)
+  if (userBlock.limited) return tooMany(res, userBlock, '该账号登录失败次数过多，已临时锁定')
+  if (String(password).length > 256) {
+    res.status(401).json(fail('用户名或密码错误'))
+    return
+  }
   try {
-    const pub = localUserStore.authenticate(username, password)
+    const pub = await localUserStore.authenticateAsync(username, password)
+    loginUserLimiter.reset(userKey)
     const user = localUserStore.toSessionUser(pub)
     if (pub.group_id) {
       try {
@@ -1878,6 +2055,13 @@ function handleLocalPasswordLogin(req, res) {
     res.json(ok(sessionPayload(rec)))
   } catch (err) {
     const status = Number(err?.status) || 401
+    if (status === 401) {
+      // count failures only
+      const a = loginIpLimiter.hit(ip)
+      const b = loginUserLimiter.hit(userKey)
+      if (a.limited) return tooMany(res, a, '登录尝试过于频繁')
+      if (b.limited) return tooMany(res, b, '该账号登录失败次数过多，已临时锁定')
+    }
     res.status(status).json(fail(err?.message || '登录失败'))
   }
 }
@@ -1886,7 +2070,11 @@ app.post('/api/auth/login', handleLocalPasswordLogin)
 // Legacy path alias (no longer proxies to Aily adapter)
 app.post('/api/auth/aily', handleLocalPasswordLogin)
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
+  if (!siteContent.getAuthSettings().registration_enabled) {
+    res.status(403).json(fail('本站已暂停开放注册，请使用 Linux.do 登录或联系管理员。'))
+    return
+  }
   const username = String(req.body?.username || '').trim()
   const password = String(req.body?.password || '')
   const displayName = String(req.body?.display_name || '').trim()
@@ -1894,14 +2082,20 @@ app.post('/api/auth/register', (req, res) => {
     res.status(400).json(fail('请输入用户名和密码'))
     return
   }
+  const ip = requestIp(req) || 'unknown'
+  const g = registerGlobalLimiter.peek('all')
+  if (g.limited) return tooMany(res, g, '注册人数过多，请稍后再试')
+  const ipRl = registerIpLimiter.hit(ip)
+  if (ipRl.limited) return tooMany(res, ipRl, '注册过于频繁')
   try {
     // Public self-registration is always role=user (never admin).
-    const pub = localUserStore.createUser({
+    const pub = await localUserStore.createUserAsync({
       username,
       password,
       role: 'user',
       display_name: displayName || username,
     })
+    registerGlobalLimiter.hit('all')
     const user = localUserStore.toSessionUser(pub)
     if (pub.group_id) {
       try {
@@ -1917,6 +2111,18 @@ app.post('/api/auth/register', (req, res) => {
   } catch (err) {
     const status = Number(err?.status) || 400
     res.status(status).json(fail(err?.message || '注册失败'))
+  }
+})
+
+app.get('/api/admin/auth-settings', requireAdmin, (_req, res) => {
+  res.json(ok(siteContent.getAuthSettings()))
+})
+
+app.put('/api/admin/auth-settings', requireAdmin, (req, res) => {
+  try {
+    res.json(ok(siteContent.saveAuthSettings(req.body || {})))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '保存失败'))
   }
 })
 
@@ -1958,10 +2164,6 @@ app.get(['/api/token/', '/api/token'], requireAuth, (req, res) => {
 
 app.post(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
   try {
-    if (!cpaCfg.managementKey) {
-      res.status(503).json(fail('CPA Management Key 未配置，无法创建密钥'))
-      return
-    }
     const groupInfo = resolveAuthGroup(req)
     const quotaCheck = groupStore.assertQuotaAvailable(
       req.auth.user.id,
@@ -1972,8 +2174,8 @@ app.post(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
       return
     }
     const body = req.body || {}
-    const fullKey = `sk-mrblank-${req.auth.user.id}-${randomToken(12)}`
-    await addCpaApiKey(cpaCfg, fullKey)
+    // Site keys live only in the BFF (never registered in CPA); BFF calls CPA with its own upstream key.
+    const fullKey = `sk-mrblank-${randomToken(24)}`
     let modelLimits =
       body.model_limits || groupStore.modelLimitsString(groupInfo.group) || ''
     if (body.model_limits && (groupInfo.group?.model_ids || []).length) {
@@ -2015,11 +2217,6 @@ app.put(['/api/token/', '/api/token'], requireAuth, async (req, res) => {
     }
     if (String(req.query.status_only) === 'true') {
       const nextStatus = Number(body.status)
-      if (nextStatus === 2 && t.status === 1 && t.fullKey) {
-        await removeCpaApiKey(cpaCfg, t.fullKey)
-      } else if (nextStatus === 1 && t.status !== 1 && t.fullKey) {
-        await addCpaApiKey(cpaCfg, t.fullKey)
-      }
       const updated = userKeyStore.update(req.auth.user.id, t.id, { status: nextStatus }, true)
       res.json(ok(userKeyStore.getPublic(req.auth.user.id, updated.id, false)))
       return
@@ -2172,18 +2369,6 @@ app.put('/api/token/:id', requireAuth, async (req, res) => {
       return
     }
     const statusOnly = String(req.query.status_only) === 'true'
-    if (statusOnly) {
-      const nextStatus = Number(body.status)
-      if (nextStatus === 2 && t.status === 1 && t.fullKey) {
-        await removeCpaApiKey(cpaCfg, t.fullKey)
-      } else if (nextStatus === 1 && t.status !== 1 && t.fullKey) {
-        await addCpaApiKey(cpaCfg, t.fullKey)
-      }
-    } else if (body.status === 2 || body.enabled === false) {
-      if (t.status === 1 && t.fullKey) await removeCpaApiKey(cpaCfg, t.fullKey)
-    } else if (body.status === 1 || body.enabled === true) {
-      if (t.status !== 1 && t.fullKey) await addCpaApiKey(cpaCfg, t.fullKey)
-    }
     const updated = userKeyStore.update(req.auth.user.id, t.id, body, statusOnly)
     if (!updated) {
       res.json(fail('密钥不存在'))
@@ -2227,8 +2412,11 @@ app.delete('/api/token/:id', requireAuth, async (req, res) => {
       res.json(fail('密钥不存在'))
       return
     }
+    // Legacy cleanup: keys created before the BFF-only model were also registered in CPA.
     if (t.fullKey && cpaCfg.managementKey) {
-      await removeCpaApiKey(cpaCfg, t.fullKey)
+      await removeCpaApiKey(cpaCfg, t.fullKey).catch((e) =>
+        console.warn('[cpa] legacy site-key cleanup failed', e?.message || e),
+      )
     }
     userKeyStore.remove(req.auth.user.id, req.params.id)
     res.json(ok(true))
@@ -2406,13 +2594,9 @@ app.get('/api/admin/me', requireAuth, (req, res) => {
         adminAllowlist.emails.size > 0 ||
         (adminAllowlist.localUsernames && adminAllowlist.localUsernames.size > 0),
       allowlist_hint: {
-        env_keys: [
-          'ADMIN_LINUXDO_IDS',
-          'ADMIN_LINUXDO_USERNAMES',
-          'ADMIN_LINUXDO_EMAILS',
-          'ADMIN_LOCAL_USERNAMES',
-        ],
-        note: '多管理员：在服务端 .env 配置上述变量（逗号分隔），或将本站用户 role 设为 admin。',
+        env_keys: ['ADMIN_LINUXDO_IDS', 'ADMIN_LINUXDO_EMAILS'],
+        note:
+          '管理员判定：本站账号仅看角色 admin；Linux.do 仅看 .env 的 ADMIN_LINUXDO_IDS（不可变数字 ID）或 ADMIN_LINUXDO_EMAILS（OAuth 返回的邮箱）。用户名/昵称不再用于判定。',
         counts: {
           linuxdo_ids: adminAllowlist.ids.size,
           linuxdo_usernames: adminAllowlist.usernames.size,
@@ -3771,12 +3955,18 @@ app.put('/api/admin/openai-compatibility', requireAdmin, async (req, res) => {
       res.status(400).json(fail('body must be an array or { items: [] }'))
       return
     }
-    // CPA expects the raw array as PUT body.
+    // The GET view is reshaped (base_url / api_key_count, no api-key-entries / headers).
+    // Writing it back would wipe every upstream key — only accept full CPA-native entries.
+    const bad = validateOpenaiCompatPayload(entries)
+    if (bad) {
+      res.status(400).json(fail(`拒绝写入：${bad}。请在 CPA 管理面板编辑 OpenAI 兼容上游。`))
+      return
+    }
     await setOpenaiCompatibility(cpaCfg, entries)
     const items = await fetchOpenaiCompatibility(cpaCfg)
     res.json(ok({ items, source: 'cpa' }))
   } catch (err) {
-    res.status(502).json(fail(err?.message || 'openai-compatibility update failed'))
+    res.status(err?.status || 502).json(fail(err?.message || 'openai-compatibility update failed'))
   }
 })
 
@@ -3921,20 +4111,36 @@ app.delete('/api/admin/providers/:type', requireAdmin, async (req, res) => {
     const type = String(req.params.type || '')
     const exact = String(req.body?.['api-key'] || req.body?.api_key || req.body?.key || '').trim()
     const masked = String(req.body?.masked || req.query?.masked || '').trim()
-    let target = exact
-    if (!target && masked) {
-      const listed = await listCpaProviderKeys(cpaCfg, type)
-      target = matchMaskedProviderKey(listed._raw, masked)
-      if (!target) {
-        res.status(404).json(fail('未找到匹配的密钥（脱敏匹配失败，请用完整 api-key 删除）'))
-        return
-      }
-    }
-    if (!target) {
+    const hasBase =
+      req.body?.['base-url'] !== undefined || req.body?.base_url !== undefined || req.query?.['base-url'] !== undefined
+    const baseIn = String(req.body?.['base-url'] ?? req.body?.base_url ?? req.query?.['base-url'] ?? '').trim()
+    const listed0 = await listCpaProviderKeys(cpaCfg, type)
+    let candidates = []
+    if (exact) {
+      (listed0._raw || []).forEach((it, index) => {
+        const k = typeof it === 'string' ? it : it?.['api-key'] || it?.api_key || ''
+        if (k === exact) {
+          candidates.push({ key: k, baseUrl: typeof it === 'string' ? '' : String(it?.['base-url'] || it?.base_url || ''), index })
+        }
+      })
+    } else if (masked) {
+      candidates = matchMaskedProviderEntries(listed0._raw, masked)
+    } else {
       res.status(400).json(fail('api-key or masked required'))
       return
     }
-    const listed = await removeCpaProviderKey(cpaCfg, type, target)
+    if (hasBase) candidates = candidates.filter((c) => c.baseUrl.trim() === baseIn)
+    if (!candidates.length) {
+      res.status(404).json(fail('未找到匹配的密钥（请提供完整 api-key，并附带 base-url 以区分同名条目）'))
+      return
+    }
+    if (candidates.length > 1) {
+      res.status(409).json(fail('匹配到多个条目（同一 api-key 对应不同 base-url），请附带 base-url 以精确删除'))
+      return
+    }
+    const target = candidates[0]
+    // Always pass base-url so CPA deletes only the (api-key, base-url) pair, never siblings.
+    const listed = await removeCpaProviderKey(cpaCfg, type, target.key, { baseUrl: target.baseUrl })
     res.json(ok({ type, items: listed.items, count: listed.count, source: 'cpa' }))
   } catch (err) {
     res.status(err?.status || 502).json(fail(err?.message || 'provider delete failed'))
@@ -4933,6 +5139,12 @@ app.post('/api/admin/usage/import-sessions/:id/cancel', requireAdmin, (req, res)
     res.status(err?.status || 400).json(fail(err?.message || 'import cancel failed'))
   }
 })
+
+// Optional: serve the built SPA directly (when not fronted by nginx static). Correct cache headers:
+// index.html no-cache; hashed /assets/* immutable 1y.
+if (String(process.env.SERVE_DIST || '1') !== '0') {
+  app.use(spaStatic(path.join(rootDir, 'dist')))
+}
 
 app.use((req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/oauth/')) {
