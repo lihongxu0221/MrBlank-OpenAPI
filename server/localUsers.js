@@ -260,11 +260,13 @@ export function createLocalUserStore(filePath, env = process.env) {
       return { created: false, reason: 'env_unset' }
     }
     if (findByUsername(user)) {
-      // Ensure existing bootstrap user is admin (do not reset password silently)
+      // Never promote an existing account. A re-registered username must not inherit admin.
       const row = findByUsername(user)
       if (row.role !== 'admin') {
-        updateUser(row.id, { role: 'admin' })
-        return { created: false, upgraded: true, username: user }
+        console.warn(
+          `[local-users] bootstrap skipped: ${user} exists and is not admin; not upgrading`,
+        )
+        return { created: false, reason: 'exists_not_upgraded', username: user }
       }
       return { created: false, reason: 'exists', username: user }
     }

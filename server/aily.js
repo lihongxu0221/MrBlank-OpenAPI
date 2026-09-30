@@ -13,6 +13,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { acceptPublicHttpsUrl, assertPublicHttpsUrl } from './safeUrl.js'
 
 const DEFAULT_AILY_BASE = 'https://api.aily.pro'
 const REGION_BASE = {
@@ -151,12 +152,11 @@ export function createAilyManager(cfg = loadAilyConfig()) {
   }
 
   function getUpstreamBase(auth = readAuth()) {
-    if (cfg.envBase) return cfg.envBase
-    const fromCfg = String(readAdminCfg().aily_base_url || '')
-      .trim()
-      .replace(/\/+$/, '')
+    const fromEnv = acceptPublicHttpsUrl(cfg.envBase)
+    if (fromEnv) return fromEnv
+    const fromCfg = acceptPublicHttpsUrl(readAdminCfg().aily_base_url)
     if (fromCfg) return fromCfg
-    return ailyBaseFromToken(auth.access_token, DEFAULT_AILY_BASE)
+    return acceptPublicHttpsUrl(ailyBaseFromToken(auth.access_token, DEFAULT_AILY_BASE)) || acceptPublicHttpsUrl(DEFAULT_AILY_BASE)
   }
 
   function saveAuth(patch) {
@@ -167,9 +167,7 @@ export function createAilyManager(cfg = loadAilyConfig()) {
 
   function setUpstreamBase(url) {
     if (cfg.envBase) return getUpstreamBase()
-    const cleaned = String(url || '')
-      .trim()
-      .replace(/\/+$/, '')
+    const cleaned = assertPublicHttpsUrl(url)
     const next = { ...readAdminCfg(), aily_base_url: cleaned, updated_at: new Date().toISOString() }
     writeJsonFile(cfg.adminConfigFile, next)
     return cleaned

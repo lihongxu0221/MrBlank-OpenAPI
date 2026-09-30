@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import { safeAuthFileName } from './authFileConvert.js'
+import { assertPublicHttpsUrl } from './safeUrl.js'
 
 function readSecretFile(filePath) {
   if (!filePath) return ''
@@ -1046,11 +1048,7 @@ export async function deleteAuthFile(cfg, name) {
 /** Download auth file JSON (contains secrets — admin only). */
 export async function downloadAuthFile(cfg, name) {
   requireMgmt(cfg)
-  const n = String(name || '').trim()
-  if (!n) throw Object.assign(new Error('name required'), { status: 400 })
-  if (!n.endsWith('.json')) {
-    throw Object.assign(new Error('name must end with .json'), { status: 400 })
-  }
+  const n = safeAuthFileName(name)
   return cpaFetch(cfg, `/v0/management/auth-files/download?name=${encodeURIComponent(n)}`)
 }
 
@@ -1060,10 +1058,7 @@ export async function downloadAuthFile(cfg, name) {
  */
 export async function uploadAuthFile(cfg, { filename, content }) {
   requireMgmt(cfg)
-  const name = String(filename || '').trim()
-  if (!name || !name.endsWith('.json')) {
-    throw Object.assign(new Error('filename must end with .json'), { status: 400 })
-  }
+  const name = safeAuthFileName(filename)
   const blob = typeof content === 'string' ? content : Buffer.from(content).toString('utf8')
   // Validate JSON before upload
   try {
@@ -1127,6 +1122,7 @@ export async function submitCpaOAuthCallback(cfg, { state, redirect_url }) {
   const url = String(redirect_url || '').trim()
   if (!st) throw Object.assign(new Error('state is required'), { status: 400 })
   if (!url) throw Object.assign(new Error('redirect_url is required'), { status: 400 })
+  assertPublicHttpsUrl(url)
   return cpaFetch(cfg, '/v0/management/oauth-callback', {
     method: 'POST',
     body: { state: st, redirect_url: url },

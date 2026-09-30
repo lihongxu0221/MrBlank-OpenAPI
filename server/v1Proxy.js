@@ -38,18 +38,41 @@ export function selectUpstreamRoute({ requestedModel, cpaBase, ailyBase, ailyApi
 }
 
 
-const HOP = new Set([
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailers',
-  'transfer-encoding',
-  'upgrade',
-  'host',
-  'content-length',
-])
+const RESPONSE_HEADER_ALLOW = new Set(['cache-control', 'x-request-id'])
+
+/**
+ * Copy a narrow set of upstream headers onto the client response.
+ * Drops Set-Cookie, Location, CORS, and anything else. content-type is kept
+ * only for JSON or SSE; otherwise forced to application/json so upstream HTML
+ * cannot run on this origin. Does not overwrite headers already set by the BFF
+ * except content-type.
+ */
+export function applyUpstreamHeaders(res, headers) {
+  if (!headers || !res) return
+  let contentType = ''
+  const visit = (value, key) => {
+    const lk = String(key || '').toLowerCase()
+    if (lk === 'content-type') contentType = String(value || '')
+    else if (RESPONSE_HEADER_ALLOW.has(lk)) {
+      try {
+        res.setHeader(lk, value)
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  if (typeof headers.forEach === 'function') headers.forEach(visit)
+  else {
+    for (const [k, v] of Object.entries(headers)) visit(v, k)
+  }
+  const ct = contentType.toLowerCase()
+  const safe = ct.startsWith('application/json') || ct.startsWith('text/event-stream')
+  try {
+    res.setHeader('content-type', safe ? contentType : 'application/json')
+  } catch {
+    /* ignore */
+  }
+}
 const MAX_CAPTURE = Number(process.env.DIAGNOSIS_MAX_BODY_CHARS || 512 * 1024)
 
 function clientIp(req) {
@@ -607,13 +630,8 @@ export function createV1Proxy({
       const resHeaderObj = {}
       upstream.headers.forEach((v, k) => {
         resHeaderObj[k] = v
-        if (HOP.has(k.toLowerCase()) || k.toLowerCase() === 'content-length') return
-        try {
-          res.setHeader(k, v)
-        } catch {
-          /* ignore */
-        }
       })
+      applyUpstreamHeaders(res, upstream.headers)
       try {
         res.setHeader('x-mrblank-route', routeVia)
         res.setHeader('content-type', 'application/json')
@@ -673,13 +691,8 @@ export function createV1Proxy({
     const resHeaderObj = {}
     upstream.headers.forEach((v, k) => {
       resHeaderObj[k] = v
-      if (HOP.has(k.toLowerCase()) || k.toLowerCase() === 'content-length') return
-      try {
-        res.setHeader(k, v)
-      } catch {
-        /* ignore */
-      }
     })
+    applyUpstreamHeaders(res, upstream.headers)
     try {
       res.setHeader('x-mrblank-route', routeVia)
       if (govCtx.groupInfo?.group?.id) res.setHeader('x-mrblank-group', govCtx.groupInfo.group.id)

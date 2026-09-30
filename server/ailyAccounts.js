@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { normalizeModelRouting } from './ailyModelRouting.js'
+import { assertPublicHttpsUrl } from './safeUrl.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -197,7 +198,12 @@ export function createAilyAccountsStore(filePath = defaultPath()) {
         a.api_key = String(fields.api_key)
       }
     }
-    if (fields.base_url != null) a.base_url = String(fields.base_url).trim()
+    if (fields.base_url != null) {
+      const next = String(fields.base_url).trim().replace(/\/+$/, '')
+      const def = String(defaultCompatBase(a.platform) || '').replace(/\/+$/, '')
+      if (next && next !== def) assertPublicHttpsUrl(next)
+      a.base_url = next
+    }
     if (fields.enabled != null) a.enabled = !!fields.enabled
     if (fields.model_routing) a.model_routing = normalizeModelRouting(fields.model_routing)
     return a

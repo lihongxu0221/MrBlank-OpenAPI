@@ -34,4 +34,19 @@ describe('localUsers password hash/verify', () => {
     assert.throws(() => store.authenticate('alice', 'bad'), (e) => e.status === 401)
     fs.rmSync(dir, { recursive: true, force: true })
   })
+
+  it('bootstrap does not promote an existing user', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lu-boot-'))
+    const file = path.join(dir, 'users.json')
+    const store = createLocalUserStore(file, {})
+    store.createUser({ username: 'root', password: 'password1', role: 'user' })
+    const again = createLocalUserStore(file, {
+      BOOTSTRAP_ADMIN_USER: 'root',
+      BOOTSTRAP_ADMIN_PASSWORD: 'password1',
+    })
+    const boot = again.bootstrapFromEnv()
+    assert.equal(boot.reason, 'exists_not_upgraded')
+    assert.equal(again.findByUsername('root').role, 'user')
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
 })

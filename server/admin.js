@@ -32,8 +32,9 @@ export function loadAdminAllowlist(env = process.env) {
  *   ADMIN_LOCAL_USERNAMES / BOOTSTRAP_ADMIN_USER are used solely to seed that role
  *   for an existing/bootstrap account at startup — never as a live username match
  *   (a re-registered username must not inherit admin).
- * - Linux.do users: immutable numeric id in ADMIN_LINUXDO_IDS, or the OAuth-provided
- *   email field in ADMIN_LINUXDO_EMAILS. Never username / display_name (user-editable).
+ * - Linux.do users: immutable numeric id in ADMIN_LINUXDO_IDS, or the OAuth email
+ *   field in ADMIN_LINUXDO_EMAILS only when email_verified === true.
+ *   Never username / display_name (user-editable). Missing verified flag does not grant admin.
  * - Legacy aily sessions: never admin (login path removed).
  */
 export function isAdminUser(user, allowlist) {
@@ -50,7 +51,8 @@ export function isAdminUser(user, allowlist) {
 
   const email = String(user.oauth_email ?? user.email ?? '').trim().toLowerCase()
   if (email && email.includes('@') && allowlist.emails && allowlist.emails.has(email)) {
-    return user.email_verified !== false
+    // Missing flag is not verified. IdP must say true.
+    return user.email_verified === true
   }
   return false
 }

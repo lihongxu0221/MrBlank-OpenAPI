@@ -86,6 +86,7 @@ import { createCreditStore, shanghaiDay } from './credits.js'
 import { createWalletLedger } from './walletLedger.js'
 import { WALLET_RANGES } from './shanghaiRange.js'
 import { requestIp } from './requestIp.js'
+import { assertPublicHttpsUrl } from './safeUrl.js'
 import { createLocalUserStore } from './localUsers.js'
 import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy, extractMaxTokens } from './v1Proxy.js'
@@ -233,6 +234,7 @@ async function refreshAilyPoolAccount(id) {
   const rt = String(acc.refresh_token || '').trim()
   if (!rt) return { ok: false, message: 'No refresh_token stored' }
   const base = ailyCredentials.resolveBase(acc)
+  if (!base) return { ok: false, message: '上游地址不可用' }
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 20000)
   try {
@@ -279,6 +281,7 @@ async function testAilyPoolAccount(id) {
   }
   if (!token) return { ok: false, message: 'No access_token stored' }
   const base = ailyCredentials.resolveBase(ailyCredentials.get(id) || acc)
+  if (!base) return { ok: false, message: '上游地址不可用' }
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 15000)
   try {
@@ -1979,8 +1982,14 @@ app.post('/api/user/checkin', requireAuth, (req, res) => {
 })
 
 app.post('/api/user/topup', requireAuth, (req, res) => {
+  const ip = requestIp(req) || 'unknown'
+  const userId = String(req.auth.user.id)
+  const ipHit = redeemIpLimiter.hit(ip)
+  if (ipHit.limited) return tooMany(res, ipHit, '兑换尝试过多')
+  const userHit = redeemUserLimiter.hit(userId)
+  if (userHit.limited) return tooMany(res, userHit, '兑换尝试过多')
   const code = String(req.body?.key || '').trim()
-  const result = creditStore.redeem(req.auth.user.id, code, { ip: requestIp(req) || null })
+  const result = creditStore.redeem(userId, code, { ip: requestIp(req) || null })
   if (!result.ok) {
     res.json(fail(result.message || '兑换失败'))
     return
@@ -2021,6 +2030,8 @@ const loginUserLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 8, b
 const registerIpLimiter = createRateLimiter({ windowMs: 60 * 60 * 1000, max: 5, blockMs: 60 * 60 * 1000 })
 const registerGlobalLimiter = createRateLimiter({ windowMs: 60 * 60 * 1000, max: 60, blockMs: 60 * 60 * 1000 })
 const oauthStateIpLimiter = createRateLimiter({ windowMs: 10 * 60 * 1000, max: 30, blockMs: 10 * 60 * 1000 })
+const redeemIpLimiter = createRateLimiter({ windowMs: 60 * 60 * 1000, max: 20, blockMs: 60 * 60 * 1000 })
+const redeemUserLimiter = createRateLimiter({ windowMs: 60 * 60 * 1000, max: 10, blockMs: 60 * 60 * 1000 })
 const OAUTH_STATES_MAX = 5000
 
 function tooMany(res, rl, message) {
@@ -4023,7 +4034,8 @@ app.put('/api/admin/settings/:field', requireAdmin, async (req, res) => {
     if (value === undefined) value = req.body?.[field]
     if (value === undefined) value = req.body?.enabled
     if (field === 'proxy-url') {
-      value = value == null ? '' : String(value)
+      value = value == null ? '' : String(value).trim()
+      if (value) value = assertPublicHttpsUrl(value)
     } else if (field === 'logs-max-total-size-mb') {
       value = Number(value)
       if (!Number.isFinite(value) || value < 0) {
@@ -4094,7 +4106,10 @@ app.post('/api/admin/providers/:type', requireAdmin, async (req, res) => {
     }
     const extra = {}
     if (req.body?.['base-url'] || req.body?.base_url) extra['base-url'] = req.body['base-url'] || req.body.base_url
-    if (req.body?.['proxy-url'] || req.body?.proxy_url) extra['proxy-url'] = req.body['proxy-url'] || req.body.proxy_url
+    if (req.body?.['proxy-url'] || req.body?.proxy_url) {
+      const proxy = String(req.body['proxy-url'] || req.body.proxy_url || '').trim()
+      if (proxy) extra['proxy-url'] = assertPublicHttpsUrl(proxy)
+    }
     const listed = await addCpaProviderKey(cpaCfg, type, apiKey, extra)
     res.json(
       ok({
@@ -4195,7 +4210,10 @@ app.patch('/api/admin/accounts/fields', requireAdmin, async (req, res) => {
     if (req.body?.priority !== undefined) fields.priority = Number(req.body.priority)
     if (req.body?.weight !== undefined) fields.weight = Number(req.body.weight)
     if (req.body?.disabled !== undefined) fields.disabled = !!req.body.disabled
-    if (req.body?.proxy_url !== undefined) fields.proxy_url = String(req.body.proxy_url)
+    if (req.body?.proxy_url !== undefined) {
+      const proxy = String(req.body.proxy_url || '').trim()
+      fields.proxy_url = proxy ? assertPublicHttpsUrl(proxy) : ''
+    }
     if (req.body?.proxy !== undefined) fields.proxy = String(req.body.proxy)
     if (req.body?.prefix !== undefined) fields.prefix = String(req.body.prefix)
     if (req.body?.websockets !== undefined) fields.websockets = !!req.body.websockets
