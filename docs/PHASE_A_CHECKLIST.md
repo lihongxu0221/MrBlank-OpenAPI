@@ -36,7 +36,7 @@ Commits: `8253b97` (roadmap) · `98873ff` (native local login) · `b58c3b3` (che
 | Built JS contains `账号登录` + `/api/auth/login` | PASS | no Aily login service string |
 
 Bootstrap admin credentials were written once to VPS  
-`/home/ubuntu/sites/MrBlank-OpenAPI/server/data/.bootstrap-admin.txt` (mode 600).  
+`server/data/.bootstrap-admin.txt` under the site deploy directory (mode 600).  
 **Rotate/delete after first interactive login.** Not stored in git.
 
 Env on VPS (names only): `AILY_ADAPTER_URL`, `ADMIN_LINUXDO_EMAILS`, `ADMIN_AILY_USERNAMES` (legacy→local allowlist), `BOOTSTRAP_ADMIN_USER`.

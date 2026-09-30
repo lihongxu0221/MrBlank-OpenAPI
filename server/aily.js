@@ -11,6 +11,7 @@
  */
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 const DEFAULT_AILY_BASE = 'https://api.aily.pro'
@@ -82,7 +83,7 @@ function readSecretFile(filePath) {
 export function loadAilyConfig(env = process.env) {
   const authFile =
     env.AILY_AUTH_FILE ||
-    path.join(env.HOME || '/home/ubuntu', '.config/aily-project/.aily')
+    path.join(env.HOME || os.homedir(), '.config/aily-project/.aily')
   const adminConfigFile =
     env.AILY_ADMIN_CONFIG_FILE || path.join(path.dirname(authFile), 'admin.json')
   const adapterUrl = (env.AILY_ADAPTER_URL || '').trim().replace(/\/$/, '')
