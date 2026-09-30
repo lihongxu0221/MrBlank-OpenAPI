@@ -10,6 +10,7 @@ import { getTheme, subscribePrefs } from '../../lib/prefs';
 
 let host: HTMLDivElement | null = null;
 let root: HTMLDivElement | null = null;
+let mbRoot: HTMLDivElement | null = null;
 
 const syncTheme = () => {
   if (root) root.dataset.theme = getTheme() === 'light' ? 'white' : 'dark';
@@ -21,15 +22,20 @@ export function getCpampPortalRoot(): HTMLElement {
     // document.body reference semantics as closely as possible.
     return (typeof document !== 'undefined' ? document.body : undefined) as unknown as HTMLElement;
   }
-  if (root && host && document.body.contains(host)) return root;
+  if (mbRoot && root && host && document.body.contains(host)) return mbRoot;
   host = document.createElement('div');
   host.className = 'cpamp-scope cpamp-portal-host';
   root = document.createElement('div');
   root.className = 'cpamp-theme-root cpamp-portal-root';
+  // MrBlank token layer (styles/mrblankTheme.scss): CPAMP originals live on the theme root,
+  // the MrBlank remap on this child — portals render inside it, like the page.
+  mbRoot = document.createElement('div');
+  mbRoot.className = 'cpamp-mb-root';
+  root.appendChild(mbRoot);
   host.appendChild(root);
   document.body.appendChild(host);
   syncTheme();
-  return root;
+  return mbRoot;
 }
 
 if (typeof window !== 'undefined') {
