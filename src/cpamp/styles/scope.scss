@@ -44,6 +44,9 @@
   @include meta.load-css('./components');
 }
 
+// Map CPAMP tokens to MrBlank admin tokens (buttons excluded) — see mrblankTheme.scss.
+@include meta.load-css('./mrblankTheme');
+
 .cpamp-scope {
 
   // body-level rules from CPAMP reset.scss / global.scss applied to the theme root

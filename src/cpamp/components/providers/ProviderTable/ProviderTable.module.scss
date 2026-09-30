@@ -4,8 +4,11 @@
 // 类型 / 标识 / 地址 / 模型 / 优先级 / 近期请求 / 启用 / 操作
 $table-columns: 92px minmax(132px, 0.72fr) minmax(180px, 1fr) 96px 72px minmax(220px, 0.82fr) 68px 112px;
 
+// MrBlank: CPAMP switches to cards at viewport ≤1440px. Embedded in MrBlank's 1240px admin
+// column the table (min ≈1162px incl. card padding) can never fit, so switch on the page
+// container width instead (container `cpamp-providers`, set on `.cpamp-page`).
 @mixin provider-card-layout {
-  @include narrow-laptop {
+  @container cpamp-providers (max-width: 1161px) {
     @content;
   }
 }

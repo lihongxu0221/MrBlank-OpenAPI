@@ -9,6 +9,8 @@
 import { lazy, Suspense, useState } from 'react'
 import './AdminProvidersPage.css'
 import type { ProviderKindFilter } from '../../cpamp/components/providers/ProviderTable/sort'
+import { ConsoleHero } from '../../components/ConsoleHero'
+import { P } from '../../i18n'
 import { usePrefs } from '../../hooks/useStore'
 import { getHashQuery } from '../../router/hash'
 import { AdminLayout } from './AdminLayout'
@@ -54,8 +56,15 @@ export function AdminProvidersPage({ path }: { path: string }) {
 
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
+      <ConsoleHero
+        title={P('AI 提供商', 'AI Providers')}
+        subtitle={P(
+          '管理 CPA 上游提供商：Gemini / Interactions / Codex / xAI / Muse (Meta) / Claude / Vertex / OpenAI 兼容的密钥、优先级、启停与一键测活。',
+          'Manage CPA upstream providers — Gemini / Interactions / Codex / xAI / Muse (Meta) / Claude / Vertex / OpenAI-compatible keys, priority, enable/disable and health checks.',
+        )}
+      />
       {gate.allowed ? (
-        <Suspense fallback={<p className="inline-loading">加载中…</p>}>
+        <Suspense fallback={<p className="inline-loading">{P('加载中…', 'Loading…')}</p>}>
           <AdminProvidersContent theme={cpampTheme} initialKindFilter={initialKind} />
         </Suspense>
       ) : null}
