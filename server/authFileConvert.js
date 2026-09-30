@@ -24,6 +24,18 @@ function safeNamePart(raw) {
     .slice(0, 80) || 'account'
 }
 
+/** Basename-only auth filename. Rejects directories, `..`, and odd characters. */
+export function safeAuthFileName(name) {
+  const raw = String(name || '').trim()
+  if (!raw || raw.length > 120 || raw.includes('..') || /[\\/]/.test(raw)) {
+    throw Object.assign(new Error('invalid auth filename'), { status: 400 })
+  }
+  if (!/^[A-Za-z0-9._@+-]+$/.test(raw) || !raw.endsWith('.json')) {
+    throw Object.assign(new Error('invalid auth filename'), { status: 400 })
+  }
+  return raw
+}
+
 function sessionToCodex(raw, now = new Date()) {
   const root = asObj(raw) || {}
   // Accept nested { session: {...} } or flat ChatGPT web export
@@ -123,15 +135,15 @@ export function convertPasteToAuthFiles(pasteType, content, preferredName = '') 
     if (!parsed || typeof parsed !== 'object') {
       throw Object.assign(new Error('CPA JSON 须为对象'), { status: 400 })
     }
-    const fileName =
-      String(preferredName || '').trim() ||
-      `${safeNamePart(parsed.type || parsed.provider || 'auth')}-${safeNamePart(parsed.email || parsed.name || 'file')}.json`
+    const fileName = preferredName?.trim()
+      ? safeAuthFileName(preferredName)
+      : `${safeNamePart(parsed.type || parsed.provider || 'auth')}-${safeNamePart(parsed.email || parsed.name || 'file')}.json`
     return { files: [{ fileName, authJson: parsed }], failures: [], convertedSourceCount: 1 }
   }
 
   if (type === 'session') {
     const one = sessionToCodex(parsed, now)
-    if (preferredName?.trim()) one.fileName = preferredName.trim()
+    if (preferredName?.trim()) one.fileName = safeAuthFileName(preferredName)
     return { files: [one], failures: [], convertedSourceCount: 1 }
   }
 

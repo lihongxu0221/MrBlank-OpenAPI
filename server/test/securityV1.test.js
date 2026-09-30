@@ -9,6 +9,7 @@ import {
   forwardHeaders,
   sanitizedQueryString,
   extractMaxTokens,
+  applyUpstreamHeaders,
 } from '../v1Proxy.js'
 
 test('resolveV1Request: rejects encoded / ambiguous paths, exact whitelist', () => {
@@ -73,6 +74,30 @@ test('forwardHeaders: allowlist only, client credentials never forwarded', () =>
   assert.equal(lower['content-type'], 'application/json')
   assert.equal(lower['anthropic-version'], '2023-06-01')
   assert.equal(lower['x-stainless-os'], 'Linux')
+})
+
+test('applyUpstreamHeaders drops set-cookie, location, and CORS', () => {
+  const set = new Map()
+  const res = {
+    setHeader(k, v) {
+      set.set(String(k).toLowerCase(), v)
+    },
+  }
+  const headers = new Map([
+    ['set-cookie', 'mrblank_sid=stolen'],
+    ['location', 'https://evil.example/phish'],
+    ['access-control-allow-origin', 'https://evil.example'],
+    ['cache-control', 'no-store'],
+    ['x-request-id', 'req-1'],
+    ['content-type', 'text/html'],
+  ])
+  applyUpstreamHeaders(res, headers)
+  assert.equal(set.has('set-cookie'), false)
+  assert.equal(set.has('location'), false)
+  assert.equal(set.has('access-control-allow-origin'), false)
+  assert.equal(set.get('cache-control'), 'no-store')
+  assert.equal(set.get('x-request-id'), 'req-1')
+  assert.equal(set.get('content-type'), 'application/json')
 })
 
 test('extractMaxTokens', () => {

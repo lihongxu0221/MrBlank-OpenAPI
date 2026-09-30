@@ -22,7 +22,11 @@ describe('admin allowlist + sanitize', () => {
       isAdminUser({ auth_provider: 'linuxdo', id: 99, username: 'owner@example.com', name: 'owner@example.com' }, al),
       false,
     )
-    assert.equal(isAdminUser({ auth_provider: 'linuxdo', id: 99, oauth_email: 'Owner@Example.com' }, al), true)
+    assert.equal(isAdminUser({ auth_provider: 'linuxdo', id: 99, oauth_email: 'Owner@Example.com' }, al), false)
+    assert.equal(
+      isAdminUser({ auth_provider: 'linuxdo', id: 99, oauth_email: 'owner@example.com', email_verified: true }, al),
+      true,
+    )
     assert.equal(
       isAdminUser({ auth_provider: 'linuxdo', id: 99, oauth_email: 'owner@example.com', email_verified: false }, al),
       false,

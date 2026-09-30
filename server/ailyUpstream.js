@@ -4,6 +4,7 @@
  * Uses shared .aily tokens via ailyManager — no separate :8088 process.
  */
 import { normalizeAilyToken } from './aily.js'
+import { acceptPublicHttpsUrl } from './safeUrl.js'
 import {
   MODEL_ALIASES,
   applyModelRouting,
@@ -329,12 +330,14 @@ export function createAilyUpstream(deps) {
   function accountBase(acc) {
     if (typeof deps.resolveAccountBase === 'function' && acc) {
       try {
-        return deps.resolveAccountBase(acc)
+        const resolved = deps.resolveAccountBase(acc)
+        if (resolved) return resolved
       } catch {
         /* fall through */
       }
     }
-    if (acc?.aily_base_url) return String(acc.aily_base_url).replace(/\/+$/, '')
+    const fromAcc = acceptPublicHttpsUrl(acc?.aily_base_url)
+    if (fromAcc) return fromAcc
     return deps.getUpstreamBase()
   }
 

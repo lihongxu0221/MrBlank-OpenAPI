@@ -10,6 +10,7 @@ import {
   publicModelList,
 } from './ailyModelRouting.js'
 import { defaultCompatBase, isCompatPlatform } from './ailyAccounts.js'
+import { acceptPublicHttpsUrl } from './safeUrl.js'
 
 const CATALOG_TTL_MS = 5 * 60 * 1000
 const catalogCache = new Map()
@@ -31,10 +32,11 @@ export function compatBase(account) {
     account && account.auth_type === 'oauth' && platform === 'openai'
       ? 'https://chatgpt.com'
       : defaultCompatBase(platform) || ''
-  if (account && account.custom_upstream) {
-    return String(account.base_url || def).replace(/\/+$/, '')
-  }
-  return String(def || (account && account.base_url) || '').replace(/\/+$/, '')
+  const raw =
+    account && account.custom_upstream
+      ? String(account.base_url || def)
+      : String(def || (account && account.base_url) || '')
+  return acceptPublicHttpsUrl(raw)
 }
 
 /**

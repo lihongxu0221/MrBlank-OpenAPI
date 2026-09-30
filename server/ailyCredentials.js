@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { normalizeAilyToken } from './aily.js'
+import { acceptPublicHttpsUrl, assertPublicHttpsUrl } from './safeUrl.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -191,11 +192,11 @@ export function createAilyCredentialsStore(filePath = defaultPath(), opts = {}) 
   }
 
   function resolveBase(a) {
-    if (a?.aily_base_url) return a.aily_base_url
-    if (process.env.AILY_BASE_URL) {
-      return String(process.env.AILY_BASE_URL).trim().replace(/\/+$/, '')
-    }
-    return baseFromToken(a?.access_token, DEFAULT_BASE)
+    const fromAccount = acceptPublicHttpsUrl(a?.aily_base_url)
+    if (fromAccount) return fromAccount
+    const fromEnv = acceptPublicHttpsUrl(process.env.AILY_BASE_URL)
+    if (fromEnv) return fromEnv
+    return acceptPublicHttpsUrl(baseFromToken(a?.access_token, DEFAULT_BASE))
   }
 
   function applyFields(a, fields) {
@@ -205,9 +206,8 @@ export function createAilyCredentialsStore(filePath = defaultPath(), opts = {}) 
     if (fields.remark != null) a.remark = String(fields.remark).slice(0, 200)
     if (fields.enabled != null) a.enabled = !!fields.enabled
     if (fields.aily_base_url != null) {
-      a.aily_base_url = String(fields.aily_base_url || '')
-        .trim()
-        .replace(/\/+$/, '')
+      const next = String(fields.aily_base_url || '').trim()
+      a.aily_base_url = next ? assertPublicHttpsUrl(next) : ''
     }
     if (fields.access_token != null && String(fields.access_token).trim() !== '') {
       a.access_token = normalizeAilyToken(fields.access_token)
@@ -390,9 +390,8 @@ export function createAilyCredentialsStore(filePath = defaultPath(), opts = {}) 
     }
     if (email != null) a.email = String(email).slice(0, 120)
     if (aily_base_url != null) {
-      a.aily_base_url = String(aily_base_url || '')
-        .trim()
-        .replace(/\/+$/, '')
+      const next = String(aily_base_url || '').trim()
+      a.aily_base_url = next ? assertPublicHttpsUrl(next) : ''
     }
     a.cooldown_until = null
     a.last_error = null
