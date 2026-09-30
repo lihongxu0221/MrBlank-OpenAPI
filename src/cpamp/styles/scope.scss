@@ -1,0 +1,36 @@
+/**
+ * MrBlank: scoped entry for cpa-manager-plus (MIT, © 2026 Seakee) global styles.
+ *
+ * CPAMP ships global class names (.btn, .card, .form-group, .hint, .modal, …). They are
+ * loaded verbatim but nested under `.cpamp-scope` so they cannot collide with MrBlank's
+ * own stylesheet. Markup structure:
+ *
+ *   <div class="cpamp-scope"><div class="cpamp-theme-root" data-theme="white|dark"> … </div></div>
+ *
+ * The same structure is used for the body-level portal host (utils/portalRoot.ts).
+ */
+@use 'sass:meta';
+@use './variables.scss' as *;
+
+.cpamp-scope {
+  @include meta.load-css('./reset');
+  @include meta.load-css('./themes');
+  @include meta.load-css('./components');
+
+  // body-level rules from CPAMP reset.scss / global.scss applied to the theme root
+  .cpamp-theme-root {
+    font-family: $font-family;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.5;
+    color: var(--text-primary);
+    font-size: 16px; // CPAMP root inherits the browser default
+    text-align: left;
+    letter-spacing: normal;
+  }
+}
+
+.cpamp-portal-host {
+  position: relative;
+  z-index: 1000;
+}
