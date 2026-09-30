@@ -282,6 +282,7 @@ export function createV1Proxy({
           duration_ms: Date.now() - started,
           ttft_ms,
           endpoint,
+          method: req.method,
           requestedModel,
           apiKey,
           reasoning,

@@ -220,6 +220,8 @@
   "已保存": "Saved",
   "已删除": "Deleted",
   "失败": "Failed",
+  "未认证拒绝": "Rejected (unauthenticated)",
+  "已认证请求失败次数": "Failed authenticated requests",
   "加载中…": "Loading…",
   "并发": "Concurrency",
   "已用点数": "Points used",

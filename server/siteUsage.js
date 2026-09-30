@@ -89,6 +89,32 @@ function syntheticId(e) {
   return `bf-${crypto.createHash('sha1').update(raw).digest('hex').slice(0, 16)}`
 }
 
+/** `/v1/models` (list or retrieve) — not a model call. */
+export function isModelsListEndpoint(endpoint) {
+  const p = String(endpoint || '').split('?')[0].replace(/\/+$/, '')
+  return p === '/v1/models' || p.startsWith('/v1/models/')
+}
+
+/** Model label for dashboard tables: what the caller asked for, else upstream-resolved. */
+export function dashboardModelName(e) {
+  return String(e?.model_requested || e?.model || '').trim()
+}
+
+/**
+ * Dashboard classification:
+ *  - 'preflight'       legacy CORS preflight rows (204, no model, no tokens, no user)
+ *  - 'rejected_unauth' failed 401/403/404 with no authenticated user (probes / bad keys)
+ *  - 'normal'
+ */
+export function classifyDashboardEvent(e) {
+  const status = Number(e?.status) || 0
+  const tokens = Number(e?.tokens) || 0
+  if (String(e?.method || '').toUpperCase() === 'OPTIONS') return 'preflight'
+  if (status === 204 && !tokens && !e?.userId && !String(e?.model || '').trim()) return 'preflight'
+  if (!e?.success && !e?.userId && (status === 401 || status === 403 || status === 404)) return 'rejected_unauth'
+  return 'normal'
+}
+
 export function periodStartMs(period = 'today') {
   const now = Date.now()
   if (period === 'all') return 0
@@ -266,6 +292,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
 
   /** @param {object} evt */
   function recordEvent(evt) {
+    // CORS preflights are not usage — never record them.
+    if (String(evt?.method || '').toUpperCase() === 'OPTIONS') return null
     const row = normalizeIncoming(evt)
     if (!row) return null
     store.events.push(row)
@@ -809,16 +837,28 @@ export function createSiteUsageStore(filePath, opts = {}) {
     let todayTokens = 0
     let todayPrompt = 0
     let todayCompletion = 0
+    let todayRejectedUnauth = 0
+    let todayPreflight = 0
     let m30Req = 0
     let m30Tokens = 0
-    /** @type {Map<string, { calls: number, tokens: number, success: number }>} */
+    /** @type {Map<string, { calls: number, tokens: number, success: number, failures: number }>} */
     const byModel = new Map()
+    /** @type {Map<string, number>} authenticated failures per displayed model */
+    const failuresByModel = new Map()
 
     for (const e of store.events) {
       const ts = Date.parse(e.ts || '') || 0
       if (ts < todayStart && ts < window30) continue
+      const kind = classifyDashboardEvent(e)
+      if (kind === 'preflight') {
+        if (ts >= todayStart) todayPreflight += 1
+        continue
+      }
+      if (kind === 'rejected_unauth') {
+        if (ts >= todayStart) todayRejectedUnauth += 1
+        continue
+      }
       const tokens = Number(e.tokens) || 0
-      const model = e.model || 'unknown'
       if (ts >= todayStart) {
         todayReq += 1
         if (e.success) todayOk += 1
@@ -826,14 +866,20 @@ export function createSiteUsageStore(filePath, opts = {}) {
         todayTokens += tokens
         todayPrompt += Number(e.prompt_tokens) || 0
         todayCompletion += Number(e.completion_tokens) || 0
-        let row = byModel.get(model)
-        if (!row) {
-          row = { calls: 0, tokens: 0, success: 0 }
-          byModel.set(model, row)
+        const model = dashboardModelName(e)
+        const modelCall = model && !isModelsListEndpoint(e.endpoint)
+        if (modelCall && e.success && tokens > 0) {
+          let row = byModel.get(model)
+          if (!row) {
+            row = { calls: 0, tokens: 0, success: 0, failures: 0 }
+            byModel.set(model, row)
+          }
+          row.calls += 1
+          row.tokens += tokens
+          row.success += 1
+        } else if (modelCall && !e.success && e.userId) {
+          failuresByModel.set(model, (failuresByModel.get(model) || 0) + 1)
         }
-        row.calls += 1
-        row.tokens += tokens
-        if (e.success) row.success += 1
       }
       if (ts >= window30) {
         m30Req += 1
@@ -841,14 +887,23 @@ export function createSiteUsageStore(filePath, opts = {}) {
       }
     }
 
+    for (const [model, n] of failuresByModel) {
+      const row = byModel.get(model)
+      if (row) row.failures = n
+    }
     const models = [...byModel.entries()].map(([model, s]) => ({
       model,
       calls: s.calls,
       success: s.success,
+      failures: s.failures,
       tokens: s.tokens,
     }))
     const topByTokens = models.slice().sort((a, b) => b.tokens - a.tokens || b.calls - a.calls).slice(0, 10)
     const topByCalls = models.slice().sort((a, b) => b.calls - a.calls || b.tokens - a.tokens).slice(0, 10)
+    const modelFailures = [...failuresByModel.entries()]
+      .map(([model, failures]) => ({ model, failures }))
+      .sort((a, b) => b.failures - a.failures)
+      .slice(0, 10)
 
     return {
       source: 'site-usage',
@@ -862,6 +917,9 @@ export function createSiteUsageStore(filePath, opts = {}) {
         prompt_tokens: todayPrompt,
         completion_tokens: todayCompletion,
         success_rate: todayReq ? todayOk / todayReq : null,
+        // Excluded from the counts above; reported separately.
+        rejected_unauthenticated: todayRejectedUnauth,
+        preflight: todayPreflight,
       },
       last_30m: {
         requests: m30Req,
@@ -871,6 +929,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
       },
       top_models_by_tokens: topByTokens,
       top_models_by_calls: topByCalls,
+      model_failures_authenticated: modelFailures,
     }
   }
 

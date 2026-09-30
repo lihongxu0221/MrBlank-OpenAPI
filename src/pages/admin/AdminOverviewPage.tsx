@@ -35,10 +35,13 @@ type DashSummary = {
     failure: number
     tokens: number
     success_rate?: number | null
+    rejected_unauthenticated?: number
+    preflight?: number
   }
   last_30m?: { requests: number; tokens: number; rpm: number; tpm: number }
-  top_models_by_tokens?: { model: string; calls: number; tokens: number }[]
-  top_models_by_calls?: { model: string; calls: number; tokens: number }[]
+  top_models_by_tokens?: { model: string; calls: number; tokens: number; failures?: number }[]
+  top_models_by_calls?: { model: string; calls: number; tokens: number; failures?: number }[]
+  model_failures_authenticated?: { model: string; failures: number }[]
   collector?: {
     ok?: boolean
     lastSync?: string | null
@@ -150,6 +153,9 @@ export function AdminOverviewPage({ path }: { path: string }) {
             {dash?.today?.success_rate != null
               ? ` · ${(dash.today.success_rate * 100).toFixed(1)}%`
               : ''}
+            {dash?.today?.rejected_unauthenticated
+              ? ` · ${P('未认证拒绝')} ${dash.today.rejected_unauthenticated}`
+              : ''}
           </div>
         </div>
         <div className="stat-card">
@@ -243,7 +249,14 @@ export function AdminOverviewPage({ path }: { path: string }) {
                     <td>
                       <code>{m.model}</code>
                     </td>
-                    <td>{m.calls}</td>
+                    <td>
+                      {m.calls}
+                      {m.failures ? (
+                        <span className="muted" title={P('已认证请求失败次数')}>
+                          {' '}· {P('失败')} {m.failures}
+                        </span>
+                      ) : null}
+                    </td>
                     <td>{m.tokens.toLocaleString('zh-CN')}</td>
                   </tr>
                 ))}

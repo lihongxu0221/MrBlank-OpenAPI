@@ -142,9 +142,13 @@ test('createV1Proxy integration: default-deny, stripping, authOverride, encoded 
     assert.equal((await post('/v1/unknown', { authorization: `Bearer ${valid}` })).status, 404)
     assert.equal(seen.length, 0, 'nothing denied may reach upstream')
 
+    await new Promise((r) => setTimeout(r, 20))
+    const completesBeforePreflight = completes.length
     const pre = await fetch(base + '/v1/chat/completions', { method: 'OPTIONS' })
     assert.equal(pre.status, 204)
     assert.equal(pre.headers.get('access-control-allow-origin'), '*')
+    await new Promise((r) => setTimeout(r, 20))
+    assert.equal(completes.length, completesBeforePreflight, 'CORS preflight must not emit a usage record')
 
     const r1 = await post('/v1/chat/completions?key=' + valid + '&foo=1', { 'x-goog-api-key': valid, cookie: 's=1' })
     assert.equal(r1.status, 200)

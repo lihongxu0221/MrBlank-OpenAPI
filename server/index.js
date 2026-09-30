@@ -1557,6 +1557,7 @@ app.use(
         has_detail,
         groupInfo,
         reasoning,
+        method,
       }) {
         try {
           if (typeof releaseTokenConcurrency === 'function') releaseTokenConcurrency()
@@ -1605,6 +1606,7 @@ app.use(
           }
           const diagId = diagnosis_id || eventId || null
           siteUsage.recordEvent({
+            method: method || null,
             id: diagId || undefined,
             diagnosis_id: diagId,
             userId: userId || null,
