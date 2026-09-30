@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Boxes, RefreshCw, Save, Search } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { formatQuotaCompact, formatQuotaUnitLabel, getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
+import { POINT_MP, formatQuotaCompact, formatQuotaUnitLabel, getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
@@ -70,7 +70,7 @@ export function AdminGroupModelsPage({ path }: { path: string }) {
     setSelectedIds(new Set((g.model_ids || []).map(String)))
     const qp: Record<string, number> = {}
     for (const [mid, raw] of Object.entries(g.model_quotas || {})) {
-      qp[mid] = quotaToPoints(Number(raw) || 0, unit)
+      qp[mid] = quotaToPoints(Number(raw) || 0, POINT_MP)
     }
     setQuotaPoints(qp)
   }
@@ -163,7 +163,7 @@ export function AdminGroupModelsPage({ path }: { path: string }) {
         if (model_ids.length && !selectedIds.has(mid)) continue
         const pts = Number(quotaPoints[mid])
         if (!Number.isFinite(pts)) continue
-        model_quotas[mid] = pointsToQuota(Math.max(0, pts), unit)
+        model_quotas[mid] = pointsToQuota(Math.max(0, pts), POINT_MP)
       }
       const res = await api.put<{ group: Group }>(`/api/admin/groups/${encodeURIComponent(selectedId)}/models`, {
         model_ids,

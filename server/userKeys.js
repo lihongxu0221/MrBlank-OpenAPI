@@ -2,8 +2,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 
-/** new-api / aily-compatible raw quota scale (display 点 are converted by the UI). */
+/** new-api / aily-compatible raw quota scale (USD → raw, fixed). */
 export const QUOTA_PER_USD = 500_000
+/**
+ * unit_version 2: remain_quota / used_quota / rate_limit_* / spend_log[].amount are integer
+ * micro-points (mp, 1 点 = 1,000,000 mp), independent of N. used_amount stays USD.
+ */
+const UNIT_VERSION = 2
 
 const STATUS_ENABLED = 1
 const STATUS_DISABLED = 2
@@ -168,7 +173,7 @@ export function createUserKeyStore(filePath) {
   const inflightByToken = new Map()
 
   function readAll() {
-    if (!fs.existsSync(filePath)) return { users: {} }
+    if (!fs.existsSync(filePath)) return { unit_version: UNIT_VERSION, users: {} }
     try {
       const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'))
       return raw && typeof raw === 'object' ? raw : { users: {} }
@@ -178,6 +183,12 @@ export function createUserKeyStore(filePath) {
   }
 
   function writeAll(data) {
+    if (data && data.unit_version == null && !fs.existsSync(filePath)) data.unit_version = UNIT_VERSION
+    if (!data || Number(data.unit_version) !== UNIT_VERSION) {
+      throw Object.assign(new Error('user-keys.json is legacy (raw units); run server/scripts/migrate-points-unit.js'), {
+        status: 503,
+      })
+    }
     const tmp = `${filePath}.${process.pid}.tmp`
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 })
     fs.renameSync(tmp, filePath)

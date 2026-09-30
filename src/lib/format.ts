@@ -1,4 +1,11 @@
+/**
+ * Current N (1 点 = N raw) — ONLY for pricing display (price table, per-call cost estimates).
+ * Balances / limits / configs are micro-points (mp): 1 点 = POINT_MP, independent of N.
+ */
 let quotaPerUnit = 500000
+
+/** Fixed account unit: 1 点 = 1,000,000 mp (server unit_version 2). */
+export const POINT_MP = 1_000_000
 
 export function setQuotaPerUnit(n: number) {
   if (n > 0) quotaPerUnit = n
@@ -12,8 +19,9 @@ export function getQuotaPerUnit() {
 export const QUOTA_PER_USD = 500_000
 export const FIXED_USD_TO_RAW = 500_000
 
-export function formatCredits(raw: number, unit = quotaPerUnit): string {
-  const credits = raw / unit
+/** Balance-like value in mp → 点 text (fixed 1e6; never depends on N unless `unit` is passed). */
+export function formatCredits(mp: number, unit = POINT_MP): string {
+  const credits = mp / unit
   if (!Number.isFinite(credits)) return '0'
   if (Number.isInteger(credits)) return String(credits)
   return credits.toFixed(credits < 10 ? 2 : 1)
@@ -47,13 +55,13 @@ export function usdToQuota(usd: number, _unitIgnored?: number) {
   return Math.round((Number(usd) || 0) * FIXED_USD_TO_RAW)
 }
 
-/** Display 点 → raw = round(points × N). */
-export function pointsToQuota(points: number, unit = quotaPerUnit) {
+/** 点 → stored mp (default) — or raw at N when `unit` = N is passed explicitly. */
+export function pointsToQuota(points: number, unit = POINT_MP) {
   return Math.round((Number(points) || 0) * (unit || FIXED_USD_TO_RAW))
 }
 
-/** Raw → display 点 = raw / N. */
-export function quotaToPoints(q: number, unit = quotaPerUnit) {
+/** Stored mp → 点 (default) — or raw → 点 at N when `unit` = N is passed explicitly. */
+export function quotaToPoints(q: number, unit = POINT_MP) {
   return (Number(q) || 0) / (unit || FIXED_USD_TO_RAW)
 }
 
@@ -153,6 +161,19 @@ export function usdToPointsText(usd: number | undefined | null, unit = quotaPerU
   if (!Number.isFinite(v) || !v) return '-'
   const pts = (v * FIXED_USD_TO_RAW) / (unit || FIXED_USD_TO_RAW)
   if (Math.abs(pts) >= 0.01) return formatCredits(pts * (unit || FIXED_USD_TO_RAW), unit)
+  const fine = Number(pts.toFixed(4))
+  return fine ? String(fine) : '<0.0001'
+}
+
+/**
+ * Points charged (mp, fixed at call time) → 点 text. Keeps tiny per-request costs visible
+ * (up to 4 decimals below 0.01 点). '-' when zero / missing. Never depends on current N.
+ */
+export function mpToPointsText(mp: number | undefined | null): string {
+  const v = Number(mp)
+  if (!Number.isFinite(v) || !v) return '-'
+  const pts = v / POINT_MP
+  if (Math.abs(pts) >= 0.01) return formatCredits(v)
   const fine = Number(pts.toFixed(4))
   return fine ? String(fine) : '<0.0001'
 }

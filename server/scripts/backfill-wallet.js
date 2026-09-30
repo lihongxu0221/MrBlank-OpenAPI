@@ -6,7 +6,7 @@
  * Usage:
  *   node server/scripts/backfill-wallet.js [--data DIR] [--credits FILE] [--ledger FILE] [--dry-run]
  * Defaults: DIR = server/data; credits = DIR/site-credits.json; ledger = DIR/wallet-ledger.jsonl.
- * Prints counts/totals only (no user secrets).
+ * Prints counts/totals only (no user secrets). Amounts are mp (1 点 = 1e6 mp; unit_version 2).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -33,16 +33,20 @@ try {
 }
 
 const doc = JSON.parse(fs.readFileSync(creditsPath, 'utf8'))
+if (Number(doc.unit_version) !== 2) {
+  console.error('site-credits.json is legacy (raw units); run server/scripts/migrate-points-unit.js first')
+  process.exit(78)
+}
 const ledger = createWalletLedger(ledgerPath, { getRawPerPoint: () => rawPerPoint })
 const rows = ledger.backfill(doc, { dryRun })
 const byChannel = {}
-let inRaw = 0
-let outRaw = 0
+let inMp = 0
+let outMp = 0
 for (const r of rows) {
   const k = `${r.direction}:${r.channel}`
   byChannel[k] = (byChannel[k] || 0) + 1
-  if (r.direction === 'in') inRaw += r.raw
-  else outRaw += r.raw
+  if (r.direction === 'in') inMp += r.points_mp
+  else outMp += r.points_mp
 }
 const users = Object.values(doc.users || {})
 console.log(
@@ -53,12 +57,12 @@ console.log(
       existing_rows_before: ledger.size - (dryRun ? 0 : rows.length),
       new_rows: rows.length,
       by_channel: byChannel,
-      income_raw: inRaw,
-      expense_raw: outRaw,
+      income_mp: inMp,
+      expense_mp: outMp,
       granted_total_sum: users.reduce((a, u) => a + (Number(u.granted_total) || 0), 0),
       consumed_total_sum: users.reduce((a, u) => a + (Number(u.consumed_total) || 0), 0),
       raw_per_point: rawPerPoint,
-      rows: rows.map((r) => ({ ts: r.ts, direction: r.direction, channel: r.channel, raw: r.raw, ref_id: r.ref_id })),
+      rows: rows.map((r) => ({ ts: r.ts, direction: r.direction, channel: r.channel, points_mp: r.points_mp, ref_id: r.ref_id })),
     },
     null,
     2,

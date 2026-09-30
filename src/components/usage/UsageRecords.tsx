@@ -6,7 +6,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { api } from '../../lib/api'
-import { fmtUsd, setQuotaPerUnit, usdToPointsText } from '../../lib/format'
+import { fmtUsd, mpToPointsText, setQuotaPerUnit, usdToPointsText } from '../../lib/format'
 import { P } from '../../i18n'
 import { DiagnosisModal } from '../../pages/admin/diagnosis/DiagnosisModal'
 import { pageNums, shanghaiEndOfDay, shanghaiStartOfDay } from '../../lib/listUi'
@@ -30,6 +30,8 @@ type UsageItem = {
   cache_tokens?: number
   amount?: number
   amountUsd?: number
+  /** points charged at call time (mp) — fixed history */
+  points_mp?: number | null
   duration_ms?: number | null
   ttft_ms?: number | null
   ip?: string
@@ -50,6 +52,7 @@ type Chart = {
     cache_tokens?: number
     tokens?: number
     amount?: number
+    points_mp?: number
     avg_ms?: number
   }
   by_model?: DistItem[]
@@ -65,6 +68,7 @@ type DistItem = {
   requests?: number
   tokens?: number
   amount?: number
+  points_mp?: number
   prompt_tokens?: number
   completion_tokens?: number
   keys?: DistItem[]
@@ -113,10 +117,13 @@ function usd(n?: number) {
   return fmtUsd(v)
 }
 
-/** Console shows cost as 点 (USD × 500000 ÷ N); admin keeps USD. */
-function costText(n: number | undefined, admin: boolean, unit = true) {
+/**
+ * Console shows cost as 点 charged at call time (points_mp, fixed history); admin keeps USD.
+ * Fallback for rows without points_mp: USD × 500000 ÷ current N.
+ */
+function costText(n: number | undefined, admin: boolean, unit = true, mp?: number | null) {
   if (admin) return usd(n)
-  const t = usdToPointsText(n)
+  const t = mp != null ? mpToPointsText(mp) : usdToPointsText(n)
   return t === '-' || !unit ? t : t + ' 点'
 }
 
@@ -244,7 +251,7 @@ function Dist({ title, items, nestKeys, admin = false }: { title: string; items?
                         <td className="name">{distName(x.name)}</td>
                         <td className="num">{fmtTok(x.requests)}</td>
                         <td className="num">{fmtTok(x.tokens)}</td>
-                        <td className="fee">{costText(x.amount, admin, false)}</td>
+                        <td className="fee">{costText(x.amount, admin, false, x.points_mp)}</td>
                       </tr>
                       {open[i] &&
                         keys.map((k) => (
@@ -253,7 +260,7 @@ function Dist({ title, items, nestKeys, admin = false }: { title: string; items?
                             <td className="name">{k.name}</td>
                             <td className="num">{fmtTok(k.requests)}</td>
                             <td className="num">{fmtTok(k.tokens)}</td>
-                            <td className="fee">{costText(k.amount, admin, false)}</td>
+                            <td className="fee">{costText(k.amount, admin, false, k.points_mp)}</td>
                           </tr>
                         ))}
                     </Fragment>
@@ -422,7 +429,7 @@ function downloadCsv(rows: UsageItem[], admin: boolean) {
       x.is_stream ? '流式' : '非流式',
       String(x.prompt_tokens || 0),
       String(x.completion_tokens || 0),
-      admin ? String(x.amount ?? x.amountUsd ?? '') : (() => { const t = usdToPointsText(x.amount ?? x.amountUsd); return t === '-' ? '' : t })(),
+      admin ? String(x.amount ?? x.amountUsd ?? '') : (() => { const t = x.points_mp != null ? mpToPointsText(x.points_mp) : usdToPointsText(x.amount ?? x.amountUsd); return t === '-' ? '' : t })(),
       String(x.ttft_ms ?? ''),
       String(dur),
       csvCell(fmtTime(x.created_at)),
@@ -530,6 +537,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
             prompt_tokens: r.prompt_tokens,
             completion_tokens: r.completion_tokens,
             amount: r.amount,
+            points_mp: r.points_mp,
             // requests stored in content for display
             content: String(r.requests || 0),
             tokens: r.tokens,
@@ -605,7 +613,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
     )[range] || '所选范围内'
   const spend = Number(t.amount)
   const spendText = !admin
-    ? costText(spend, false)
+    ? costText(spend, false, true, t.points_mp)
     : Number.isFinite(spend) && spend !== 0
       ? '$' + spend.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })
       : '-'
@@ -882,7 +890,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
                     <td>{x.username || '-'}</td>
                     <td className="num">{x.content || '-'}</td>
                     <td className="num">{fmtTok(usageTokens(x as any))}</td>
-                    <td className="fee">{costText(x.amount, admin)}</td>
+                    <td className="fee">{costText(x.amount, admin, true, x.points_mp)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -975,7 +983,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
                         <span className="up">↑ {fmtTok(x.completion_tokens)}</span>
                         {cache ? <span className="cache">cache {fmtTok(cache)}</span> : null}
                       </td>
-                      <td className="fee">{costText(x.amount ?? x.amountUsd, admin, false)}</td>
+                      <td className="fee">{costText(x.amount ?? x.amountUsd, admin, false, x.points_mp)}</td>
                       <td className="lat">
                         首字 {fmtSec(x.ttft_ms)}
                         <br />

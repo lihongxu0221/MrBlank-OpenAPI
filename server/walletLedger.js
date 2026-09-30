@@ -1,12 +1,16 @@
 /**
  * Wallet ledger — append-only income/expense log for site credits (钱包).
  * Persisted as JSONL at server/data/wallet-ledger.jsonl (override via WALLET_LEDGER_PATH).
- * Kept forever (no pruning). Amounts are raw (token) integers; display 点 = raw ÷ current N.
+ * Kept forever (no pruning).
+ * unit_version 2: the amount of record is `points_mp` (integer micro-points, 1 点 = 1,000,000 mp),
+ * fixed at write time — display never depends on the current N. `raw` / `raw_per_point` are kept
+ * as audit fields only (api_usage: raw cost + N at charge time).
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { shanghaiRangeBounds } from './shanghaiRange.js'
+import { POINT_MP } from './quotaUnit.js'
 
 export const WALLET_CHANNELS = [
   { value: 'checkin', label: '每日签到', direction: 'in' },
@@ -37,6 +41,13 @@ function fmtRaw(n) {
   return toInt(n).toLocaleString('en-US')
 }
 
+/** mp → "12.5" 点 text */
+function fmtPts(mp) {
+  const v = toInt(mp) / POINT_MP
+  if (Number.isInteger(v)) return String(v)
+  return String(Number(v.toFixed(v < 10 ? 4 : 2)))
+}
+
 /** Human 详细信息 text (no internal wording; amounts in token). */
 export function detailText(e) {
   const d = e.detail || {}
@@ -52,7 +63,7 @@ export function detailText(e) {
       return d.note ? `管理员发放：${d.note}` : '管理员发放'
     case 'admin_deduct': {
       let s = d.note ? `管理员扣减：${d.note}` : '管理员扣减'
-      if (d.requested && toInt(d.requested) !== toInt(e.raw)) s += `（申请 ${fmtRaw(d.requested)} token，余额不足按实扣）`
+      if (d.requested && toInt(d.requested) !== toInt(e.points_mp)) s += `（申请 ${fmtPts(d.requested)} 点，余额不足按实扣）`
       return s
     }
     case 'api_usage': {
@@ -65,7 +76,7 @@ export function detailText(e) {
       if (d.completion_tokens != null) tok.push(`输出 ${fmtRaw(d.completion_tokens)}`)
       if (d.cache_tokens) tok.push(`缓存 ${fmtRaw(d.cache_tokens)}`)
       if (tok.length) parts.push(tok.join(' / '))
-      if (d.need && toInt(d.need) > toInt(e.raw)) parts.push(`应扣 ${fmtRaw(d.need)} token，余额不足按实扣`)
+      if (d.need && toInt(d.need) > toInt(e.points_mp)) parts.push(`应扣 ${fmtPts(d.need)} 点，余额不足按实扣`)
       return parts.length ? parts.join(' · ') : 'API 调用（组额度用尽后使用钱包余额）'
     }
     case 'backfill_adjust':
@@ -78,8 +89,10 @@ export function detailText(e) {
 function normalizeEntry(raw) {
   if (!raw || typeof raw !== 'object') return null
   const user_id = String(raw.user_id ?? '').trim()
-  const rawAmt = toInt(raw.raw)
-  if (!user_id || rawAmt <= 0) return null
+  // Amount of record (mp). Legacy rows without points_mp are rejected (must be migrated).
+  const mp = toInt(raw.points_mp)
+  if (!user_id || mp <= 0) return null
+  const rawAmt = raw.raw == null || raw.raw === '' ? null : toInt(raw.raw)
   const direction = raw.direction === 'out' ? 'out' : 'in'
   const channel = CHANNEL_LABEL[raw.channel] ? raw.channel : 'other'
   const tsMs = Date.parse(raw.ts || '') || Date.now()
@@ -90,6 +103,7 @@ function normalizeEntry(raw) {
     ip: raw.ip ? String(raw.ip).slice(0, 64) : null,
     direction,
     channel,
+    points_mp: mp,
     raw: rawAmt,
     raw_per_point: toInt(raw.raw_per_point) || null,
     balance_after: raw.balance_after == null ? null : toInt(raw.balance_after),
@@ -171,7 +185,6 @@ export function createWalletLedger(filePath, { getRawPerPoint } = {}) {
   }
 
   function toItem(e, { admin = false } = {}) {
-    const n = unit()
     const item = {
       id: e.id,
       ts: e.ts,
@@ -182,8 +195,8 @@ export function createWalletLedger(filePath, { getRawPerPoint } = {}) {
       direction_label: e.direction === 'in' ? '收入' : '支出',
       channel: e.channel,
       channel_label: channelLabel(e.channel),
-      raw: e.raw,
-      points: e.raw / n,
+      amount_mp: e.points_mp,
+      points: e.points_mp / POINT_MP,
       balance_after: e.balance_after,
       detail_text: detailText(e),
       source: e.source,
@@ -191,6 +204,7 @@ export function createWalletLedger(filePath, { getRawPerPoint } = {}) {
     if (admin) {
       item.user_id = e.user_id
       item.operator = e.operator
+      item.raw = e.raw
       item.raw_per_point = e.raw_per_point
       item.ref_id = e.ref_id
     }
@@ -215,22 +229,24 @@ export function createWalletLedger(filePath, { getRawPerPoint } = {}) {
   function query(q = {}, { now = Date.now(), admin = false } = {}) {
     const { from, to } = shanghaiRangeBounds(q, now)
     const uid = q.user_id != null && q.user_id !== '' ? String(q.user_id) : null
-    if (!admin && !uid) return { items: [], total: 0, page: 1, page_size: 20, summary: { in_raw: 0, out_raw: 0 } }
+    if (!admin && !uid) return { items: [], total: 0, page: 1, page_size: 20, summary: { in_mp: 0, out_mp: 0, in_points: 0, out_points: 0, in_count: 0, out_count: 0 } }
     const base = uid ? byUser.get(uid) || [] : entries
     const inRange = base.filter((e) => {
       const t = Date.parse(e.ts)
       return t >= from && t <= to
     })
-    const summary = { in_raw: 0, out_raw: 0, in_count: 0, out_count: 0 }
+    const summary = { in_mp: 0, out_mp: 0, in_points: 0, out_points: 0, in_count: 0, out_count: 0 }
     for (const e of inRange) {
       if (e.direction === 'in') {
-        summary.in_raw += e.raw
+        summary.in_mp += e.points_mp
         summary.in_count += 1
       } else {
-        summary.out_raw += e.raw
+        summary.out_mp += e.points_mp
         summary.out_count += 1
       }
     }
+    summary.in_points = summary.in_mp / POINT_MP
+    summary.out_points = summary.out_mp / POINT_MP
     const dir = q.direction === 'in' || q.direction === 'out' ? q.direction : ''
     const filtered = inRange.filter((e) => (!dir || e.direction === dir) && matchChannel(e, q.channel))
     filtered.sort(sortDesc)
@@ -275,8 +291,8 @@ export function createWalletLedger(filePath, { getRawPerPoint } = {}) {
       const existing = byUser.get(uid) || []
       const hasCheckin = new Set(existing.filter((e) => e.channel === 'checkin').map((e) => e.ref_id))
       const hasRedeem = new Set(existing.filter((e) => e.channel === 'redeem').map((e) => e.ref_id))
-      let inSum = existing.filter((e) => e.direction === 'in').reduce((a, e) => a + e.raw, 0)
-      const outSum = existing.filter((e) => e.direction === 'out').reduce((a, e) => a + e.raw, 0)
+      let inSum = existing.filter((e) => e.direction === 'in').reduce((a, e) => a + e.points_mp, 0)
+      const outSum = existing.filter((e) => e.direction === 'out').reduce((a, e) => a + e.points_mp, 0)
       for (const c of Array.isArray(u?.checkins) ? u.checkins : []) {
         const date = String(c?.checkin_date || '')
         const amt = toInt(c?.quota_awarded)
@@ -289,7 +305,7 @@ export function createWalletLedger(filePath, { getRawPerPoint } = {}) {
           ip: null,
           direction: 'in',
           channel: 'checkin',
-          raw: amt,
+          points_mp: amt,
           ref_type: 'checkin',
           ref_id: date,
           detail: { checkin_date: date },
@@ -308,7 +324,7 @@ export function createWalletLedger(filePath, { getRawPerPoint } = {}) {
           ip: null,
           direction: 'in',
           channel: 'redeem',
-          raw: amt,
+          points_mp: amt,
           ref_type: 'redeem_code',
           ref_id: code,
           detail: { code, times: toInt(r?.times) || 1 },
@@ -325,7 +341,7 @@ export function createWalletLedger(filePath, { getRawPerPoint } = {}) {
           ts: nowIso,
           direction: 'in',
           channel: 'backfill_adjust',
-          raw: diffIn,
+          points_mp: diffIn,
           ref_type: 'reconcile',
           detail: { note: '历史调整：上线钱包前的其他收入（含管理员发放）', granted_total: granted },
           source: 'backfill',
@@ -342,7 +358,7 @@ export function createWalletLedger(filePath, { getRawPerPoint } = {}) {
           ts: nowIso,
           direction: 'out',
           channel: 'backfill_adjust',
-          raw: diffOut,
+          points_mp: diffOut,
           ref_type: 'reconcile',
           detail: { note: '历史调整：上线钱包前的其他支出', spent_total: spent },
           source: 'backfill',
