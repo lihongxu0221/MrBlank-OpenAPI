@@ -6,7 +6,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { api } from '../../lib/api'
-import { fmtUsd } from '../../lib/format'
+import { fmtUsd, setQuotaPerUnit, usdToPointsText } from '../../lib/format'
 import { P } from '../../i18n'
 import { DiagnosisModal } from '../../pages/admin/diagnosis/DiagnosisModal'
 import { pageNums, shanghaiEndOfDay, shanghaiStartOfDay } from '../../lib/listUi'
@@ -113,6 +113,13 @@ function usd(n?: number) {
   return fmtUsd(v)
 }
 
+/** Console shows cost as 点 (USD × 500000 ÷ N); admin keeps USD. */
+function costText(n: number | undefined, admin: boolean, unit = true) {
+  if (admin) return usd(n)
+  const t = usdToPointsText(n)
+  return t === '-' || !unit ? t : t + ' 点'
+}
+
 function distName(n?: string) {
   return !n || n === 'ungrouped' ? '默认分组' : n
 }
@@ -171,7 +178,7 @@ function Donut({ items, valueKey }: { items: DistItem[]; valueKey: 'tokens' | 'a
   )
 }
 
-function Dist({ title, items, nestKeys }: { title: string; items?: DistItem[]; nestKeys?: boolean }) {
+function Dist({ title, items, nestKeys, admin = false }: { title: string; items?: DistItem[]; nestKeys?: boolean; admin?: boolean }) {
   const [open, setOpen] = useState<Record<number, boolean>>({})
   const [metric, setMetric] = useState<'tokens' | 'amount'>('tokens')
   const col = nestKeys ? '模型' : title.includes('分组') ? '分组' : title.includes('端点') ? '端点' : '名称'
@@ -187,7 +194,7 @@ function Dist({ title, items, nestKeys }: { title: string; items?: DistItem[]; n
             按 Token
           </button>
           <button type="button" className={metric === 'amount' ? 'on' : ''} onClick={() => setMetric('amount')}>
-            按金额
+            {admin ? '按金额' : '按点数'}
           </button>
         </div>
       </div>
@@ -204,7 +211,7 @@ function Dist({ title, items, nestKeys }: { title: string; items?: DistItem[]; n
                   <th>{col}</th>
                   <th>请求</th>
                   <th>Token</th>
-                  <th>实际</th>
+                  <th>{admin ? '实际' : '点数'}</th>
                 </tr>
               </thead>
               <tbody>
@@ -237,7 +244,7 @@ function Dist({ title, items, nestKeys }: { title: string; items?: DistItem[]; n
                         <td className="name">{distName(x.name)}</td>
                         <td className="num">{fmtTok(x.requests)}</td>
                         <td className="num">{fmtTok(x.tokens)}</td>
-                        <td className="fee">{usd(x.amount)}</td>
+                        <td className="fee">{costText(x.amount, admin, false)}</td>
                       </tr>
                       {open[i] &&
                         keys.map((k) => (
@@ -246,7 +253,7 @@ function Dist({ title, items, nestKeys }: { title: string; items?: DistItem[]; n
                             <td className="name">{k.name}</td>
                             <td className="num">{fmtTok(k.requests)}</td>
                             <td className="num">{fmtTok(k.tokens)}</td>
-                            <td className="fee">{usd(k.amount)}</td>
+                            <td className="fee">{costText(k.amount, admin, false)}</td>
                           </tr>
                         ))}
                     </Fragment>
@@ -397,7 +404,7 @@ function downloadCsv(rows: UsageItem[], admin: boolean) {
     '类型',
     '输入TOKEN',
     '输出TOKEN',
-    '费用',
+    admin ? '费用(USD)' : '点数',
     '首字',
     '总耗时',
     '时间',
@@ -415,7 +422,7 @@ function downloadCsv(rows: UsageItem[], admin: boolean) {
       x.is_stream ? '流式' : '非流式',
       String(x.prompt_tokens || 0),
       String(x.completion_tokens || 0),
-      String(x.amount ?? x.amountUsd ?? ''),
+      admin ? String(x.amount ?? x.amountUsd ?? '') : (() => { const t = usdToPointsText(x.amount ?? x.amountUsd); return t === '-' ? '' : t })(),
       String(x.ttft_ms ?? ''),
       String(dur),
       csvCell(fmtTime(x.created_at)),
@@ -494,6 +501,15 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
     setBusy(true)
     setErr('')
     try {
+      if (!admin) {
+        try {
+          const st = await api.get<{ quota_per_unit?: number; raw_per_point?: number }>('/api/status', { auth: false })
+          const n = Number(st?.raw_per_point || st?.quota_per_unit)
+          if (n > 0) setQuotaPerUnit(n)
+        } catch {
+          /* keep previous N */
+        }
+      }
       const logType = tab === 'error' ? 5 : 2
       const jobs: Promise<unknown>[] = [api.get(chartPath + qs), api.get(filtersPath + qs)]
       if (tab !== 'rank') {
@@ -531,7 +547,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
       setHint('加载失败')
     }
     setBusy(false)
-  }, [qs, page, pageSize, tab, chartPath, filtersPath, listPath])
+  }, [qs, page, pageSize, tab, chartPath, filtersPath, listPath, admin])
 
   useEffect(() => {
     void load()
@@ -588,8 +604,9 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
       } as Record<string, string>
     )[range] || '所选范围内'
   const spend = Number(t.amount)
-  const spendText =
-    Number.isFinite(spend) && spend !== 0
+  const spendText = !admin
+    ? costText(spend, false)
+    : Number.isFinite(spend) && spend !== 0
       ? '$' + spend.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })
       : '-'
 
@@ -622,7 +639,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
         <div className="stat-card">
           <div className="label">总消费</div>
           <div className="value">{spendText}</div>
-          <div className="muted">按 Token 与模型单价估算</div>
+          <div className="muted">{admin ? '按 Token 与模型单价估算' : '按 Token 与模型单价折算点数'}</div>
         </div>
         <div className="stat-card">
           <div className="label">平均耗时</div>
@@ -682,9 +699,9 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
       </div>
 
       <div className="usage-dash">
-        <Dist title="模型分布" items={chart?.by_model} nestKeys />
-        <Dist title="分组使用分布" items={chart?.by_group} />
-        <Dist title="端点分布" items={chart?.by_endpoint} />
+        <Dist title="模型分布" items={chart?.by_model} nestKeys admin={admin} />
+        <Dist title="分组使用分布" items={chart?.by_group} admin={admin} />
+        <Dist title="端点分布" items={chart?.by_endpoint} admin={admin} />
         <Trend series={chart?.series || chart?.days || []} />
       </div>
 
@@ -856,7 +873,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
                   <th>用户</th>
                   <th>请求</th>
                   <th>Token</th>
-                  <th>费用</th>
+                  <th>{admin ? '费用' : '点数'}</th>
                 </tr>
               </thead>
               <tbody>
@@ -865,7 +882,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
                     <td>{x.username || '-'}</td>
                     <td className="num">{x.content || '-'}</td>
                     <td className="num">{fmtTok(usageTokens(x as any))}</td>
-                    <td className="fee">{usd(x.amount)}</td>
+                    <td className="fee">{costText(x.amount, admin)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -918,7 +935,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
                   <th>分组</th>
                   <th>类型</th>
                   <th>TOKEN</th>
-                  <th>金额</th>
+                  <th>{admin ? '金额' : '点数'}</th>
                   <th>延迟</th>
                   <th>时间</th>
                 </tr>
@@ -958,7 +975,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
                         <span className="up">↑ {fmtTok(x.completion_tokens)}</span>
                         {cache ? <span className="cache"> cache {fmtTok(cache)}</span> : null}
                       </td>
-                      <td className="fee">{usd(x.amount ?? x.amountUsd)}</td>
+                      <td className="fee">{costText(x.amount ?? x.amountUsd, admin, false)}</td>
                       <td className="lat">
                         首字 {fmtSec(x.ttft_ms)}
                         <br />

@@ -143,3 +143,16 @@ export function formatRawPerPointCompact(n: number): string {
 export function stName(s: number) {
   return ({ 1: '启用', 2: '禁用', 3: '过期', 4: '用尽' })[s] || String(s || '')
 }
+
+/**
+ * Model-price USD → display 点 text (raw = usd × 500000 fixed; 点 = raw ÷ current N).
+ * Keeps small per-request costs visible (up to 4 decimals below 0.01 点). '-' when zero.
+ */
+export function usdToPointsText(usd: number | undefined | null, unit = quotaPerUnit): string {
+  const v = Number(usd)
+  if (!Number.isFinite(v) || !v) return '-'
+  const pts = (v * FIXED_USD_TO_RAW) / (unit || FIXED_USD_TO_RAW)
+  if (Math.abs(pts) >= 0.01) return formatCredits(pts * (unit || FIXED_USD_TO_RAW), unit)
+  const fine = Number(pts.toFixed(4))
+  return fine ? String(fine) : '<0.0001'
+}
