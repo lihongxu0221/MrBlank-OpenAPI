@@ -87,6 +87,7 @@ import { requestIp } from './requestIp.js'
 import { createLocalUserStore } from './localUsers.js'
 import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy } from './v1Proxy.js'
+import { createCpaMgmtRouter } from './cpaMgmtProxy.js'
 import { createAilyManager, loadAilyConfig } from './aily.js'
 import { createAilyUpstream } from './ailyUpstream.js'
 import { createAilyModelRoutingStore, publicModelList, normalizeModelRouting, exposedModelNames, isAilyPrefixed, stripAilyPrefix } from './ailyModelRouting.js'
@@ -4933,6 +4934,9 @@ app.post('/api/admin/usage/import-sessions/:id/cancel', requireAdmin, (req, res)
     res.status(err?.status || 400).json(fail(err?.message || 'import cancel failed'))
   }
 })
+
+/* CPAMP 1:1 AI providers page — admin-only whitelist proxy to CPA management API. */
+app.use('/api/admin/cpa-mgmt', requireAdmin, createCpaMgmtRouter({ cpaCfg, express }))
 
 app.use((req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/oauth/')) {
