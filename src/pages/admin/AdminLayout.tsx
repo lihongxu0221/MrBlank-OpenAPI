@@ -14,7 +14,6 @@ import {
   FileText,
   LineChart,
   DollarSign,
-  ScanSearch,
   Boxes,
 } from 'lucide-react'
 import { P } from '../../i18n'
@@ -29,7 +28,6 @@ const ITEMS = [
   { path: '/admin/providers', label: 'AI 提供商', icon: KeySquare },
   { path: '/admin/logs', label: '日志查看', icon: FileText },
   { path: '/admin/monitoring', label: '请求监控', icon: LineChart },
-  { path: '/admin/codex-inspection', label: 'Codex 巡检', icon: ScanSearch },
   { path: '/admin/model-prices', label: '模型价格', icon: DollarSign },
   { path: '/admin/usage', label: '用量监控', icon: Activity },
   { path: '/admin/constellation', label: '模型星座', icon: Sparkles },

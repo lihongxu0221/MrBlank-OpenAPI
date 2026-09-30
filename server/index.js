@@ -5008,26 +5008,8 @@ app.get('/api/admin/codex-inspection/runs/:id', requireAdmin, (req, res) => {
   }
 })
 
-app.post('/api/admin/codex-inspection/runs/:id/cancel', requireAdmin, (req, res) => {
-  try {
-    res.json(ok(codexInspection.cancelRun(req.params.id)))
-  } catch (err) {
-    res.status(err?.status || 400).json(fail(err?.message || 'cancel failed'))
-  }
-})
-
-app.post('/api/admin/codex-inspection/runs/:id/actions', requireAdmin, async (req, res) => {
-  try {
-    const result = await codexInspection.applyActions(req.params.id, req.body || {})
-    res.json(ok(result))
-  } catch (err) {
-    console.error('[admin] codex-inspection/actions', err?.message || err)
-    res.status(err?.status || 400).json(fail(err?.message || 'actions failed'))
-  }
-})
-
-
-
+// Codex 巡检 standalone page removed (cancel / bulk-actions routes were used only by it).
+// Run / list / detail remain for 凭证管理 → 健康巡检.
 
 app.use((req, res) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/oauth/')) {

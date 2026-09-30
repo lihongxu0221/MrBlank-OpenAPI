@@ -35,7 +35,6 @@ import { AdminLogsPage } from './pages/admin/AdminLogsPage'
 import { AdminMonitoringPage } from './pages/admin/AdminMonitoringPage'
 import { AdminAccountActionsPage } from './pages/admin/AdminAccountActionsPage'
 import { AdminModelPricesPage } from './pages/admin/AdminModelPricesPage'
-import { AdminCodexInspectionPage } from './pages/admin/AdminCodexInspectionPage'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { getSiteConfig, subscribeSiteConfig } from './config/site'
 import { getLanguage } from './i18n'
@@ -154,7 +153,8 @@ export default function App() {
       page = <AdminModelPricesPage path={path} />
       break
     case '/admin/codex-inspection':
-      page = <AdminCodexInspectionPage path={path} />
+      // Codex 巡检 standalone page removed → credential workbench 健康巡检 tab
+      page = <LegacyAdminRedirect to="/admin/accounts?tab=health" />
       break
     case '/admin/constellation':
       page = <AdminConstellationPage path={path} />

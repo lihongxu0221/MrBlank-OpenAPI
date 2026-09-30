@@ -1068,7 +1068,7 @@ export function AdminAccountsPage({ path }: { path: string }) {
             </h3>
             <p className="muted" style={{ fontSize: 13 }}>
               {P(
-                '本站 lite 巡检（基于 CPA auth-files），不依赖 CPAMP Manager Server。完整独立页仍在「Codex 巡检」。部分深度能力需后续 Rebuild。',
+                '本站 lite 巡检（基于 CPA auth-files 判定凭证有效 / 过期 / 异常）。',
               )}
             </p>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1077,9 +1077,6 @@ export function AdminAccountsPage({ path }: { path: string }) {
               </button>
               <button type="button" className="button secondary" disabled={!!inspBusy} onClick={loadInspection}>
                 <RefreshCw size={14} /> {P('刷新记录')}
-              </button>
-              <button type="button" className="button secondary" onClick={() => navigate('/admin/codex-inspection')}>
-                <ExternalLink size={14} /> {P('打开完整巡检页')}
               </button>
               <button type="button" className="button secondary" onClick={() => navigate('/admin/account-actions')}>
                 {P('认证异常候选')}
