@@ -14,6 +14,7 @@ import { AboutPage } from './pages/AboutPage'
 import { OverviewPage } from './pages/console/OverviewPage'
 import { CheckinPage } from './pages/console/CheckinPage'
 import { RedeemPage } from './pages/console/RedeemPage'
+import { WalletPage } from './pages/console/WalletPage'
 import { KeysPage } from './pages/console/KeysPage'
 import { UsagePage } from './pages/console/UsagePage'
 import { ModelsPage } from './pages/console/ModelsPage'
@@ -91,6 +92,9 @@ export default function App() {
       break
     case '/redeem':
       page = <RedeemPage path={path} />
+      break
+    case '/wallet':
+      page = <WalletPage path={path} />
       break
     case '/keys':
       page = <KeysPage path={path} />

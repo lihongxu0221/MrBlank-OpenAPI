@@ -9,6 +9,7 @@ import { api } from '../../lib/api'
 import { fmtUsd } from '../../lib/format'
 import { P } from '../../i18n'
 import { DiagnosisModal } from '../../pages/admin/diagnosis/DiagnosisModal'
+import { pageNums, shanghaiEndOfDay, shanghaiStartOfDay } from '../../lib/listUi'
 
 const PALETTE = ['#3b82f6', '#22c55e', '#f59e0b', '#a78bfa', '#22d3ee', '#f97316', '#94a3b8', '#ec4899']
 
@@ -384,24 +385,6 @@ function Trend({ series }: { series?: SeriesPoint[] }) {
   )
 }
 
-function pageNums(cur: number, total: number) {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
-  const out: (number | string)[] = [1]
-  if (cur > 3) out.push('...')
-  for (let n = Math.max(2, cur - 1); n <= Math.min(total - 1, cur + 1); n++) out.push(n)
-  if (cur < total - 2) out.push('...')
-  out.push(total)
-  return out
-}
-
-function startOfDay(s: string) {
-  const [y, m, d] = String(s).split('-').map(Number)
-  return Math.floor(new Date(y, m - 1, d).getTime() / 1000)
-}
-function endOfDay(s: string) {
-  const [y, m, d] = String(s).split('-').map(Number)
-  return Math.floor(new Date(y, m - 1, d, 23, 59, 59).getTime() / 1000)
-}
 
 function downloadCsv(rows: UsageItem[], admin: boolean) {
   const headers = (admin ? ['用户'] : []).concat([
@@ -496,8 +479,8 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
     if (applied.group) q.set('group', applied.group)
     if (applied.stream) q.set('is_stream', applied.stream)
     if (range === 'custom' && startDate && endDate) {
-      q.set('start_timestamp', String(startOfDay(startDate)))
-      q.set('end_timestamp', String(endOfDay(endDate)))
+      q.set('start_timestamp', String(shanghaiStartOfDay(startDate)))
+      q.set('end_timestamp', String(shanghaiEndOfDay(endDate)))
     } else q.set('range', range)
     q.set('grain', grain)
     return q.toString()

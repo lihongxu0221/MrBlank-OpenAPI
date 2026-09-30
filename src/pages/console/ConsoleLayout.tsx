@@ -8,6 +8,7 @@ import {
   Boxes,
   CalendarCheck2,
   Sparkles,
+  Wallet,
 } from 'lucide-react'
 import { P } from '../../i18n'
 import { navigate, navigateWithQuery } from '../../router/hash'
@@ -17,6 +18,7 @@ const ITEMS = [
   { path: '/console', label: '概览', icon: LayoutDashboard },
   { path: '/checkin', label: '每日签到', icon: CalendarCheck2 },
   { path: '/redeem', label: '兑换码', icon: Gift },
+  { path: '/wallet', label: '钱包', icon: Wallet },
   { path: '/keys', label: 'API 密钥', icon: KeyRound },
   { path: '/usage', label: '用量记录', icon: Activity },
   { path: '/models', label: '模型广场', icon: Boxes },

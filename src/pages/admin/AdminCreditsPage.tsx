@@ -4,8 +4,21 @@ import { api } from '../../lib/api'
 import { P } from '../../i18n'
 import { formatCredits, formatQuotaUnitLabel, getQuotaPerUnit, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
+import { fmtShanghai } from '../../lib/listUi'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
+
+type AdminLedgerItem = {
+  id: string
+  created_at: number
+  user_id: string
+  ip: string | null
+  direction: 'in' | 'out'
+  channel_label: string
+  raw: number
+  operator: string | null
+  detail_text: string
+}
 
 type CreditConfig = {
   checkin_enabled: boolean
@@ -76,6 +89,21 @@ export function AdminCreditsPage({ path }: { path: string }) {
   const [saving, setSaving] = useState(false)
   const [grantUserId, setGrantUserId] = useState('')
   const [grantPoints, setGrantPoints] = useState('1')
+  const [grantMode, setGrantMode] = useState<'grant' | 'deduct'>('grant')
+  const [grantNote, setGrantNote] = useState('')
+  const [ledger, setLedger] = useState<AdminLedgerItem[]>([])
+  const [ledgerUser, setLedgerUser] = useState('')
+
+  async function loadLedger(userFilter = ledgerUser) {
+    try {
+      const q = new URLSearchParams({ range: 'all', page_size: '50' })
+      if (userFilter.trim()) q.set('user_id', userFilter.trim())
+      const r = await api.get<{ items: AdminLedgerItem[] }>('/api/admin/wallet/ledger?' + q.toString())
+      setLedger(r.items || [])
+    } catch {
+      setLedger([])
+    }
+  }
 
   async function load() {
     if (!gate.allowed) return
@@ -88,6 +116,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
       setData(s)
       setConfig(s.config)
       setCodes((s.codes || []).map(withRowKey))
+      void loadLedger()
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -150,13 +179,24 @@ export function AdminCreditsPage({ path }: { path: string }) {
       return
     }
     try {
-      await api.post('/api/admin/credits/grant', {
+      const body = {
         user_id: grantUserId.trim(),
         amount: Math.round(points * getQuotaPerUnit()),
-        note: 'admin-grant',
-      })
-      setMsg(P('已发放额度'))
+        note: grantNote.trim(),
+      }
+      if (grantMode === 'deduct') {
+        const r = await api.post<{ deducted: number; requested: number }>('/api/admin/credits/deduct', body)
+        setMsg(
+          r && r.deducted < r.requested
+            ? P('余额不足，已按实际余额扣减') + ' ' + formatCredits(r.deducted) + ' ' + P('点')
+            : P('已扣减额度'),
+        )
+      } else {
+        await api.post('/api/admin/credits/grant', body)
+        setMsg(P('已发放额度'))
+      }
       setGrantUserId('')
+      setGrantNote('')
       await load()
     } catch (e) {
       setErr((e as Error).message)
@@ -350,8 +390,15 @@ export function AdminCreditsPage({ path }: { path: string }) {
       </div>
 
       <div className="panel" style={{ marginTop: 16 }}>
-        <strong>{P('手动发放')}</strong>
+        <strong>{P('手动发放 / 扣减')}</strong>
         <form className="guest-aily-form" onSubmit={doGrant} style={{ marginTop: 10 }}>
+          <div className="field">
+            <label>{P('操作')}</label>
+            <select value={grantMode} onChange={(e) => setGrantMode(e.target.value as 'grant' | 'deduct')}>
+              <option value="grant">{P('发放')}</option>
+              <option value="deduct">{P('扣减')}</option>
+            </select>
+          </div>
           <div className="field">
             <label>{P('用户 ID')}</label>
             <input
@@ -370,10 +417,65 @@ export function AdminCreditsPage({ path }: { path: string }) {
               onChange={(e) => setGrantPoints(e.target.value)}
             />
           </div>
+          <div className="field">
+            <label>{P('备注（用户可见）')}</label>
+            <input value={grantNote} maxLength={120} onChange={(e) => setGrantNote(e.target.value)} placeholder={P('可选')} />
+          </div>
           <button type="submit" className="button">
-            {P('发放')}
+            {grantMode === 'deduct' ? P('扣减') : P('发放')}
           </button>
         </form>
+        <p className="field-note">{P('扣减不会低于 0；每次操作都会记入该用户钱包流水（用户侧不显示管理员 IP 与操作人）。')}</p>
+      </div>
+
+      <div className="panel" style={{ marginTop: 16 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong>{P('钱包流水（最近 50 条）')}</strong>
+          <input
+            value={ledgerUser}
+            onChange={(e) => setLedgerUser(e.target.value)}
+            placeholder={P('按用户 ID 过滤')}
+            style={{ maxWidth: 240 }}
+          />
+          <button type="button" className="button ghost" onClick={() => void loadLedger()}>
+            <RefreshCw size={14} /> {P('查询')}
+          </button>
+        </div>
+        <div className="table-wrap" style={{ marginTop: 10 }}>
+          <table className="data wallet-table">
+            <thead>
+              <tr>
+                <th>{P('时间日期')}</th>
+                <th>{P('用户')}</th>
+                <th>{P('IP地址')}</th>
+                <th>{P('方式')}</th>
+                <th>{P('途径')}</th>
+                <th className="num">{P('点数')}</th>
+                <th>{P('操作人')}</th>
+                <th className="detail">{P('详细信息')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ledger.map((x) => (
+                <tr key={x.id}>
+                  <td className="muted">{fmtShanghai(x.created_at)}</td>
+                  <td>
+                    <code>{x.user_id}</code>
+                  </td>
+                  <td>{x.ip || '—'}</td>
+                  <td>{x.direction === 'in' ? P('收入') : P('支出')}</td>
+                  <td>{P(x.channel_label)}</td>
+                  <td className={'num ' + (x.direction === 'in' ? 'wallet-in' : 'wallet-out')}>
+                    {(x.direction === 'in' ? '+' : '-') + formatCredits(x.raw)}
+                  </td>
+                  <td>{x.operator || '—'}</td>
+                  <td className="detail">{x.detail_text}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {!ledger.length ? <p className="empty-state">{P('暂无记录')}</p> : null}
       </div>
 
       <div className="panel" style={{ marginTop: 16 }}>

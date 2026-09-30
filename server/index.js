@@ -82,6 +82,9 @@ import {
 import { createSiteContentStore } from './siteContent.js'
 import { createGroupStore } from './groups.js'
 import { createCreditStore, shanghaiDay } from './credits.js'
+import { createWalletLedger } from './walletLedger.js'
+import { WALLET_RANGES } from './shanghaiRange.js'
+import { requestIp } from './requestIp.js'
 import { createLocalUserStore } from './localUsers.js'
 import { createDiagnosisStore } from './diagnosis.js'
 import { createV1Proxy } from './v1Proxy.js'
@@ -469,10 +472,21 @@ const groupStore = createGroupStore(
   process.env.USER_GROUPS_PATH || path.join(__dirname, 'data', 'user-groups.json'),
   { quotaUnit: Q, getQuotaUnit: () => quotaUnitStore.getUnit() },
 )
+const walletLedger = createWalletLedger(
+  process.env.WALLET_LEDGER_PATH || path.join(__dirname, 'data', 'wallet-ledger.jsonl'),
+  { getRawPerPoint: () => quotaUnitStore.getUnit() },
+)
 const creditStore = createCreditStore(
   process.env.SITE_CREDITS_PATH || path.join(__dirname, 'data', 'site-credits.json'),
-  { quotaUnit: Q, getQuotaUnit: () => quotaUnitStore.getUnit() },
+  { quotaUnit: Q, getQuotaUnit: () => quotaUnitStore.getUnit(), ledger: walletLedger },
 )
+// Wallet backfill / reconcile (idempotent; source:'backfill'). Runs once per boot before serving.
+try {
+  const rows = walletLedger.backfill(creditStore.exportDoc())
+  if (rows.length) console.log(`[wallet] backfilled ${rows.length} ledger rows`)
+} catch (e) {
+  console.error('[wallet] backfill failed', e?.message || e)
+}
 function creditUnitInfo() {
   return quotaUnitStore.creditUnitInfo()
 }
@@ -1588,7 +1602,19 @@ app.use(
         // Phase F: only deduct site credits when this call used overflow capacity
         if (useSiteCredits) {
           try {
-            creditStore.consume(userId, quota)
+            creditStore.consume(userId, quota, {
+              ip: ip || null,
+              ref_id: diagnosis_id || eventId || null,
+              detail: {
+                model: String(requestedModel || model_name || usage?.model || '').trim() || null,
+                token_name: token_name || null,
+                endpoint: endpoint || null,
+                prompt_tokens: promptTok,
+                completion_tokens: completionTok,
+                cache_tokens: cacheReadTok || 0,
+                amount_usd: amountUsd,
+              },
+            })
           } catch (e) {
             console.error('[credits] consume failed', e?.message || e)
           }
@@ -1816,7 +1842,7 @@ app.get('/api/user/checkin', requireAuth, (req, res) => {
 })
 
 app.post('/api/user/checkin', requireAuth, (req, res) => {
-  const result = creditStore.claimCheckin(req.auth.user.id)
+  const result = creditStore.claimCheckin(req.auth.user.id, { ip: requestIp(req) || null })
   if (!result.ok) {
     res.json(fail(result.message || '签到失败'))
     return
@@ -1841,7 +1867,7 @@ app.post('/api/user/checkin', requireAuth, (req, res) => {
 
 app.post('/api/user/topup', requireAuth, (req, res) => {
   const code = String(req.body?.key || '').trim()
-  const result = creditStore.redeem(req.auth.user.id, code)
+  const result = creditStore.redeem(req.auth.user.id, code, { ip: requestIp(req) || null })
   if (!result.ok) {
     res.json(fail(result.message || '兑换失败'))
     return
@@ -1849,6 +1875,30 @@ app.post('/api/user/topup', requireAuth, (req, res) => {
   syncStoreFromCredits(req.store, req.auth.user.id)
   // API historically returned awarded number directly
   res.json(ok(result.awarded))
+})
+
+// 钱包：本站积分余额收支流水（仅本人；时间边界 Asia/Shanghai）
+app.get('/api/wallet/ledger', requireAuth, (req, res) => {
+  try {
+    const userId = String(req.auth.user.id)
+    const q = { ...walletQuery(req), user_id: userId } // identity from session only
+    const result = walletLedger.query(q, { admin: false })
+    res.json(
+      ok({
+        ...result,
+        balance: creditStore.getBalance(userId),
+        credit_unit: creditUnitInfo(),
+        timezone: 'Asia/Shanghai',
+      }),
+    )
+  } catch (err) {
+    console.error('[wallet/ledger]', err?.message || err)
+    res.status(500).json(fail(err?.message || '钱包流水查询失败'))
+  }
+})
+
+app.get('/api/wallet/channels', requireAuth, (req, res) => {
+  res.json(ok({ channels: walletLedger.channelOptions(String(req.auth.user.id)) }))
 })
 
 
@@ -3009,10 +3059,68 @@ app.post('/api/admin/credits/grant', requireAdmin, (req, res) => {
       res.status(400).json(fail('amount 须为正数（token）'))
       return
     }
-    const result = creditStore.adminGrant(userId, amount, String(req.body?.note || ''))
+    const result = creditStore.adminGrant(userId, amount, String(req.body?.note || ''), {
+      ip: requestIp(req) || null,
+      operator: adminOperator(req),
+    })
     res.json(ok(result))
   } catch (err) {
     res.status(400).json(fail(err?.message || '发放失败'))
+  }
+})
+
+function adminOperator(req) {
+  const u = req.auth?.user || {}
+  return String(u.username || u.display_name || u.id || '') || null
+}
+
+app.post('/api/admin/credits/deduct', requireAdmin, (req, res) => {
+  try {
+    const userId = String(req.body?.user_id || '').trim()
+    const amount = Number(req.body?.amount)
+    if (!userId) {
+      res.status(400).json(fail('需要 user_id'))
+      return
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      res.status(400).json(fail('amount 须为正数（token）'))
+      return
+    }
+    const result = creditStore.adminDeduct(userId, amount, String(req.body?.note || ''), {
+      ip: requestIp(req) || null,
+      operator: adminOperator(req),
+    })
+    if (!(result.deducted > 0)) {
+      res.status(400).json(fail('该用户余额为 0，无可扣减额度'))
+      return
+    }
+    res.json(ok(result))
+  } catch (err) {
+    res.status(400).json(fail(err?.message || '扣减失败'))
+  }
+})
+
+function walletQuery(req) {
+  const q = req.query || {}
+  const range = WALLET_RANGES.includes(String(q.range || '')) ? String(q.range) : '30d'
+  return {
+    range,
+    start_date: String(q.start_date || ''),
+    end_date: String(q.end_date || ''),
+    direction: q.direction === 'in' || q.direction === 'out' ? q.direction : '',
+    channel: String(q.channel || '').slice(0, 64),
+    p: Number(q.p || q.page) || 1,
+    page_size: Number(q.page_size) || 20,
+  }
+}
+
+app.get('/api/admin/wallet/ledger', requireAdmin, (req, res) => {
+  try {
+    const q = walletQuery(req)
+    if (req.query.user_id) q.user_id = String(req.query.user_id).trim()
+    res.json(ok({ ...walletLedger.query(q, { admin: true }), credit_unit: creditUnitInfo() }))
+  } catch (err) {
+    res.status(500).json(fail(err?.message || '查询失败'))
   }
 })
 

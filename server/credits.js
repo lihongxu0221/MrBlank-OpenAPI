@@ -115,6 +115,7 @@ function ensureUser(doc, userId) {
       balance: 0,
       granted_total: 0,
       consumed_total: 0,
+      admin_deducted_total: 0,
       checkins: [],
       redeemed: {},
     }
@@ -125,6 +126,7 @@ function ensureUser(doc, userId) {
     u.balance = Math.max(0, Number(u.balance) || 0)
     u.granted_total = Math.max(0, Number(u.granted_total) || 0)
     u.consumed_total = Math.max(0, Number(u.consumed_total) || 0)
+    u.admin_deducted_total = Math.max(0, Number(u.admin_deducted_total) || 0)
   }
   return doc.users[id]
 }
@@ -138,7 +140,12 @@ function pickGrantAmount(config) {
   return min + r
 }
 
-export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}) {
+/**
+ * @param {string} filePath
+ * @param {{ quotaUnit?: number, getQuotaUnit?: () => number, ledger?: { append: (e: object) => unknown } }} [opts]
+ *   ledger: optional wallet ledger; every balance change appends one row (after the credits write).
+ */
+export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit, ledger = null } = {}) {
   const dir = path.dirname(filePath)
   fs.mkdirSync(dir, { recursive: true })
   const resolveUnit = () => {
@@ -175,6 +182,17 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}
       /* ignore */
     }
     return normalized
+  }
+
+  /** Append a wallet ledger row; never breaks the balance operation. */
+  function record(entry) {
+    if (!ledger || !(Number(entry.raw) > 0)) return null
+    try {
+      return ledger.append({ ts: nowIso(), ...entry, user_id: String(entry.user_id) })
+    } catch (e) {
+      console.error('[wallet] ledger append failed', e?.message || e)
+      return null
+    }
   }
 
   function grant(doc, userId, amount, meta = {}) {
@@ -334,7 +352,7 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}
     /**
      * Claim daily check-in. Throws / returns { ok:false, message }.
      */
-    claimCheckin(userId) {
+    claimCheckin(userId, ctx = {}) {
       const doc = read()
       const cfg = doc.config
       if (!cfg.checkin_enabled) return { ok: false, message: '签到暂未开放' }
@@ -351,6 +369,17 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}
       })
       grant(doc, userId, quota_awarded)
       write(doc)
+      record({
+        user_id: userId,
+        ip: ctx.ip || null,
+        direction: 'in',
+        channel: 'checkin',
+        raw: quota_awarded,
+        balance_after: u.balance,
+        ref_type: 'checkin',
+        ref_id: today,
+        detail: { checkin_date: today },
+      })
       return {
         ok: true,
         quota_awarded,
@@ -363,7 +392,7 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}
     /**
      * Redeem a code into site credits.
      */
-    redeem(userId, codeRaw) {
+    redeem(userId, codeRaw, ctx = {}) {
       const code = String(codeRaw || '')
         .trim()
         .toUpperCase()
@@ -399,6 +428,17 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}
       entry.used_count = (Number(entry.used_count) || 0) + 1
       grant(doc, userId, awarded)
       write(doc)
+      record({
+        user_id: userId,
+        ip: ctx.ip || null,
+        direction: 'in',
+        channel: 'redeem',
+        raw: awarded,
+        balance_after: u.balance,
+        ref_type: 'redeem_code',
+        ref_id: code,
+        detail: { code },
+      })
       return { ok: true, awarded, balance: u.balance, code }
     },
 
@@ -406,7 +446,7 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}
      * Consume site credits after a successful /v1 call.
      * Returns amount actually deducted.
      */
-    consume(userId, amount) {
+    consume(userId, amount, ctx = {}) {
       const doc = read()
       const u = ensureUser(doc, userId)
       const need = Math.max(0, Number(amount) || 0)
@@ -415,16 +455,68 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}
         u.balance -= take
         u.consumed_total += take
         write(doc)
+        record({
+          user_id: userId,
+          ip: ctx.ip || null,
+          direction: 'out',
+          channel: 'api_usage',
+          raw: take,
+          balance_after: u.balance,
+          ref_type: 'usage_event',
+          ref_id: ctx.ref_id || null,
+          detail: { ...(ctx.detail || {}), need },
+        })
       }
       return { deducted: take, balance: u.balance }
     },
 
-    /** Admin grant without check-in. */
-    adminGrant(userId, amount, note = '') {
+    /** Admin grant without check-in. ctx: { ip, operator } (admin-side only). */
+    adminGrant(userId, amount, note = '', ctx = {}) {
       const doc = read()
       const result = grant(doc, userId, amount, { note })
       write(doc)
+      record({
+        user_id: userId,
+        ip: ctx.ip || null,
+        operator: ctx.operator || null,
+        direction: 'in',
+        channel: 'admin_grant',
+        raw: result.granted,
+        balance_after: result.balance,
+        ref_type: 'admin',
+        detail: note ? { note } : {},
+      })
       return { ok: true, ...result }
+    },
+
+    /** Admin deduct; clamps to balance. Returns { ok, deducted, balance }. */
+    adminDeduct(userId, amount, note = '', ctx = {}) {
+      const doc = read()
+      const u = ensureUser(doc, userId)
+      const need = Math.max(0, Math.round(Number(amount) || 0))
+      const take = Math.min(u.balance, need)
+      if (take > 0) {
+        u.balance -= take
+        u.admin_deducted_total += take
+        write(doc)
+        record({
+          user_id: userId,
+          ip: ctx.ip || null,
+          operator: ctx.operator || null,
+          direction: 'out',
+          channel: 'admin_deduct',
+          raw: take,
+          balance_after: u.balance,
+          ref_type: 'admin',
+          detail: { ...(note ? { note } : {}), requested: need },
+        })
+      }
+      return { ok: true, deducted: take, requested: need, balance: u.balance, note }
+    },
+
+    /** Full credits document (read-only snapshot for wallet backfill). */
+    exportDoc() {
+      return read()
     },
 
     adminSummary() {
@@ -434,6 +526,7 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit } = {}
         balance: u.balance || 0,
         granted_total: u.granted_total || 0,
         consumed_total: u.consumed_total || 0,
+        admin_deducted_total: u.admin_deducted_total || 0,
         checkins: (u.checkins || []).length,
         redeemed: Object.keys(u.redeemed || {}).length,
       }))

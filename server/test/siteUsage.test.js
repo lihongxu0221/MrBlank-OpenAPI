@@ -92,3 +92,22 @@ test('leaderboard credits use rawQuota not LLM tokens; display 点 = raw / N', (
 
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+test('siteUsage range=yesterday excludes today (Asia/Shanghai bounds)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'site-usage-y-'))
+  try {
+    const store = createSiteUsageStore(path.join(dir, 'u.json'), { maxEvents: 100, maxAgeMs: 86400000 * 30 })
+    const OFF = 8 * 3600000
+    const todayStart = Math.floor((Date.now() + OFF) / 86400000) * 86400000 - OFF
+    const base = { userId: 'u1', model: 'm', success: true, tokens: 1 }
+    store.recordEvent({ ...base, id: 'today', ts: new Date(Math.min(Date.now(), todayStart + 1000)).toISOString() })
+    store.recordEvent({ ...base, id: 'yday', ts: new Date(todayStart - 3600000).toISOString() })
+    store.recordEvent({ ...base, id: 'old', ts: new Date(todayStart - 86400000 - 1000).toISOString() })
+    const y = store.listEvents({ range: 'yesterday', page_size: 100 })
+    assert.deepEqual(y.items.map((i) => i.id), ['yday'])
+    const t = store.listEvents({ range: 'today', page_size: 100 })
+    assert.deepEqual(t.items.map((i) => i.id), ['today'])
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

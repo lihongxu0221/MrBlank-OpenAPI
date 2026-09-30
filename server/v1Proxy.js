@@ -4,6 +4,7 @@
  * Phase E: per-user rolling quotas (429) and model allowlist (403) when API key maps to a site user.
  */
 import crypto from 'node:crypto'
+import { requestIp } from './requestIp.js'
 import {
   extractModelFromReqBody,
   extractReasoningFromReqBody,
@@ -52,9 +53,8 @@ const HOP = new Set([
 const MAX_CAPTURE = Number(process.env.DIAGNOSIS_MAX_BODY_CHARS || 512 * 1024)
 
 function clientIp(req) {
-  const xff = req.headers['x-forwarded-for']
-  if (typeof xff === 'string' && xff.trim()) return xff.split(',')[0].trim()
-  return req.socket?.remoteAddress || ''
+  // Never trust the first X-Forwarded-For entry (client-controlled; nginx appends).
+  return requestIp(req)
 }
 
 function readRawBody(req, limit = 32 * 1024 * 1024) {

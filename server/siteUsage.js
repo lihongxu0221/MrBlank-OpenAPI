@@ -6,6 +6,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { shanghaiDayStart } from './shanghaiRange.js'
 
 const DEFAULT_MAX_EVENTS = 50_000
 const DEFAULT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
@@ -95,18 +96,7 @@ export function periodStartMs(period = 'today') {
   if (period === '14d') return now - 14 * 86400000
   if (period === '30d') return now - 30 * 86400000
   if (period === '24h') return now - 86400000
-  if (period === 'yesterday') {
-    const today = shanghaiDayKey(now)
-    let t = now
-    let crossed = false
-    for (let i = 0; i < 72; i++) {
-      const k = shanghaiDayKey(t)
-      if (!crossed && k !== today) crossed = true
-      else if (crossed && k !== shanghaiDayKey(t + 3600000)) return t + 1
-      t -= 3600000
-    }
-    return now - 2 * 86400000
-  }
+  if (period === 'yesterday') return shanghaiDayStart(now) - 86400000
   if (period === 'month') {
     const day = shanghaiDayKey(now)
     const [y, m] = day.split('-').map(Number)
@@ -121,14 +111,8 @@ export function periodStartMs(period = 'today') {
     const end = Date.parse(`${y}-${pad2(m)}-01T00:00:00+08:00`) || now
     return { start, end }
   }
-  // today (Asia/Shanghai)
-  const today = shanghaiDayKey(now)
-  let t = now
-  for (let i = 0; i < 48; i++) {
-    if (shanghaiDayKey(t) !== today) return t + 1
-    t -= 3600000
-  }
-  return now - 86400000
+  // today (Asia/Shanghai, exact 00:00 +08:00)
+  return shanghaiDayStart(now)
 }
 
 function rangeBounds(q = {}) {
@@ -145,8 +129,13 @@ function rangeBounds(q = {}) {
     return { from: Number(q.startMs) || 0, to: Number(q.endMs) || now }
   }
   const start = periodStartMs(range)
+  if (range === 'yesterday') {
+    // Bound to [yesterday 00:00, today 00:00) Asia/Shanghai — previously leaked into today.
+    const todayStart = Number(periodStartMs('today')) || now
+    return { from: Number(start) || 0, to: todayStart - 1 }
+  }
   if (start && typeof start === 'object' && start.start != null) {
-    return { from: start.start, to: start.end || now }
+    return { from: start.start, to: start.end ? start.end - 1 : now }
   }
   return { from: Number(start) || 0, to: now }
 }

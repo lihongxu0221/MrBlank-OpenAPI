@@ -74,6 +74,7 @@ export const GATED_ROUTES = [
   '/console',
   '/checkin',
   '/redeem',
+  '/wallet',
   '/keys',
   '/usage',
   '/models',
