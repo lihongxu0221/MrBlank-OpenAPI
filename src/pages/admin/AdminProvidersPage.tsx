@@ -6,17 +6,15 @@
  * All data comes from the real CPA management API through the admin-only BFF whitelist
  * proxy `/api/admin/cpa-mgmt/*` (server/cpaMgmtProxy.js).
  */
-import { useState } from 'react'
-import '../../cpamp/styles/scope.scss'
-import '../../cpamp/i18n'
-import { AiProvidersPage } from '../../cpamp/features/aiProviders/AiProvidersPage'
-import { NotificationContainer } from '../../cpamp/components/common/NotificationContainer'
-import { ConfirmationModal } from '../../cpamp/components/common/ConfirmationModal'
+import { lazy, Suspense, useState } from 'react'
+import './AdminProvidersPage.css'
 import type { ProviderKindFilter } from '../../cpamp/components/providers/ProviderTable/sort'
 import { usePrefs } from '../../hooks/useStore'
 import { getHashQuery } from '../../router/hash'
 import { AdminLayout } from './AdminLayout'
 import { useAdminGate } from './useAdminGate'
+
+const AdminProvidersContent = lazy(() => import('./AdminProvidersContent'))
 
 const LEGACY_TAB_TO_KIND: Record<string, ProviderKindFilter> = {
   'gemini-api-key': 'gemini',
@@ -56,13 +54,11 @@ export function AdminProvidersPage({ path }: { path: string }) {
 
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
-      <div className="cpamp-scope cpamp-page-host">
-        <div className="cpamp-theme-root cpamp-page" data-theme={cpampTheme}>
-          {gate.allowed ? <AiProvidersPage initialKindFilter={initialKind} /> : null}
-          <NotificationContainer />
-          <ConfirmationModal />
-        </div>
-      </div>
+      {gate.allowed ? (
+        <Suspense fallback={<p className="inline-loading">加载中…</p>}>
+          <AdminProvidersContent theme={cpampTheme} initialKindFilter={initialKind} />
+        </Suspense>
+      ) : null}
     </AdminLayout>
   )
 }

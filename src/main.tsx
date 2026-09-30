@@ -1,10 +1,11 @@
+// Global styles first so page-level sheets (e.g. the scoped CPAMP port) cascade after them.
+import './styles/tokens.css'
+import './styles/app.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { restoreSession, restoreSessionFromCookie } from './lib/session'
 import { loadSiteConfig } from './config/site'
 import App from './App'
-import './styles/tokens.css'
-import './styles/app.css'
 
 restoreSession()
 
