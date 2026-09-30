@@ -1,4 +1,6 @@
-const Q = 500_000
+const Q = 500_000 // N (pricing only)
+/** 1 点 in stored units (mp) — balances / limits / configs */
+const PM = 1_000_000
 
 const day = (offset = 0) => {
   const d = new Date(Date.now() + offset * 86400000)
@@ -91,8 +93,8 @@ export const handlers = {
       unavailable_reason: checked
         ? '今日已签到'
         : undefined,
-      min_quota: 2 * Q,
-      max_quota: 2 * Q,
+      min_quota: 2 * PM,
+      max_quota: 2 * PM,
       month: mm,
       stats: {
         checked_in_today: checked,
@@ -104,7 +106,7 @@ export const handlers = {
   },
   checkinPost: () => {
     if (db.checkins.some((r) => r.checkin_date === day())) return fail('今日已签到')
-    const quota_awarded = 2 * Q
+    const quota_awarded = 2 * PM
     db.checkins.push({ checkin_date: day(), quota_awarded })
     db.user.quota += quota_awarded
     return ok({ quota_awarded })
@@ -117,7 +119,7 @@ export const handlers = {
       return fail('兑换码无效')
     }
     db.redeemed.add(code)
-    const awarded = 5 * Q
+    const awarded = 5 * PM
     db.user.quota += awarded
     return ok(awarded)
   },
@@ -138,7 +140,7 @@ export const handlers = {
       fullKey,
       status: 1,
       unlimited_quota: !!body.unlimited_quota,
-      remain_quota: body.remain_quota ?? 5 * Q,
+      remain_quota: body.remain_quota ?? 5 * PM,
       expired_time: body.expired_time ?? -1,
       model_limits: body.model_limits || '',
       access_group_id: 1,

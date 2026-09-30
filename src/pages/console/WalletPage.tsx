@@ -16,7 +16,7 @@ type LedgerItem = {
   direction_label: string
   channel: string
   channel_label: string
-  raw: number
+  amount_mp: number
   points: number
   detail_text: string
 }
@@ -26,7 +26,7 @@ type LedgerResp = {
   total: number
   page: number
   page_size: number
-  summary: { in_raw: number; out_raw: number; in_count?: number; out_count?: number }
+  summary: { in_mp: number; out_mp: number; in_count?: number; out_count?: number }
   balance: number
   credit_unit?: { raw_per_point?: number; quota_per_unit?: number }
 }
@@ -160,7 +160,7 @@ export function WalletPage({ path }: { path: string }) {
           <div className="stat-card">
             <div className="label">{P('本期收入')}</div>
             <div className="value wallet-in">
-              {s ? '+' + formatCredits(s.in_raw || 0) : '—'} <span className="unit">{P('点')}</span>
+              {s ? '+' + formatCredits(s.in_mp || 0) : '—'} <span className="unit">{P('点')}</span>
             </div>
             <div className="muted">
               {rangeLabel} · {qt(P('{n} 笔'), { n: s?.in_count || 0 })}
@@ -169,7 +169,7 @@ export function WalletPage({ path }: { path: string }) {
           <div className="stat-card">
             <div className="label">{P('本期支出')}</div>
             <div className="value wallet-out">
-              {s ? '-' + formatCredits(s.out_raw || 0) : '—'} <span className="unit">{P('点')}</span>
+              {s ? '-' + formatCredits(s.out_mp || 0) : '—'} <span className="unit">{P('点')}</span>
             </div>
             <div className="muted">
               {rangeLabel} · {qt(P('{n} 笔'), { n: s?.out_count || 0 })}
@@ -334,7 +334,7 @@ export function WalletPage({ path }: { path: string }) {
                       </td>
                       <td>{P(x.channel_label)}</td>
                       <td className={'num ' + (x.direction === 'in' ? 'wallet-in' : 'wallet-out')}>
-                        {(x.direction === 'in' ? '+' : '-') + formatCredits(x.raw)}
+                        {(x.direction === 'in' ? '+' : '-') + formatCredits(x.amount_mp)}
                       </td>
                       <td className="detail">{x.detail_text || '-'}</td>
                     </tr>

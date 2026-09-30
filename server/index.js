@@ -65,7 +65,8 @@ import {
 } from './cpa.js'
 import { createSiteUsageStore } from './siteUsage.js'
 import { createModelPricesStore } from './modelPrices.js'
-import { createQuotaUnitStore, DEFAULT_QUOTA_PER_UNIT, buildCreditUnitInfo } from './quotaUnit.js'
+import { createQuotaUnitStore, DEFAULT_QUOTA_PER_UNIT, POINT_MP, pointsToMp, buildCreditUnitInfo } from './quotaUnit.js'
+import { findLegacyUnitFiles } from './pointsUnitGuard.js'
 import { createApiKeyAliasesStore } from './apiKeyAliases.js'
 import { createAccountActionsStore } from './accountActions.js'
 import { createUsageImportSessions } from './usageImportSessions.js'
@@ -162,6 +163,20 @@ const siteUsage = createSiteUsageStore(
 const quotaUnitStore = createQuotaUnitStore(
   process.env.QUOTA_UNIT_PATH || path.join(__dirname, 'data', 'quota-unit.json'),
 )
+// Point-denominated stores must be unit_version 2 (micro-points). Refuse to serve on legacy raw files.
+{
+  const legacy = findLegacyUnitFiles({
+    creditsPath: process.env.SITE_CREDITS_PATH || path.join(__dirname, 'data', 'site-credits.json'),
+    groupsPath: process.env.USER_GROUPS_PATH || path.join(__dirname, 'data', 'user-groups.json'),
+    keysPath: process.env.USER_KEYS_PATH || path.join(__dirname, 'data', 'user-keys.json'),
+    ledgerPath: process.env.WALLET_LEDGER_PATH || path.join(__dirname, 'data', 'wallet-ledger.jsonl'),
+  })
+  if (legacy.length) {
+    for (const l of legacy) console.error(`[points-unit] legacy data file: ${l.file} — ${l.reason}`)
+    console.error('[points-unit] run: node server/scripts/migrate-points-unit.js (see docs). Refusing to start.')
+    process.exit(78)
+  }
+}
 
 /** Filled after aily/CPA stores are ready; used by price sync fail-closed filter. */
 let resolveSupportedModels = async () => []
@@ -1016,10 +1031,9 @@ async function buildLeaderboard(period = 'today', sort = 'credits', p = 1) {
   try {
     const hashMap = enrichHashToUserMap(userKeyStore.hashToUserMap())
     const rankedRaw = siteUsage.leaderboard({ period, sort, hashToUser: hashMap })
-    // siteUsage.credits is raw quota; API 点数 = raw ÷ raw_per_point (N).
+    // siteUsage.credits is mp charged at call time (fixed history); API 点数 = mp ÷ 1e6.
     const ranked = rankedRaw.map((r) => {
-      const raw = Number(r.credits) || 0
-      const points = quotaUnitStore.quotaToPoints(raw)
+      const points = (Number(r.credits) || 0) / POINT_MP
       let credits = 0
       if (Number.isFinite(points)) {
         if (Math.abs(points - Math.round(points)) < 1e-9) credits = Math.round(points)
@@ -1311,7 +1325,8 @@ app.use(
               }
             })(),
             costForTokens: (p, a, b, o) => modelPrices.costForTokens(p, a, b, o),
-            dollarsToQuota: (usd) => quotaUnitStore.dollarsToQuota(usd),
+            // Pools (group windows / site credits) are mp → estimate in mp at CURRENT N.
+            dollarsToQuota: (usd) => quotaUnitStore.usdToMp(usd),
           })
           const denyReserve = (r, extra = {}) => {
             try { releaseTokenConcurrency() } catch { /* ignore */ }
@@ -1576,6 +1591,8 @@ app.use(
           const resolvedModel = model_name || usage?.model || requestedModel || null
           let amountUsd = 0
           let rawQuota = 0
+          let eventPointsMp = 0
+          const eventN = quotaUnitStore.getUnit()
           try {
             // Same model precedence as billing below: requested first, then upstream-resolved.
             amountUsd = modelPrices.usageRecordCostUsd({
@@ -1587,9 +1604,12 @@ app.use(
               cacheWriteTokens: cacheWriteTokens,
             })
             rawQuota = quotaUnitStore.dollarsToQuota(amountUsd)
+            // Points at CURRENT N (fixed into the record; history never follows later N changes).
+            eventPointsMp = quotaUnitStore.usdToMp(amountUsd)
           } catch {
             amountUsd = 0
             rawQuota = 0
+            eventPointsMp = 0
           }
           let username = null
           try {
@@ -1628,6 +1648,8 @@ app.use(
             cache_write_tokens: cacheWriteTokens,
             amountUsd,
             rawQuota,
+            points_mp: eventPointsMp,
+            raw_per_point: eventN,
             duration_ms: duration_ms ?? null,
             ttft_ms: ttft_ms ?? null,
             stream: !!is_stream,
@@ -1648,9 +1670,13 @@ app.use(
         const cacheWriteTok =
           Number(usage?.cache_write_tokens ?? usage?.cache_creation_tokens ?? 0) || 0
         const tokens = promptTok + completionTok
-        // Price-book USD → raw quota (aily: round(USD * quota_per_unit)); not 1 token = 1 raw
+        // Billing: price-book USD → points at the CURRENT N, stored as mp (1 点 = 1e6 mp):
+        //   points = USD × 500000 ÷ N. raw (USD × 500000, fixed) + N are recorded for audit.
+        // Balances / limits are mp and never rescale when N changes — only this charge follows N.
         let amountUsd = 0
-        let quota = 0
+        let quota = 0 // mp charged
+        let chargeRaw = 0
+        const chargeN = quotaUnitStore.getUnit()
         try {
           const model = String(requestedModel || usage?.model || '').trim()
           const price = modelPrices.lookupPrice(model)
@@ -1658,13 +1684,15 @@ app.use(
             cacheReadTokens: cacheReadTok,
             cacheWriteTokens: cacheWriteTok,
           })
-          quota = quotaUnitStore.dollarsToQuota(amountUsd)
-          // Unpriced successful call: charge minimal 1 raw so windows still move; prefer syncing prices
-          if (quota <= 0 && tokens > 0) quota = price ? 0 : 1
+          chargeRaw = quotaUnitStore.dollarsToQuota(amountUsd)
+          quota = quotaUnitStore.usdToMp(amountUsd)
+          // Unpriced model: charge 0 (Blank Li D6); prefer syncing prices.
+          if (!(quota > 0)) quota = 0
         } catch (e) {
           console.error('[billing] price quota failed', e?.message || e)
           amountUsd = 0
-          quota = tokens > 0 ? 1 : 0
+          quota = 0
+          chargeRaw = 0
         }
         try {
           const usageModel = String(requestedModel || model_name || usage?.model || '').trim()
@@ -1686,6 +1714,8 @@ app.use(
             creditStore.consume(userId, quota, {
               ip: ip || null,
               ref_id: diagnosis_id || eventId || null,
+              raw: chargeRaw,
+              raw_per_point: chargeN,
               detail: {
                 model: String(requestedModel || model_name || usage?.model || '').trim() || null,
                 token_name: token_name || null,
@@ -1694,6 +1724,8 @@ app.use(
                 completion_tokens: completionTok,
                 cache_tokens: cacheReadTok || 0,
                 amount_usd: amountUsd,
+                raw: chargeRaw,
+                raw_per_point: chargeN,
               },
             })
           } catch (e) {
@@ -3023,7 +3055,7 @@ app.get('/api/admin/groups', requireAdmin, (_req, res) => {
 app.put('/api/admin/groups', requireAdmin, (req, res) => {
   try {
     const groups = groupStore.saveGroups(req.body?.groups || req.body)
-    res.json(ok({ groups, quota_unit: Q }))
+    res.json(ok({ groups, quota_unit: quotaUnitStore.getUnit(), credit_unit: creditUnitInfo() }))
   } catch (err) {
     res.status(400).json(fail(err?.message || '保存用户组失败'))
   }
@@ -3196,16 +3228,13 @@ app.delete('/api/admin/credits/codes/:code', requireAdmin, (req, res) => {
 app.post('/api/admin/credits/grant', requireAdmin, (req, res) => {
   try {
     const userId = String(req.body?.user_id || '').trim()
-    const amount = Number(req.body?.amount)
     if (!userId) {
       res.status(400).json(fail('需要 user_id'))
       return
     }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      res.status(400).json(fail('amount 须为正数（token）'))
-      return
-    }
-    const result = creditStore.adminGrant(userId, Math.round(amount), String(req.body?.note || '').slice(0, 200), {
+    const amount = adminPointsAmountMp(req.body, res)
+    if (amount == null) return
+    const result = creditStore.adminGrant(userId, amount, String(req.body?.note || '').slice(0, 200), {
       ip: requestIp(req) || null,
       operator: adminOperator(req),
     })
@@ -3215,6 +3244,27 @@ app.post('/api/admin/credits/grant', requireAdmin, (req, res) => {
   }
 })
 
+/**
+ * Admin grant/deduct amount in 点 → mp. Accepts `points` (点, decimals ok) or `amount_mp`.
+ * The legacy `amount` (raw at the then-current N) is rejected so a stale UI can never write raw.
+ */
+function adminPointsAmountMp(body = {}, res) {
+  let mp = null
+  if (body.points != null && body.points !== '') mp = pointsToMp(body.points)
+  else if (body.amount_mp != null && body.amount_mp !== '') {
+    const n = Number(body.amount_mp)
+    mp = Number.isFinite(n) && n > 0 ? Math.round(n) : 0
+  } else if (body.amount != null) {
+    res.status(400).json(fail('amount 已废弃：请用 points（点）提交，点数不随换算比例变化'))
+    return null
+  }
+  if (!(mp > 0)) {
+    res.status(400).json(fail('points 须为正数（点）'))
+    return null
+  }
+  return mp
+}
+
 function adminOperator(req) {
   const u = req.auth?.user || {}
   return String(u.username || u.display_name || u.id || '') || null
@@ -3223,15 +3273,12 @@ function adminOperator(req) {
 app.post('/api/admin/credits/deduct', requireAdmin, (req, res) => {
   try {
     const userId = String(req.body?.user_id || '').trim()
-    const amount = Number(req.body?.amount)
     if (!userId) {
       res.status(400).json(fail('需要 user_id'))
       return
     }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      res.status(400).json(fail('amount 须为正数（token）'))
-      return
-    }
+    const amount = adminPointsAmountMp(req.body, res)
+    if (amount == null) return
     const result = creditStore.adminDeduct(userId, amount, String(req.body?.note || '').slice(0, 200), {
       ip: requestIp(req) || null,
       operator: adminOperator(req),
@@ -4936,7 +4983,12 @@ app.put('/api/admin/quota-unit', requireAdmin, (req, res) => {
     const body = req.body || {}
     // N only (1 点 = N raw). Accepts number or B/M/K string. USD→raw stays FIXED 500000.
     const next = body.raw_per_point ?? body.quota_per_unit ?? body.value
-    const data = quotaUnitStore.setUnit(next)
+    const prevUnit = quotaUnitStore.getUnit()
+    // Only per-call pricing follows N. Balances / point-denominated limits are mp — untouched.
+    const data = quotaUnitStore.setUnit(next, { operator: adminOperator(req) })
+    if (data.quota_per_unit !== prevUnit) {
+      console.log(`[quota-unit] N ${prevUnit} → ${data.quota_per_unit} by ${adminOperator(req) || '?'} (prices only; balances unchanged)`)
+    }
     try {
       // Re-attach raw from stored USD with FIXED 500000 (N change does not alter raw rates).
       modelPrices.recomputeQuotaFields()

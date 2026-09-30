@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Boxes, Plus, RefreshCw, Save, Trash2, Users } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { formatQuotaCompact, formatQuotaUnitLabel, getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
+import { POINT_MP, formatQuotaCompact, formatQuotaUnitLabel, getQuotaPerUnit, pointsToQuota, quotaToPoints, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { AdminLayout } from './AdminLayout'
 import { navigate } from '../../router/hash'
@@ -59,34 +59,34 @@ function blankGroup(level: number): Group {
   }
 }
 
-/** API raw → UI 点 */
-function fromApiGroup(g: Group, unit: number): Group {
+/** API mp → UI 点 (fixed 1 点 = 1e6 mp; `unit` = N unused) */
+function fromApiGroup(g: Group, _unit?: number): Group {
   return {
     ...g,
     quotas: {
-      window_5h: quotaToPoints(g.quotas?.window_5h || 0, unit),
-      week: quotaToPoints(g.quotas?.week || 0, unit),
-      month: quotaToPoints(g.quotas?.month || 0, unit),
+      window_5h: quotaToPoints(g.quotas?.window_5h || 0, POINT_MP),
+      week: quotaToPoints(g.quotas?.week || 0, POINT_MP),
+      month: quotaToPoints(g.quotas?.month || 0, POINT_MP),
     },
     promotion: {
       ...g.promotion,
-      min_used_quota: quotaToPoints(g.promotion?.min_used_quota || 0, unit),
+      min_used_quota: quotaToPoints(g.promotion?.min_used_quota || 0, POINT_MP),
     },
   }
 }
 
-/** UI 点 → API raw */
-function toApiGroup(g: Group, unit: number): Group {
+/** UI 点 → API mp (fixed; independent of N) */
+function toApiGroup(g: Group, _unit?: number): Group {
   return {
     ...g,
     quotas: {
-      window_5h: pointsToQuota(g.quotas.window_5h, unit),
-      week: pointsToQuota(g.quotas.week, unit),
-      month: pointsToQuota(g.quotas.month, unit),
+      window_5h: pointsToQuota(g.quotas.window_5h, POINT_MP),
+      week: pointsToQuota(g.quotas.week, POINT_MP),
+      month: pointsToQuota(g.quotas.month, POINT_MP),
     },
     promotion: {
       ...g.promotion,
-      min_used_quota: pointsToQuota(g.promotion.min_used_quota, unit),
+      min_used_quota: pointsToQuota(g.promotion.min_used_quota, POINT_MP),
     },
   }
 }
@@ -221,8 +221,7 @@ export function AdminGroupsPage({ path }: { path: string }) {
       const nextId = selectedId && list.some((x) => x.id === selectedId) ? selectedId : list[0]?.id || ''
       setSelectedId(nextId)
       setMsg(
-        P('用户组已保存。') +
-          ` （${P('已按')} 1 ${P('点')}=${unit.toLocaleString('en-US')} token ${P('换算入库')}）`,
+        P('用户组已保存。') + ` （${P('额度以点入库，不随换算比例变化')}）`,
       )
     } catch (e) {
       setErr((e as Error).message)

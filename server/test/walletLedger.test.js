@@ -36,7 +36,7 @@ describe('wallet ledger + credits instrumentation', () => {
     assert.equal(rows.length, 5)
     let bal = 0
     for (const r of rows) {
-      bal += r.direction === 'in' ? r.raw : -r.raw
+      bal += r.direction === 'in' ? r.points_mp : -r.points_mp
       assert.equal(r.balance_after, bal, `balance_after mismatch at ${r.channel}`)
       assert.equal(r.raw_per_point, N)
       assert.equal(r.source, 'live')
@@ -62,7 +62,7 @@ describe('wallet ledger + credits instrumentation', () => {
     assert.equal(r.deducted, N)
     const rows = ledger.listForUser(uid)
     assert.equal(rows.length, 2)
-    assert.equal(rows[1].raw, N)
+    assert.equal(rows[1].points_mp, N)
     assert.equal(rows[1].detail.need, 3 * N)
     assert.equal(rows[1].balance_after, 0)
     assert.match(detailText(rows[1]), /余额不足按实扣/)
@@ -95,11 +95,11 @@ describe('wallet ledger + credits instrumentation', () => {
     assert.equal(ledger.query({ range: 'all' }).total, 0)
     const a = ledger.query({ user_id: 'a', range: 'all' })
     assert.equal(a.total, 1)
-    assert.ok(a.items.every((i) => i.raw === N))
+    assert.ok(a.items.every((i) => i.amount_mp === N))
     assert.equal(ledger.query({ range: 'all' }, { admin: true }).total, 2)
   })
 
-  it('direction / channel filters, pagination, summary, points by current N', () => {
+  it('direction / channel filters, pagination, summary, points fixed in mp', () => {
     const uid = 'u4'
     for (let i = 0; i < 7; i++) store.adminGrant(uid, N)
     store.redeem(uid, 'WELCOME')
@@ -108,8 +108,8 @@ describe('wallet ledger + credits instrumentation', () => {
     assert.equal(all.total, 11)
     assert.equal(all.items.length, 5)
     assert.equal(ledger.query({ user_id: uid, range: 'all', page_size: 5, p: 3 }).items.length, 1)
-    assert.equal(all.summary.in_raw, 12 * N)
-    assert.equal(all.summary.out_raw, 1.5 * N)
+    assert.equal(all.summary.in_mp, 12 * N)
+    assert.equal(all.summary.out_mp, 1.5 * N)
     assert.equal(ledger.query({ user_id: uid, range: 'all', direction: 'out' }).total, 3)
     assert.equal(ledger.query({ user_id: uid, range: 'all', direction: 'in' }).total, 8)
     assert.equal(ledger.query({ user_id: uid, range: 'all', channel: 'redeem' }).total, 1)
@@ -152,14 +152,29 @@ describe('wallet ledger + credits instrumentation', () => {
     assert.equal(rows.length, 5)
     assert.ok(rows.every((r) => r.source === 'backfill'))
     const adjIn = rows.find((r) => r.channel === 'backfill_adjust' && r.direction === 'in')
-    assert.equal(adjIn.raw, 7 * N)
+    assert.equal(adjIn.points_mp, 7 * N)
     const adjOut = rows.find((r) => r.channel === 'backfill_adjust' && r.direction === 'out')
-    assert.equal(adjOut.raw, 2 * N)
+    assert.equal(adjOut.points_mp, 2 * N)
     assert.equal(rows.find((r) => r.ref_id === '2026-09-23').ts, '2026-09-23T11:11:44.100Z')
     assert.equal(plain.backfill(doc).length, 0, 'second run no-op')
     const reloaded = createWalletLedger(path.join(dir, 'bf.jsonl'), { getRawPerPoint: () => N })
     assert.equal(reloaded.backfill(doc).length, 0, 'reload + rerun no-op')
     assert.equal(reloaded.size, 5)
+  })
+
+  it('points are fixed at write time: changing N never rescales ledger rows', () => {
+    let n = 1_000_000
+    const l = createWalletLedger(path.join(dir, 'n.jsonl'), { getRawPerPoint: () => n })
+    const s2 = createCreditStore(path.join(dir, 'c2.json'), { getQuotaUnit: () => n, ledger: l })
+    s2.adminGrant('z', 3_000_000) // 3 点
+    n = 5_000_000
+    const q = l.query({ user_id: 'z', range: 'all' })
+    assert.equal(q.items[0].points, 3)
+    assert.equal(q.summary.in_points, 3)
+    assert.equal(s2.getBalance('z'), 3_000_000)
+    // legacy raw-only rows are rejected (must be migrated)
+    fs.appendFileSync(path.join(dir, 'n.jsonl'), JSON.stringify({ user_id: 'z', direction: 'in', channel: 'checkin', raw: 5 }) + '\n')
+    assert.equal(createWalletLedger(path.join(dir, 'n.jsonl')).listForUser('z').length, 1)
   })
 
   it('backfill after live rows does not duplicate live check-ins', () => {
@@ -216,7 +231,7 @@ describe('Asia/Shanghai range bounds', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wlr-'))
     try {
       const l = createWalletLedger(path.join(dir, 'l.jsonl'), { getRawPerPoint: () => N })
-      const mk = (ts) => l.append({ user_id: 'u', ts, direction: 'in', channel: 'checkin', raw: N })
+      const mk = (ts) => l.append({ user_id: 'u', ts, direction: 'in', channel: 'checkin', points_mp: N })
       mk('2026-09-29T15:59:59.999Z') // 09-29 23:59:59.999 SH → yesterday
       mk('2026-09-29T16:00:00.000Z') // 09-30 00:00 SH → today
       mk('2026-08-31T15:59:59.000Z') // 08-31 23:59:59 SH → last month

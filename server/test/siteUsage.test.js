@@ -20,6 +20,8 @@ test('siteUsage records events and builds leaderboard/activity', () => {
     prompt_tokens: 5,
     completion_tokens: 7,
     rawQuota: 297696,
+    points_mp: 297696,
+    raw_per_point: 1_000_000,
   })
   store.recordEvent({
     userId: 'u1',
@@ -45,7 +47,7 @@ test('siteUsage records events and builds leaderboard/activity', () => {
   const board = store.leaderboard({ period: 'all', sort: 'credits', hashToUser })
   assert.equal(board.length, 1)
   assert.equal(board[0].name, 'Alice')
-  // credits = rawQuota sum (not LLM tokens). Display 点 = credits / raw_per_point.
+  // credits = Σ points_mp charged at call time (not LLM tokens, not rescaled by current N).
   assert.equal(board[0].credits, 297696)
 
   const act = store.activityByModel({ period: 'all' })
@@ -59,36 +61,37 @@ test('siteUsage records events and builds leaderboard/activity', () => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
-test('leaderboard credits use rawQuota not LLM tokens; display 点 = raw / N', () => {
+test('leaderboard credits = points charged at call time (mp), history fixed across N changes', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'site-usage-pts-'))
   const file = path.join(dir, 'site-usage.json')
   const store = createSiteUsageStore(file, { maxEvents: 100, maxAgeMs: 86400000 * 30 })
 
-  // Mimic screenshot class: large raw quota, small-ish LLM tokens
+  // raw 297696 charged at N=500000 → 0.595392 点 ; later call raw 500000 at N=5,000,000 → 0.1 点
   store.recordEvent({
-    userId: 'admin',
-    keyHash: 'adm1',
-    model: 'gpt-test',
-    success: true,
-    tokens: 12000,
-    prompt_tokens: 8000,
-    completion_tokens: 4000,
-    rawQuota: 297696,
+    userId: 'admin', keyHash: 'adm1', model: 'gpt-test', success: true,
+    tokens: 12000, prompt_tokens: 8000, completion_tokens: 4000,
+    rawQuota: 297696, points_mp: 595392, raw_per_point: 500_000,
+  })
+  store.recordEvent({
+    userId: 'admin', keyHash: 'adm1', model: 'gpt-test', success: true,
+    tokens: 10, prompt_tokens: 5, completion_tokens: 5,
+    rawQuota: 500000, points_mp: 100000, raw_per_point: 5_000_000,
+  })
+  // migrated legacy event without points_mp but with raw_per_point → rawQuota × 1e6 ÷ N
+  store.recordEvent({
+    userId: 'admin', keyHash: 'adm1', model: 'gpt-test', success: true,
+    tokens: 1, rawQuota: 1_000_000, raw_per_point: 1_000_000,
   })
   store.flush()
 
   const hashToUser = new Map([['adm1', { userId: 'admin', display_name: 'admin', username: 'admin' }]])
   const board = store.leaderboard({ period: 'all', sort: 'credits', hashToUser })
   assert.equal(board.length, 1)
-  assert.equal(board[0].credits, 297696)
-  assert.notEqual(board[0].credits, 12000)
-
-  const rawPerPoint = 500_000
-  const displayPoints = board[0].credits / rawPerPoint
-  assert.ok(Math.abs(displayPoints - 0.595392) < 1e-9)
-  // Rounded display (same rule as buildLeaderboard): <10 → 2 decimals
-  const rounded = Math.round(displayPoints * 100) / 100
-  assert.equal(rounded, 0.6)
+  assert.equal(board[0].credits, 595392 + 100000 + 1_000_000)
+  assert.notEqual(board[0].credits, 12011)
+  const page = store.listEvents({ p: 1, page_size: 10, range: 'all' })
+  const items = page.items || []
+  assert.ok(items.some((x) => x.points_mp === 100000 && x.raw_per_point === 5_000_000))
 
   fs.rmSync(dir, { recursive: true, force: true })
 })

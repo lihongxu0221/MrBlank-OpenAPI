@@ -8,6 +8,14 @@
  *
  * Persisted at server/data/quota-unit.json (override via QUOTA_UNIT_PATH).
  * Only N (raw_per_point) is written; USD→raw is always FIXED_USD_TO_RAW.
+ *
+ * Account unit (unit_version 2, 2026-09-30):
+ *   「点」is the ACCOUNT currency. Every balance / grant / limit / config denominated in 点
+ *   (wallet balance, check-in range, redeem codes, admin grant/deduct, group 5h/week/month
+ *   quotas, per-model quotas, promotion thresholds, key remain/limits, ledger rows) is
+ *   stored as integer micro-points (mp): 1 点 = POINT_MP = 1,000,000 mp — FIXED, independent of N.
+ *   N ONLY affects per-call pricing: points charged = USD × 500000 ÷ N (computed at charge time).
+ *   Changing N therefore reprices the model list and future calls; it never rescales balances.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -18,6 +26,43 @@ export const FIXED_USD_TO_RAW = 500_000
 export const DEFAULT_QUOTA_PER_UNIT = FIXED_USD_TO_RAW
 /** Default N when store has no override: 1 点 = 500000 raw (≈ 1 USD). */
 export const DEFAULT_RAW_PER_POINT = FIXED_USD_TO_RAW
+
+/** Fixed account unit: 1 点 = 1,000,000 micro-points (mp). Never depends on N. */
+export const POINT_MP = 1_000_000
+/** Data-file unit version: 2 = point-denominated values stored as mp. */
+export const UNIT_VERSION = 2
+
+/** 点 → mp (integer). Negative / invalid → 0. */
+export function pointsToMp(points) {
+  const n = Number(points)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.round(n * POINT_MP)
+}
+
+/** mp → 点 (float). */
+export function mpToPoints(mp) {
+  return (Number(mp) || 0) / POINT_MP
+}
+
+/**
+ * Billing: USD → mp charged at the given N (1 点 = N raw; 1 USD = 500000 raw fixed).
+ * points = usd × 500000 ÷ N  →  mp = round(usd × 500000 × 1e6 ÷ N)
+ */
+export function usdToMp(usd, rawPerPoint = DEFAULT_RAW_PER_POINT) {
+  const v = Number(usd)
+  if (!Number.isFinite(v) || v <= 0) return 0
+  const n = clampUnit(rawPerPoint) || DEFAULT_RAW_PER_POINT
+  return Math.round((v * FIXED_USD_TO_RAW * POINT_MP) / n)
+}
+
+/** raw → mp at a given N (migration / history). */
+export function rawToMp(raw, rawPerPoint) {
+  const v = Number(raw)
+  if (!Number.isFinite(v) || v <= 0) return 0
+  const n = clampUnit(rawPerPoint)
+  if (!n) throw new Error('rawToMp: invalid N')
+  return Math.round((v * POINT_MP) / n)
+}
 
 function ensureDir(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
@@ -130,12 +175,18 @@ export function buildCreditUnitInfo(rawPerPoint = DEFAULT_RAW_PER_POINT) {
     usd_to_raw: FIXED_USD_TO_RAW,
     display_name: '点',
     note: `1 点 = ${n.toLocaleString('en-US')} token`,
+    /** Balances / limits / configs are stored in mp (1 点 = mp_per_point), independent of N. */
+    mp_per_point: POINT_MP,
+    account_unit: 'point',
+    unit_version: UNIT_VERSION,
     windows: ['window_5h', 'week', 'month'],
     formula: {
       point_to_raw: `1 点 = ${n} raw`,
       usd_to_raw: `1 USD = ${FIXED_USD_TO_RAW} raw (fixed)`,
       quota_per_mtok: `round(usd_per_mtok × ${FIXED_USD_TO_RAW})`,
       display_points: `raw ÷ ${n}`,
+      charge_points: `usd × ${FIXED_USD_TO_RAW} ÷ ${n}`,
+      balance_storage: `1 点 = ${POINT_MP} mp (fixed; N 变化不影响余额/额度)`,
     },
   }
 }
@@ -147,20 +198,25 @@ function readStore(filePath) {
         version: 1,
         quota_per_unit: DEFAULT_RAW_PER_POINT,
         updated_at: null,
+        history: [],
       }
     }
     const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'))
     const unit = clampUnit(raw?.quota_per_unit ?? raw?.raw_per_point) || DEFAULT_RAW_PER_POINT
-    return {
+    const out = {
       version: 1,
       quota_per_unit: unit,
       updated_at: raw?.updated_at || null,
+      history: Array.isArray(raw?.history) ? raw.history.slice(-200) : [],
     }
+    if (raw?.account_unit_version != null) out.account_unit_version = raw.account_unit_version
+    return out
   } catch {
     return {
       version: 1,
       quota_per_unit: DEFAULT_RAW_PER_POINT,
       updated_at: null,
+      history: [],
     }
   }
 }
@@ -201,16 +257,19 @@ export function createQuotaUnitStore(filePath) {
       usd_to_raw: FIXED_USD_TO_RAW,
       updated_at: store.updated_at,
       credit_unit: buildCreditUnitInfo(unit),
+      history: (store.history || []).slice(-20),
       path: filePath,
     }
   }
 
   /**
    * Set configurable N (1 点 = N raw). Accepts number or B/M/K string.
-   * Does NOT change FIXED_USD_TO_RAW.
+   * Does NOT change FIXED_USD_TO_RAW and NEVER touches balances / point-denominated
+   * limits (those are stored in mp). Only per-call pricing follows N.
    * @param {number|string} next
+   * @param {{ operator?: string|null }} [meta]
    */
-  function setUnit(next) {
+  function setUnit(next, meta = {}) {
     const unit = parseRawPerPoint(next)
     if (unit == null) {
       throw Object.assign(
@@ -218,7 +277,18 @@ export function createQuotaUnitStore(filePath) {
         { status: 400 },
       )
     }
+    const prev = store.quota_per_unit || DEFAULT_RAW_PER_POINT
     store.quota_per_unit = unit
+    if (!Array.isArray(store.history)) store.history = []
+    if (prev !== unit) {
+      store.history.push({
+        at: new Date().toISOString(),
+        from: prev,
+        to: unit,
+        operator: meta.operator ? String(meta.operator).slice(0, 80) : null,
+      })
+      store.history = store.history.slice(-200)
+    }
     persist()
     return get()
   }
@@ -232,6 +302,9 @@ export function createQuotaUnitStore(filePath) {
     quotaToDollars: (q) => quotaToDollars(q),
     pointsToQuota: (p) => pointsToQuota(p, getUnit()),
     quotaToPoints: (q) => quotaToPoints(q, getUnit()),
+    /** Billing: USD → mp at CURRENT N (points = usd × 500000 ÷ N). */
+    usdToMp: (usd) => usdToMp(usd, getUnit()),
+    rawToMp: (raw) => rawToMp(raw, getUnit()),
     usdPerMtokToQuotaPerMtok: (usd) => usdPerMtokToQuotaPerMtok(usd),
     creditUnitInfo: () => buildCreditUnitInfo(getUnit()),
     DEFAULT_QUOTA_PER_UNIT,

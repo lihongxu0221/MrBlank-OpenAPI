@@ -3,20 +3,23 @@
  * Persisted at server/data/user-groups.json.
  *
  * Credit / quota unit:
- *   - Display「点」= raw / quota_per_unit (default 500_000 ≈ $1, aily parity)
- *   - Rolling 5h / week / month quotas are STORED as raw units; admin UI edits in 点
- *   - BFF /v1 deducts price-book raw quota into these windows (not 1 token = 1 raw)
+ *   - unit_version 2: rolling 5h / week / month quotas, model_quotas, promotion.min_used_quota
+ *     and usage events are STORED as integer micro-points (mp, 1 点 = 1,000,000 mp) —
+ *     independent of N (1 点 = N raw). Changing N never rescales them.
+ *   - BFF /v1 records the points charged at call time (USD × 500000 ÷ N → mp) into these windows
  *   - Empty model_ids = all models; non-empty = allowlist (403 if violated)
- *   - model_quotas: per-model raw caps (0 or missing = unlimited); rolling 30d;
+ *   - model_quotas: per-model mp caps (0 or missing = unlimited); rolling 30d;
  *     pre-request soft check like window quotas (blocks when already exhausted; no mid-request clamp);
  *     hard governance — no site-credits overflow (D5)
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { DEFAULT_QUOTA_PER_UNIT, buildCreditUnitInfo } from './quotaUnit.js'
+import { DEFAULT_QUOTA_PER_UNIT, POINT_MP, UNIT_VERSION, buildCreditUnitInfo } from './quotaUnit.js'
 
 const Q = DEFAULT_QUOTA_PER_UNIT
+/** 1 点 in stored units (mp). Defaults below are written in 点. */
+const P = POINT_MP
 
 /** Public description of the credit unit (API + docs). Prefer store.creditUnitInfo(). */
 export const CREDIT_UNIT_INFO = buildCreditUnitInfo(Q)
@@ -27,7 +30,7 @@ const DEFAULT_GROUPS = [
     name: '新人',
     level: 1,
     description: '刚加入的探索者，可用基础模型与较小滚动额度。',
-    quotas: { window_5h: 2 * Q, week: 10 * Q, month: 30 * Q },
+    quotas: { window_5h: 2 * P, week: 10 * P, month: 30 * P },
     model_ids: [],
     model_quotas: {},
     promotion: { min_account_days: 0, min_request_count: 0, min_used_quota: 0, min_checkins: 0 },
@@ -39,10 +42,10 @@ const DEFAULT_GROUPS = [
     name: '基本用户',
     level: 2,
     description: '完成初步使用后的默认活跃档。',
-    quotas: { window_5h: 5 * Q, week: 25 * Q, month: 80 * Q },
+    quotas: { window_5h: 5 * P, week: 25 * P, month: 80 * P },
     model_ids: [],
     model_quotas: {},
-    promotion: { min_account_days: 3, min_request_count: 10, min_used_quota: 1 * Q, min_checkins: 2 },
+    promotion: { min_account_days: 3, min_request_count: 10, min_used_quota: 1 * P, min_checkins: 2 },
     enabled: true,
     sort_order: 20,
   },
@@ -51,10 +54,10 @@ const DEFAULT_GROUPS = [
     name: '成员',
     level: 3,
     description: '稳定使用社区资源的成员。',
-    quotas: { window_5h: 10 * Q, week: 50 * Q, month: 160 * Q },
+    quotas: { window_5h: 10 * P, week: 50 * P, month: 160 * P },
     model_ids: [],
     model_quotas: {},
-    promotion: { min_account_days: 14, min_request_count: 50, min_used_quota: 5 * Q, min_checkins: 7 },
+    promotion: { min_account_days: 14, min_request_count: 50, min_used_quota: 5 * P, min_checkins: 7 },
     enabled: true,
     sort_order: 30,
   },
@@ -63,10 +66,10 @@ const DEFAULT_GROUPS = [
     name: '活跃用户',
     level: 4,
     description: '高频调用与长期签到的活跃探索者。',
-    quotas: { window_5h: 20 * Q, week: 100 * Q, month: 320 * Q },
+    quotas: { window_5h: 20 * P, week: 100 * P, month: 320 * P },
     model_ids: [],
     model_quotas: {},
-    promotion: { min_account_days: 45, min_request_count: 200, min_used_quota: 20 * Q, min_checkins: 20 },
+    promotion: { min_account_days: 45, min_request_count: 200, min_used_quota: 20 * P, min_checkins: 20 },
     enabled: true,
     sort_order: 40,
   },
@@ -75,10 +78,10 @@ const DEFAULT_GROUPS = [
     name: '老用户',
     level: 5,
     description: '高信任档；额度更高。信任分/社区声望等规则预留扩展。',
-    quotas: { window_5h: 40 * Q, week: 200 * Q, month: 600 * Q },
+    quotas: { window_5h: 40 * P, week: 200 * P, month: 600 * P },
     model_ids: [],
     model_quotas: {},
-    promotion: { min_account_days: 90, min_request_count: 500, min_used_quota: 50 * Q, min_checkins: 40 },
+    promotion: { min_account_days: 90, min_request_count: 500, min_used_quota: 50 * P, min_checkins: 40 },
     enabled: true,
     sort_order: 50,
   },
@@ -92,7 +95,7 @@ function normalizePromotion(p = {}) {
   return {
     min_account_days: Math.max(0, Number(p.min_account_days) || 0),
     min_request_count: Math.max(0, Number(p.min_request_count) || 0),
-    min_used_quota: Math.max(0, Number(p.min_used_quota) || 0),
+    min_used_quota: Math.max(0, Math.round(Number(p.min_used_quota) || 0)),
     min_checkins: Math.max(0, Number(p.min_checkins) || 0),
     // Placeholders for future Linux.do-like trust rules (not enforced yet):
     // min_trust_level, min_likes_received, min_topics_entered, min_posts_read
@@ -107,7 +110,7 @@ function normalizeModelQuotas(raw) {
     const id = String(k || '').trim()
     if (!id) continue
     const n = Number(v)
-    out[id] = Number.isFinite(n) ? Math.max(0, n) : 0
+    out[id] = Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0
   }
   return out
 }
@@ -130,9 +133,9 @@ function normalizeGroup(raw, index = 0) {
     level: Number.isFinite(Number(raw?.level)) ? Number(raw.level) : index + 1,
     description: String(raw?.description || ''),
     quotas: {
-      window_5h: Math.max(0, Number(quotas.window_5h ?? quotas['5h'] ?? 2 * Q) || 0),
-      week: Math.max(0, Number(quotas.week) || 0),
-      month: Math.max(0, Number(quotas.month) || 0),
+      window_5h: Math.max(0, Math.round(Number(quotas.window_5h ?? quotas['5h'] ?? 2 * P) || 0)),
+      week: Math.max(0, Math.round(Number(quotas.week) || 0)),
+      month: Math.max(0, Math.round(Number(quotas.month) || 0)),
     },
     model_ids,
     model_quotas: normalizeModelQuotas(raw?.model_quotas),
@@ -144,6 +147,7 @@ function normalizeGroup(raw, index = 0) {
 
 function defaultDoc() {
   return {
+    unit_version: UNIT_VERSION,
     groups: DEFAULT_GROUPS.map((g, i) => normalizeGroup(g, i)),
     members: {},
     usage: {},
@@ -157,6 +161,8 @@ function normalizeDoc(raw) {
     ? raw.groups.map((g, i) => normalizeGroup(g, i))
     : base.groups
   return {
+    // Missing unit_version = legacy raw-unit file (v1); write() refuses to stamp it.
+    unit_version: Number(raw?.unit_version) || 1,
     groups,
     members: raw?.members && typeof raw.members === 'object' ? raw.members : {},
     usage: raw?.usage && typeof raw.usage === 'object' ? raw.usage : {},
@@ -208,6 +214,11 @@ export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {})
 
   function write(doc) {
     const normalized = normalizeDoc(doc)
+    if (normalized.unit_version !== UNIT_VERSION) {
+      throw Object.assign(new Error('user-groups.json is legacy (raw units); run server/scripts/migrate-points-unit.js'), {
+        status: 503,
+      })
+    }
     normalized.updated_at = nowIso()
     const tmp = `${filePath}.${process.pid}.tmp`
     fs.writeFileSync(tmp, JSON.stringify(normalized, null, 2), { mode: 0o600 })
@@ -661,7 +672,8 @@ export function createGroupStore(filePath, { quotaUnit = Q, getQuotaUnit } = {})
         if (!Number.isFinite(at)) continue
         const tokens = Number(row.prompt_tokens || 0) + Number(row.completion_tokens || 0)
         const total = Number(row.total_tokens ?? tokens) || 0
-        // Map tokens -> quota units roughly 1 token ≈ 1 quota unit for rolling windows (MVP).
+        // DEPRECATED (not called by the BFF): legacy MVP mapped 1 token ≈ 1 unit. Kept for tests only;
+        // live usage events are recorded in mp via recordUsage().
         const mid = String(row.model || row.model_name || '').trim()
         const ev = { at, quota: total, requests: 1 }
         if (mid) ev.model = mid

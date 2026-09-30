@@ -15,6 +15,21 @@ const DEFAULT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
 export const TYPE_CONSUME = 2
 export const TYPE_ERROR = 5
 
+
+/**
+ * Points (mp) charged for an event at call time. Events recorded since unit_version 2 carry
+ * points_mp; migrated history carries points_mp + raw_per_point. Legacy events with only
+ * raw_per_point fall back to rawQuota × 1e6 ÷ that N. Never uses the current N.
+ */
+export function eventPointsMp(e) {
+  if (!e) return 0
+  if (e.points_mp != null && Number.isFinite(Number(e.points_mp))) return Math.max(0, Math.round(Number(e.points_mp)))
+  const n = Number(e.raw_per_point)
+  const raw = Number(e.rawQuota ?? e.quota) || 0
+  if (n > 0 && raw > 0) return Math.round((raw * 1_000_000) / n)
+  return 0
+}
+
 function ensureDir(filePath) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
 }
@@ -277,6 +292,9 @@ export function createSiteUsageStore(filePath, opts = {}) {
       cache_write_tokens: cacheWriteTokens,
       amountUsd: Number(evt.amountUsd ?? evt.amount) || 0,
       rawQuota: Number(evt.rawQuota ?? evt.quota) || 0,
+      // Points charged at call time (mp, 1 点 = 1e6 mp) + N used — history never follows current N.
+      points_mp: evt.points_mp != null ? Math.max(0, Math.round(Number(evt.points_mp) || 0)) : null,
+      raw_per_point: Number(evt.raw_per_point) > 0 ? Math.round(Number(evt.raw_per_point)) : null,
       duration_ms: evt.duration_ms != null ? Number(evt.duration_ms) : null,
       ttft_ms: evt.ttft_ms != null ? Number(evt.ttft_ms) : null,
       stream: !!(evt.stream ?? evt.is_stream),
@@ -393,6 +411,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
       amountUsd: Number(e.amountUsd) || 0,
       quota: Number(e.rawQuota) || 0,
       rawQuota: Number(e.rawQuota) || 0,
+      points_mp: eventPointsMp(e),
+      raw_per_point: e.raw_per_point || null,
       duration_ms: e.duration_ms,
       ttft_ms: e.ttft_ms,
       is_stream: !!e.stream,
@@ -430,6 +450,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
     return {
       date: key,
       quota: 0,
+      points_mp: 0,
       tokens: 0,
       amount: 0,
       requests: 0,
@@ -445,6 +466,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
       {
         name: key,
         quota: 0,
+        points_mp: 0,
         tokens: 0,
         amount: 0,
         requests: 0,
@@ -454,6 +476,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
         keys: {},
       }
     rec.quota += Number(row.rawQuota) || 0
+    rec.points_mp += eventPointsMp(row)
     rec.amount += Number(row.amountUsd) || 0
     rec.requests += 1
     rec.prompt_tokens += Number(row.prompt_tokens) || 0
@@ -467,6 +490,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
         requests: 0,
         tokens: 0,
         amount: 0,
+        points_mp: 0,
         prompt_tokens: 0,
         completion_tokens: 0,
       }
@@ -477,6 +501,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
     k.completion_tokens += Number(row.completion_tokens) || 0
     k.tokens = k.prompt_tokens + k.completion_tokens
     k.amount += Number(row.amountUsd) || 0
+    k.points_mp += eventPointsMp(row)
     bag[key] = rec
   }
 
@@ -549,6 +574,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
     let cache = 0
     let amount = 0
     let quota = 0
+    let pointsMp = 0
 
     for (const row of events) {
       const ts = Date.parse(row.ts || '') || 0
@@ -558,6 +584,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
       const ch = Number(row.cache_tokens) || 0
       const am = Number(row.amountUsd) || 0
       const qu = Number(row.rawQuota) || 0
+      const pm = eventPointsMp(row)
+      pointsMp += pm
       prompt += pt
       completion += ct
       cache += ch
@@ -569,6 +597,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
       }
       if (map[key]) {
         map[key].quota += qu
+        map[key].points_mp += pm
         map[key].amount += am
         map[key].requests += 1
         map[key].prompt_tokens += pt
@@ -600,6 +629,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
         tokens: prompt + completion,
         amount,
         quota,
+        points_mp: pointsMp,
         avg_ms: durationN ? Math.round(durationSum / durationN) : 0,
       },
     }
@@ -641,7 +671,7 @@ export function createSiteUsageStore(filePath, opts = {}) {
       ? new Set([...allow.values()].map((m) => String(m.userId || '')).filter(Boolean))
       : null
 
-    /** @type {Map<string, { calls: number, success: number, tokens: number, rawQuota: number, userId: string|null }>} */
+    /** @type {Map<string, { calls: number, success: number, tokens: number, pointsMp: number, userId: string|null }>} */
     const byKey = new Map()
     for (const e of eventsInPeriod(period)) {
       const h = e.keyHash
@@ -653,14 +683,14 @@ export function createSiteUsageStore(filePath, opts = {}) {
       const key = h || `user:${e.userId || 'unknown'}`
       let row = byKey.get(key)
       if (!row) {
-        row = { calls: 0, success: 0, tokens: 0, rawQuota: 0, userId: e.userId }
+        row = { calls: 0, success: 0, tokens: 0, pointsMp: 0, userId: e.userId }
         byKey.set(key, row)
       }
       row.calls += 1
       if (e.success) row.success += 1
       row.tokens += Number(e.tokens) || 0
-      // 点数 = rawQuota (internal units); callers convert via raw÷raw_per_point for display.
-      row.rawQuota += Number(e.rawQuota ?? e.quota) || 0
+      // 点数 = points charged at call time (mp); fixed history — never rescaled by current N.
+      row.pointsMp += eventPointsMp(e) || 0
       if (!row.userId && e.userId) row.userId = e.userId
     }
 
@@ -685,8 +715,8 @@ export function createSiteUsageStore(filePath, opts = {}) {
         name,
         mapped: !!display,
         calls: stats.success || stats.calls,
-        // Raw quota units (not LLM tokens). Display 点 = credits / raw_per_point.
-        credits: stats.rawQuota,
+        // mp (1 点 = 1e6 mp) charged at call time. Callers display credits / 1e6.
+        credits: stats.pointsMp,
         tokens: stats.tokens,
       }
     })

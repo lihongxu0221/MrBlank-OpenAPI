@@ -319,5 +319,9 @@
   "操作人": "Operator",
   "已扣减额度": "Credits deducted",
   "余额不足，已按实际余额扣减": "Insufficient balance; deducted available amount",
-  "已发放额度": "Credits granted"
+  "已发放额度": "Credits granted",
+  "换算比例只影响模型价格与每次调用扣除的点数；用户余额、签到额度、兑换码额度均以点计，不随比例变化。": "The ratio only affects model prices and points charged per call; balances, check-in rewards and redeem codes are in points and never change with the ratio.",
+  "下限=上限时固定发放；否则在区间内随机。点数不随「点数 ↔ token」换算比例变化。": "Fixed grant when min = max; otherwise random within the range. Points do not change with the points ↔ token ratio.",
+  "修改换算比例只影响价格表与每次调用扣除的点数；用户余额、签到额度、兑换码、分组额度与 Key 限额均以点计，不会变化。": "Changing the ratio only affects the price table and points charged per call; balances, check-in rewards, redeem codes, group quotas and key limits are in points and do not change.",
+  "额度以点入库，不随换算比例变化": "quotas are stored in points and do not change with the ratio"
 }

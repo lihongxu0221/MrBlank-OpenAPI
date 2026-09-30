@@ -347,6 +347,9 @@ export function AdminModelPricesPage({ path }: { path: string }) {
             {formatQuotaUnitLabel(rawPerPoint)}
           </div>
         </div>
+        <p className="field-note" style={{ margin: '8px 0 0' }}>
+          {P('修改换算比例只影响价格表与每次调用扣除的点数；用户余额、签到额度、兑换码、分组额度与 Key 限额均以点计，不会变化。')}
+        </p>
       </div>
 
       <div className="channels-toolbar">

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Gift, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { P } from '../../i18n'
-import { formatCredits, formatQuotaUnitLabel, getQuotaPerUnit, setQuotaPerUnit } from '../../lib/format'
+import { POINT_MP, formatCredits, formatQuotaUnitLabel, getQuotaPerUnit, setQuotaPerUnit } from '../../lib/format'
 import { ConsoleHero } from '../../components/ConsoleHero'
 import { fmtShanghai } from '../../lib/listUi'
 import { AdminLayout } from './AdminLayout'
@@ -15,7 +15,8 @@ type AdminLedgerItem = {
   ip: string | null
   direction: 'in' | 'out'
   channel_label: string
-  raw: number
+  /** mp (1 点 = 1e6 mp), fixed at write time */
+  amount_mp: number
   operator: string | null
   detail_text: string
 }
@@ -59,10 +60,9 @@ type Summary = {
 }
 
 function blankCode(): RedeemCode {
-  const Q = getQuotaPerUnit()
   return {
     code: '',
-    quota: 5 * getQuotaPerUnit(),
+    quota: 5 * POINT_MP,
     max_uses: 0,
     used_count: 0,
     once_per_user: true,
@@ -181,7 +181,8 @@ export function AdminCreditsPage({ path }: { path: string }) {
     try {
       const body = {
         user_id: grantUserId.trim(),
-        amount: Math.round(points * getQuotaPerUnit()),
+        // 点 (server stores mp; independent of the 点↔token ratio)
+        points,
         note: grantNote.trim(),
       }
       if (grantMode === 'deduct') {
@@ -218,6 +219,9 @@ export function AdminCreditsPage({ path }: { path: string }) {
         <strong>{P('点数 ↔ token')}</strong>
         <p className="muted" style={{ margin: '6px 0 0' }}>
           {formatQuotaUnitLabel(getQuotaPerUnit())}
+        </p>
+        <p className="field-note" style={{ margin: '4px 0 0' }}>
+          {P('换算比例只影响模型价格与每次调用扣除的点数；用户余额、签到额度、兑换码额度均以点计，不随比例变化。')}
         </p>
       </div>
 
@@ -257,11 +261,11 @@ export function AdminCreditsPage({ path }: { path: string }) {
                   type="number"
                   min={0}
                   step={0.1}
-                  value={config.daily_grant_min / getQuotaPerUnit()}
+                  value={config.daily_grant_min / POINT_MP}
                   onChange={(e) =>
                     setConfig({
                       ...config,
-                      daily_grant_min: Math.round(Number(e.target.value || 0) * getQuotaPerUnit()),
+                      daily_grant_min: Math.round(Number(e.target.value || 0) * POINT_MP),
                     })
                   }
                 />
@@ -272,11 +276,11 @@ export function AdminCreditsPage({ path }: { path: string }) {
                   type="number"
                   min={0}
                   step={0.1}
-                  value={config.daily_grant_max / getQuotaPerUnit()}
+                  value={config.daily_grant_max / POINT_MP}
                   onChange={(e) =>
                     setConfig({
                       ...config,
-                      daily_grant_max: Math.round(Number(e.target.value || 0) * getQuotaPerUnit()),
+                      daily_grant_max: Math.round(Number(e.target.value || 0) * POINT_MP),
                     })
                   }
                 />
@@ -287,7 +291,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
               </div>
             </div>
             <p className="field-note">
-              {P('下限=上限时固定发放；否则在区间内随机。单位与 Phase E 一致。')}
+              {P('下限=上限时固定发放；否则在区间内随机。点数不随「点数 ↔ token」换算比例变化。')}
             </p>
           </>
         ) : (
@@ -338,9 +342,9 @@ export function AdminCreditsPage({ path }: { path: string }) {
                       type="number"
                       min={0}
                       step={0.1}
-                      value={c.quota / getQuotaPerUnit()}
+                      value={c.quota / POINT_MP}
                       onChange={(e) =>
-                        updateCode(i, { quota: Math.round(Number(e.target.value || 0) * getQuotaPerUnit()) })
+                        updateCode(i, { quota: Math.round(Number(e.target.value || 0) * POINT_MP) })
                       }
                       style={{ width: 80 }}
                     />
@@ -466,7 +470,7 @@ export function AdminCreditsPage({ path }: { path: string }) {
                   <td>{x.direction === 'in' ? P('收入') : P('支出')}</td>
                   <td>{P(x.channel_label)}</td>
                   <td className={'num ' + (x.direction === 'in' ? 'wallet-in' : 'wallet-out')}>
-                    {(x.direction === 'in' ? '+' : '-') + formatCredits(x.raw)}
+                    {(x.direction === 'in' ? '+' : '-') + formatCredits(x.amount_mp)}
                   </td>
                   <td>{x.operator || '—'}</td>
                   <td className="detail">{x.detail_text}</td>

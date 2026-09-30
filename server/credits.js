@@ -2,16 +2,20 @@
  * Phase F — site credit wallet + check-in + redeem codes.
  * Persisted at server/data/site-credits.json (override via SITE_CREDITS_PATH).
  *
- * Unit: same as Phase E / aily — 1 点 = quota_per_unit raw (default 500000).
- * Grants raise balance; /v1 success consumes balance (alongside group rolling windows).
- * Day boundary: Asia/Shanghai. Display conversion reads getQuotaUnit() dynamically.
+ * Unit (unit_version 2): every amount here — balance, granted/consumed/admin_deducted totals,
+ * check-in range + awards, redeem-code quota — is integer micro-points (mp), 1 点 = 1,000,000 mp.
+ * Independent of N (1 点 = N raw): changing N never rescales these values.
+ * /v1 billing converts USD → mp at the CURRENT N before calling consume().
+ * Day boundary: Asia/Shanghai.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { DEFAULT_QUOTA_PER_UNIT, buildCreditUnitInfo } from './quotaUnit.js'
+import { DEFAULT_QUOTA_PER_UNIT, POINT_MP, UNIT_VERSION, buildCreditUnitInfo } from './quotaUnit.js'
 
 const Q = DEFAULT_QUOTA_PER_UNIT
+/** 1 点 in stored units (mp). */
+const P = POINT_MP
 const TZ = 'Asia/Shanghai'
 
 function nowIso() {
@@ -31,11 +35,11 @@ function shanghaiMonth() {
 function defaultConfig() {
   return {
     checkin_enabled: true,
-    /** Inclusive raw range; if min===max → fixed grant. */
-    daily_grant_min: 2 * Q,
-    daily_grant_max: 2 * Q,
+    /** Inclusive mp range (1 点 = 1e6 mp); if min===max → fixed grant. */
+    daily_grant_min: 2 * P,
+    daily_grant_max: 2 * P,
     timezone: TZ,
-    note: '签到与兑换码发放本站额度（点）；1 点 = 500,000 token。日界 Asia/Shanghai。',
+    note: '签到与兑换码发放本站额度（点）；点数不随价格换算比例变化。日界 Asia/Shanghai。',
   }
 }
 
@@ -44,7 +48,7 @@ function defaultCodes() {
   const seeds = ['WELCOME', 'GROK2026', 'COMMUNITY', 'DARKFORGER']
   return seeds.map((code) => ({
     code,
-    quota: 5 * Q,
+    quota: 5 * P,
     max_uses: 0, // 0 = unlimited global redemptions
     used_count: 0,
     once_per_user: true,
@@ -62,8 +66,8 @@ function normalizeConfig(raw = {}) {
   if (max < min) [min, max] = [max, min]
   return {
     checkin_enabled: raw.checkin_enabled !== false,
-    daily_grant_min: min,
-    daily_grant_max: max,
+    daily_grant_min: Math.round(min),
+    daily_grant_max: Math.round(max),
     timezone: String(raw.timezone || TZ),
     note: String(raw.note || base.note),
   }
@@ -76,7 +80,7 @@ function normalizeCode(raw) {
   if (!code) return null
   return {
     code,
-    quota: Math.max(0, Number(raw.quota) || 0),
+    quota: Math.max(0, Math.round(Number(raw.quota) || 0)),
     max_uses: Math.max(0, Number(raw.max_uses) || 0),
     used_count: Math.max(0, Number(raw.used_count) || 0),
     once_per_user: raw.once_per_user !== false,
@@ -89,6 +93,7 @@ function normalizeCode(raw) {
 
 function defaultDoc() {
   return {
+    unit_version: UNIT_VERSION,
     config: defaultConfig(),
     codes: defaultCodes(),
     users: {},
@@ -101,6 +106,8 @@ function normalizeDoc(raw) {
   const codesIn = Array.isArray(raw?.codes) ? raw.codes : base.codes
   const codes = codesIn.map(normalizeCode).filter(Boolean)
   return {
+    // Missing unit_version = legacy raw-unit file (v1); write() refuses to stamp it.
+    unit_version: Number(raw?.unit_version) || 1,
     config: normalizeConfig(raw?.config),
     codes: codes.length ? codes : base.codes,
     users: raw?.users && typeof raw.users === 'object' ? raw.users : {},
@@ -172,6 +179,12 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit, ledge
 
   function write(doc) {
     const normalized = normalizeDoc(doc)
+    if (normalized.unit_version !== UNIT_VERSION) {
+      // Never stamp/overwrite a legacy raw-unit doc — it must go through migrate-points-unit.js.
+      throw Object.assign(new Error('site-credits.json is legacy (raw units); run server/scripts/migrate-points-unit.js'), {
+        status: 503,
+      })
+    }
     normalized.updated_at = nowIso()
     const tmp = `${filePath}.${process.pid}.tmp`
     fs.writeFileSync(tmp, JSON.stringify(normalized, null, 2), { mode: 0o600 })
@@ -184,9 +197,9 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit, ledge
     return normalized
   }
 
-  /** Append a wallet ledger row; never breaks the balance operation. */
+  /** Append a wallet ledger row (entry.points_mp = amount in mp); never breaks the balance operation. */
   function record(entry) {
-    if (!ledger || !(Number(entry.raw) > 0)) return null
+    if (!ledger || !(Number(entry.points_mp) > 0)) return null
     try {
       return ledger.append({ ts: nowIso(), ...entry, user_id: String(entry.user_id) })
     } catch (e) {
@@ -197,7 +210,7 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit, ledge
 
   function grant(doc, userId, amount, meta = {}) {
     const u = ensureUser(doc, userId)
-    const q = Math.max(0, Number(amount) || 0)
+    const q = Math.max(0, Math.round(Number(amount) || 0))
     u.balance += q
     u.granted_total += q
     return { balance: u.balance, granted: q, ...meta }
@@ -374,7 +387,7 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit, ledge
         ip: ctx.ip || null,
         direction: 'in',
         channel: 'checkin',
-        raw: quota_awarded,
+        points_mp: quota_awarded,
         balance_after: u.balance,
         ref_type: 'checkin',
         ref_id: today,
@@ -433,7 +446,7 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit, ledge
         ip: ctx.ip || null,
         direction: 'in',
         channel: 'redeem',
-        raw: awarded,
+        points_mp: awarded,
         balance_after: u.balance,
         ref_type: 'redeem_code',
         ref_id: code,
@@ -449,7 +462,7 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit, ledge
     consume(userId, amount, ctx = {}) {
       const doc = read()
       const u = ensureUser(doc, userId)
-      const need = Math.max(0, Number(amount) || 0)
+      const need = Math.max(0, Math.round(Number(amount) || 0))
       const take = Math.min(u.balance, need)
       if (take > 0) {
         u.balance -= take
@@ -460,7 +473,10 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit, ledge
           ip: ctx.ip || null,
           direction: 'out',
           channel: 'api_usage',
-          raw: take,
+          points_mp: take,
+          // raw cost + N at charge time (audit only; amount of record is points_mp)
+          ...(ctx.raw != null ? { raw: Math.max(0, Math.round(Number(ctx.raw) || 0)) } : {}),
+          ...(ctx.raw_per_point ? { raw_per_point: ctx.raw_per_point } : {}),
           balance_after: u.balance,
           ref_type: 'usage_event',
           ref_id: ctx.ref_id || null,
@@ -481,7 +497,7 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit, ledge
         operator: ctx.operator || null,
         direction: 'in',
         channel: 'admin_grant',
-        raw: result.granted,
+        points_mp: result.granted,
         balance_after: result.balance,
         ref_type: 'admin',
         detail: note ? { note } : {},
@@ -505,7 +521,7 @@ export function createCreditStore(filePath, { quotaUnit = Q, getQuotaUnit, ledge
           operator: ctx.operator || null,
           direction: 'out',
           channel: 'admin_deduct',
-          raw: take,
+          points_mp: take,
           balance_after: u.balance,
           ref_type: 'admin',
           detail: { ...(note ? { note } : {}), requested: need },
