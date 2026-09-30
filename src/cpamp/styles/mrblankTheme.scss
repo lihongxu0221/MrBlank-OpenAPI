@@ -5,25 +5,19 @@
  * typography, light/dark and the 主题配色 accent (html[data-accent]) — without touching the
  * ported components. Structure/interaction stay CPAMP; only tokens are remapped.
  *
- * Buttons (.btn*) are the one exception: they keep CPAMP's exact look. The CPAMP originals
- * are captured on `.cpamp-theme-root` (where themes.scss defines them) as `--cpo-*`, the
- * remap is applied one level down on `.cpamp-mb-root`, and `.btn` restores the originals.
+ * Buttons (.btn*) keep CPAMP's shape/size/structure/typography but their colours follow the
+ * remap (primary = 主题配色 accent). CPAMP's shape originals are captured on
+ * `.cpamp-theme-root` (where themes.scss defines them) as `--cpo-*`, the remap is applied one
+ * level down on `.cpamp-mb-root`, and `.btn` restores only those shape vars.
  *
  * Markup:  .cpamp-scope > .cpamp-theme-root[data-theme] > .cpamp-mb-root > (page | portals)
  */
 
 @use "./variables" as *;
 
-// CPAMP variables consumed by the .btn rules in components.scss.
-$cpamp-button-vars: (
-  app-radius-md, app-radius-sm, app-surface-muted, app-border, app-accent-soft, border-hover,
-  text-primary, text-secondary,
-  primary-color, primary-hover, primary-active, primary-contrast,
-  primary-solid, primary-solid-hover, primary-solid-active,
-  color-danger, color-danger-light-3, color-danger-dark-2,
-  focus-bg, focus-border, focus-inset, focus-text,
-  app-input-bg, app-input-bg-focus, app-input-border, app-input-border-focus
-);
+// CPAMP shape variables consumed by the .btn rules in components.scss. Button COLOURS follow
+// the remap below (accent / surfaces / borders); only shape is pinned to CPAMP.
+$cpamp-button-vars: (app-radius-md, app-radius-sm);
 
 .cpamp-scope .cpamp-theme-root {
   @each $v in $cpamp-button-vars {
@@ -133,7 +127,8 @@ $cpamp-button-vars: (
   font-family: "Geist Variable", PingFang SC, Microsoft YaHei, sans-serif;
   color: var(--ink);
 
-  // `.btn` plus the toolbar's DropdownMenu trigger (styled like a primary button in CPAMP).
+  // `.btn` plus the toolbar's DropdownMenu trigger (styled like a primary button in CPAMP):
+  // CPAMP shape + typography; colours come from the accent remap above.
   .btn,
   [class*='ProviderToolbar-module__addButton'] {
     @each $v in $cpamp-button-vars {
