@@ -1066,7 +1066,8 @@ async function buildLeaderboard(period = 'today', sort = 'credits', p = 1) {
 async function buildActivity(period = 'today') {
   try {
     const hashMap = userKeyStore.hashToUserMap()
-    const items = siteUsage.activityByModel({ period })
+    // by_requested slices are internal (costing only) — keep the public activity shape unchanged.
+    const items = siteUsage.activityByModel({ period }).map(({ by_requested: _br, ...rest }) => rest)
     return ok({
       period,
       items,
@@ -1575,8 +1576,12 @@ app.use(
           let amountUsd = 0
           let rawQuota = 0
           try {
-            const price = modelPrices.lookupPrice(String(resolvedModel || requestedModel || '').trim())
-            amountUsd = modelPrices.costForTokens(price, prompt, completion, {
+            // Same model precedence as billing below: requested first, then upstream-resolved.
+            amountUsd = modelPrices.usageRecordCostUsd({
+              requestedModel,
+              resolvedModel,
+              promptTokens: prompt,
+              completionTokens: completion,
               cacheReadTokens: cacheTokens,
               cacheWriteTokens: cacheWriteTokens,
             })

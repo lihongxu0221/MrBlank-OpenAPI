@@ -270,7 +270,69 @@ export function createModelPricesStore(filePath, deps = {}) {
       const bare = key.slice(slash + 1)
       if (bare && map.has(bare)) return map.get(bare)
     }
+    // Unpriced base name → price of its 1:1 (copy-mode) inherited variant.
+    // e.g. upstream answers `gemini-3.8-flash` for a `gemini-3.8-flash-high` request while
+    // the supported catalog (and so the book) only lists the -high alias.
+    const viaVariant = inheritedVariantPrice(map, key)
+    if (viaVariant) return viaVariant
     return null
+  }
+
+  /**
+   * Find a copy-mode VARIANT_INHERITANCE target whose bases include `key`
+   * (case-insensitive; aily/ and provider/ prefixes stripped) and which has a book row.
+   */
+  function inheritedVariantPrice(map, key) {
+    const cands = new Set()
+    const add = (k) => {
+      const v = String(k || '').trim().toLowerCase()
+      if (v) cands.add(v)
+    }
+    add(key)
+    if (isAilyPrefixed(key)) add(stripAilyPrefix(key))
+    const slash = key.lastIndexOf('/')
+    if (slash > 0) add(key.slice(slash + 1))
+    for (const rule of VARIANT_INHERITANCE) {
+      if (rule.mode !== 'copy') continue
+      const target = String(rule.target || '').trim()
+      if (!target || !map.has(target)) continue
+      const hit = (rule.bases || []).some((b) => {
+        const bl = String(b || '').trim().toLowerCase()
+        if (cands.has(bl)) return true
+        const i = bl.lastIndexOf('/')
+        return i > 0 && cands.has(bl.slice(i + 1))
+      })
+      if (hit) return map.get(target)
+    }
+    return null
+  }
+
+  /**
+   * Billing-consistent price: requested model first (what the user asked for / is billed on),
+   * then the upstream-resolved model.
+   * @returns {{ price: object|null, model: string|null }}
+   */
+  function lookupBillingPrice(requestedModel, resolvedModel) {
+    for (const m of [requestedModel, resolvedModel]) {
+      const key = String(m || '').trim()
+      if (!key) continue
+      const price = lookupPrice(key)
+      if (price) return { price, model: key }
+    }
+    return { price: null, model: null }
+  }
+
+  /**
+   * USD cost for a site-usage record — same model precedence as billing (requested → resolved).
+   * @param {{ requestedModel?: string|null, resolvedModel?: string|null, promptTokens?: number,
+   *   completionTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number }} args
+   */
+  function usageRecordCostUsd(args = {}) {
+    const { price } = lookupBillingPrice(args.requestedModel, args.resolvedModel)
+    return costForTokens(price, args.promptTokens, args.completionTokens, {
+      cacheReadTokens: args.cacheReadTokens,
+      cacheWriteTokens: args.cacheWriteTokens,
+    })
   }
 
   function priceFieldsEqual(a, b) {
@@ -462,7 +524,6 @@ export function createModelPricesStore(filePath, deps = {}) {
     let totalCost = 0
     let totalQuota = 0
     const rows = byModel.map((row) => {
-      const price = lookupPrice(row.model)
       const prompt = Number(row.prompt_tokens) || 0
       const completion = Number(row.completion_tokens) || 0
       const cacheRead = Number(row.cache_tokens ?? row.cache_read_tokens) || 0
@@ -470,10 +531,29 @@ export function createModelPricesStore(filePath, deps = {}) {
       const tokens = Number(row.tokens) || prompt + completion
       const usePrompt = prompt || (completion ? 0 : tokens)
       const useCompletion = completion
-      const cost = costForTokens(price, usePrompt, useCompletion, {
-        cacheReadTokens: cacheRead,
-        cacheWriteTokens: cacheWrite,
-      })
+      // Billing parity: price each requested-model slice by requested model first, then resolved.
+      const slices = Array.isArray(row.by_requested) && row.by_requested.length ? row.by_requested : null
+      let price = null
+      let cost = 0
+      if (slices) {
+        for (const sl of slices) {
+          const hit = lookupBillingPrice(sl.model_requested, row.model)
+          if (hit.price && !price) price = hit.price
+          const sp = Number(sl.prompt_tokens) || 0
+          const sc = Number(sl.completion_tokens) || 0
+          const st = Number(sl.tokens) || sp + sc
+          cost += costForTokens(hit.price, sp || (sc ? 0 : st), sc, {
+            cacheReadTokens: Number(sl.cache_tokens) || 0,
+            cacheWriteTokens: Number(sl.cache_write_tokens) || 0,
+          })
+        }
+      } else {
+        price = lookupPrice(row.model)
+        cost = costForTokens(price, usePrompt, useCompletion, {
+          cacheReadTokens: cacheRead,
+          cacheWriteTokens: cacheWrite,
+        })
+      }
       const quota = dollarsToQuota(cost) // FIXED 500000
       totalCost += cost
       totalQuota += quota
@@ -601,6 +681,8 @@ export function createModelPricesStore(filePath, deps = {}) {
     usageSummaryCosted,
     priceMap,
     lookupPrice,
+    lookupBillingPrice,
+    usageRecordCostUsd,
     plazaPriceFields,
     costForTokens,
     quotaForTokens: (price, prompt, completion, opts = {}) =>

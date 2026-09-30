@@ -700,10 +700,24 @@ export function createSiteUsageStore(filePath, opts = {}) {
       row.completion_tokens += Number(e.completion_tokens) || 0
       row.cache_tokens += Number(e.cache_tokens) || 0
       row.cache_write_tokens += Number(e.cache_write_tokens) || 0
+      // Per requested-model slices so costing can mirror billing (requested model first).
+      const req = String(e.model_requested || '').trim() || model
+      if (!row.by_requested) row.by_requested = new Map()
+      let sl = row.by_requested.get(req)
+      if (!sl) {
+        sl = { model_requested: req, tokens: 0, prompt_tokens: 0, completion_tokens: 0, cache_tokens: 0, cache_write_tokens: 0 }
+        row.by_requested.set(req, sl)
+      }
+      sl.tokens += Number(e.tokens) || 0
+      sl.prompt_tokens += Number(e.prompt_tokens) || 0
+      sl.completion_tokens += Number(e.completion_tokens) || 0
+      sl.cache_tokens += Number(e.cache_tokens) || 0
+      sl.cache_write_tokens += Number(e.cache_write_tokens) || 0
     }
     return [...byModel.entries()]
       .map(([model, s]) => ({
         model,
+        by_requested: s.by_requested ? [...s.by_requested.values()] : [],
         calls: s.calls,
         successful: s.successful,
         tokens: s.tokens,
