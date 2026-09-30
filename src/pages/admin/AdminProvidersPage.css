@@ -1,14 +1,12 @@
 /* MrBlank host chrome for the ported CPAMP AI providers page.
- * CPAMP renders this page in a full-width content column on its app background; mirror that
- * so the content area matches 1:1 (card layout ≤1440px, table layout above, same as CPAMP). */
-.console-shell:has(.cpamp-page-host) {
-  max-width: none;
-}
+ * Layout, surfaces and colours follow the MrBlank admin (tokens remapped in
+ * src/cpamp/styles/mrblankTheme.scss); only the CPAMP structure is kept. */
 .cpamp-page-host {
   min-width: 0;
 }
 .cpamp-scope .cpamp-page {
-  background-image: var(--app-bg-gradient);
-  border-radius: 16px;
-  min-height: 100%;
+  background: transparent;
+}
+.cpamp-scope .cpamp-page {
+  container: cpamp-providers / inline-size;
 }

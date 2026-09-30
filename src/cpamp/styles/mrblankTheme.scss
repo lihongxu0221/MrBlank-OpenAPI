@@ -1,0 +1,144 @@
+/**
+ * MrBlank: map the ported CPAMP (cpa-manager-plus, MIT) design tokens onto MrBlank's own
+ * admin tokens (src/styles/tokens.css: --bg/--surface/--soft/--ink/--muted/--line/--accent…),
+ * so the providers page follows the site's colours, surfaces, borders, radius, spacing,
+ * typography, light/dark and the 主题配色 accent (html[data-accent]) — without touching the
+ * ported components. Structure/interaction stay CPAMP; only tokens are remapped.
+ *
+ * Buttons (.btn*) are the one exception: they keep CPAMP's exact look. The CPAMP originals
+ * are captured on `.cpamp-theme-root` (where themes.scss defines them) as `--cpo-*`, the
+ * remap is applied one level down on `.cpamp-mb-root`, and `.btn` restores the originals.
+ *
+ * Markup:  .cpamp-scope > .cpamp-theme-root[data-theme] > .cpamp-mb-root > (page | portals)
+ */
+
+@use "./variables" as *;
+
+// CPAMP variables consumed by the .btn rules in components.scss.
+$cpamp-button-vars: (
+  app-radius-md, app-radius-sm, app-surface-muted, app-border, app-accent-soft, border-hover,
+  text-primary, text-secondary,
+  primary-color, primary-hover, primary-active, primary-contrast,
+  primary-solid, primary-solid-hover, primary-solid-active,
+  color-danger, color-danger-light-3, color-danger-dark-2,
+  focus-bg, focus-border, focus-inset, focus-text,
+  app-input-bg, app-input-bg-focus, app-input-border, app-input-border-focus
+);
+
+.cpamp-scope .cpamp-theme-root {
+  @each $v in $cpamp-button-vars {
+    --cpo-#{$v}: var(--#{$v});
+  }
+}
+
+.cpamp-scope .cpamp-mb-root {
+  // —— surfaces / backgrounds ——
+  --app-bg: var(--bg);
+  --app-bg-gradient: none;
+  --app-surface: var(--surface);
+  --app-surface-strong: var(--surface);
+  --app-surface-muted: var(--soft);
+  --bg-primary: var(--surface);
+  --bg-secondary: var(--soft);
+  --bg-tertiary: var(--soft);
+  --bg-quinary: var(--surface);
+  --bg-hover: var(--accent-soft);
+  --bg-error-light: var(--error-bg);
+  --glass-bg: var(--surface);
+  --glass-bg-secondary: var(--soft);
+  --floating-surface: var(--surface);
+  --surface-subtle: var(--soft);
+  --surface-subtle-hover: color-mix(in srgb, var(--soft) 82%, var(--ink));
+  --surface-subtle-strong: color-mix(in srgb, var(--soft) 90%, var(--ink));
+
+  // —— borders ——
+  --app-border: var(--line);
+  --app-border-strong: var(--line);
+  --border-color: var(--line);
+  --border-secondary: var(--line);
+  --border-primary: var(--line);
+  --border-subtle: var(--line);
+  --border-subtle-dashed: var(--line);
+  --border-hover: color-mix(in srgb, var(--accent) 45%, var(--line));
+  --floating-border: var(--line);
+  --glass-border: var(--line);
+
+  // —— text ——
+  --app-text-primary: var(--ink);
+  --app-text-regular: var(--ink);
+  --app-text-muted: var(--muted);
+  --text-primary: var(--ink);
+  --text-secondary: var(--muted);
+  --text-tertiary: var(--muted);
+  --text-quaternary: var(--muted);
+  --text-muted: var(--muted);
+
+  // —— accent (主题配色) ——
+  --app-accent: var(--accent);
+  --app-accent-soft: var(--accent-soft);
+  --color-primary: var(--accent);
+  --color-primary-light-3: color-mix(in srgb, var(--accent) 80%, var(--surface));
+  --color-primary-light-5: color-mix(in srgb, var(--accent) 55%, var(--surface));
+  --color-primary-light-7: color-mix(in srgb, var(--accent) 32%, var(--surface));
+  --color-primary-light-8: var(--accent-soft);
+  --color-primary-light-9: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
+  --color-primary-dark-2: color-mix(in srgb, var(--accent) 82%, var(--ink));
+  --primary-color: var(--accent);
+  --primary-hover: color-mix(in srgb, var(--accent) 80%, var(--surface));
+  --primary-active: color-mix(in srgb, var(--accent) 82%, var(--ink));
+  --primary-contrast: var(--accent-ink);
+  --primary-solid: var(--accent);
+  --primary-solid-hover: color-mix(in srgb, var(--accent) 85%, var(--surface));
+  --primary-solid-active: color-mix(in srgb, var(--accent) 82%, var(--ink));
+  --primary-soft: var(--accent-soft);
+  --primary-subtle: var(--accent-soft);
+  --primary-ring: color-mix(in srgb, var(--accent) 22%, transparent);
+  --focus-bg: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  --focus-border: color-mix(in srgb, var(--accent) 45%, var(--line));
+  --focus-inset: color-mix(in srgb, var(--accent) 22%, transparent);
+  --focus-text: var(--accent);
+  --count-badge-bg: var(--soft);
+  --count-badge-text: var(--muted);
+  --accent-tertiary: var(--accent-soft);
+
+  // —— status ——
+  --color-success: var(--status-ok);
+  --color-warning: var(--status-warn);
+  --success-color: var(--status-ok);
+  --warning-color: var(--status-warn);
+  --quota-medium-color: var(--status-warn);
+
+  // —— inputs (MrBlank .field input: --bg fill, --line border, accent focus) ——
+  --app-input-bg: var(--bg);
+  --app-input-bg-focus: var(--bg);
+  --app-input-border: var(--line);
+  --app-input-border-focus: var(--accent);
+
+  // —— shape / spacing / elevation ——
+  --app-radius-lg: 18px;
+  --app-radius-md: 12px;
+  --app-radius-sm: 8px;
+  --radius-md: 12px;
+  --app-gap: 16px;
+  --app-card-padding: 22px;
+  --app-shadow: none;
+  --app-shadow-soft: none;
+  --glass-shadow: var(--shadow); // like MrBlank .panel
+  --floating-shadow: var(--shadow);
+  --app-blur: 0px;
+  --glass-blur: 0px;
+  --glass-backdrop-filter: none;
+
+  // —— typography: site font stack ——
+  font-family: "Geist Variable", PingFang SC, Microsoft YaHei, sans-serif;
+  color: var(--ink);
+
+  // `.btn` plus the toolbar's DropdownMenu trigger (styled like a primary button in CPAMP).
+  .btn,
+  [class*='ProviderToolbar-module__addButton'] {
+    @each $v in $cpamp-button-vars {
+      --#{$v}: var(--cpo-#{$v});
+    }
+    font-family: $font-family; // CPAMP button typography kept as-is
+  }
+}

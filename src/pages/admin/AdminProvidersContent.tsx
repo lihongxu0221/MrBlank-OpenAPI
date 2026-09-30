@@ -21,9 +21,11 @@ export default function AdminProvidersContent({
   return (
     <div className="cpamp-scope cpamp-page-host">
       <div className="cpamp-theme-root cpamp-page" data-theme={theme}>
-        <AiProvidersPage initialKindFilter={initialKindFilter} />
-        <NotificationContainer />
-        <ConfirmationModal />
+        <div className="cpamp-mb-root">
+          <AiProvidersPage initialKindFilter={initialKindFilter} />
+          <NotificationContainer />
+          <ConfirmationModal />
+        </div>
       </div>
     </div>
   )
