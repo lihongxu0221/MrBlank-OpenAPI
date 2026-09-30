@@ -43,6 +43,39 @@ export function verifyPassword(password, encoded) {
   return expected.length === derived.length && crypto.timingSafeEqual(expected, derived)
 }
 
+const scryptAsync = (password, salt, keylen, opts) =>
+  new Promise((resolve, reject) => {
+    crypto.scrypt(String(password), salt, keylen, opts, (err, key) => (err ? reject(err) : resolve(key)))
+  })
+
+/** Non-blocking hash (libuv threadpool) — use on request paths. */
+export async function hashPasswordAsync(password, saltBuf) {
+  const salt = saltBuf || crypto.randomBytes(16)
+  const derived = await scryptAsync(password, salt, KEYLEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P })
+  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString('base64')}$${derived.toString('base64')}`
+}
+
+/** Non-blocking verify (libuv threadpool) — use on request paths. */
+export async function verifyPasswordAsync(password, encoded) {
+  const parts = String(encoded || '').split('$')
+  if (parts.length !== 6 || parts[0] !== 'scrypt') return false
+  const N = Number(parts[1])
+  const r = Number(parts[2])
+  const p = Number(parts[3])
+  const salt = Buffer.from(parts[4], 'base64')
+  const expected = Buffer.from(parts[5], 'base64')
+  let derived
+  try {
+    derived = await scryptAsync(password, salt, expected.length, { N, r, p })
+  } catch {
+    return false
+  }
+  return expected.length === derived.length && crypto.timingSafeEqual(expected, derived)
+}
+
+// Fixed dummy hash so unknown usernames cost the same as wrong passwords (no user enumeration by timing).
+const DUMMY_HASH = hashPassword('dummy-password-for-timing', Buffer.alloc(16, 7))
+
 function publicUser(row) {
   if (!row) return null
   return {
@@ -120,24 +153,32 @@ export function createLocalUserStore(filePath, env = process.env) {
     return load().users.map(publicUser)
   }
 
-  function createUser({ username, password, role = 'user', display_name, group_id } = {}) {
-    const uname = String(username || '').trim()
+  function validateNewUser(uname, password) {
     if (!uname || uname.length < 2) {
       throw Object.assign(new Error('用户名至少 2 个字符'), { status: 400 })
+    }
+    if (uname.length > 32 || !/^[\p{L}\p{N}_.@\-]+$/u.test(uname)) {
+      throw Object.assign(new Error('用户名最多 32 个字符，仅限字母、数字、下划线、点、@ 和短横线'), { status: 400 })
     }
     if (!password || String(password).length < 6) {
       throw Object.assign(new Error('密码至少 6 个字符'), { status: 400 })
     }
+    if (String(password).length > 256) {
+      throw Object.assign(new Error('密码过长'), { status: 400 })
+    }
     if (findByUsername(uname)) {
       throw Object.assign(new Error('用户名已存在'), { status: 409 })
     }
+  }
+
+  function insertUser({ uname, password_hash, role, display_name, group_id }) {
     const now = new Date().toISOString()
     const row = {
       id: `local:${crypto.randomBytes(8).toString('hex')}`,
       username: uname,
-      password_hash: hashPassword(password),
+      password_hash,
       role: normalizeRole(role),
-      display_name: String(display_name || uname).trim() || uname,
+      display_name: String(display_name || uname).trim().slice(0, 64) || uname,
       group_id: group_id ? String(group_id) : null,
       disabled: false,
       created_at: now,
@@ -147,6 +188,12 @@ export function createLocalUserStore(filePath, env = process.env) {
     doc.users.push(row)
     save(doc)
     return publicUser(row)
+  }
+
+  function createUser({ username, password, role = 'user', display_name, group_id } = {}) {
+    const uname = String(username || '').trim()
+    validateNewUser(uname, password)
+    return insertUser({ uname, password_hash: hashPassword(password), role, display_name, group_id })
   }
 
   function updateUser(id, patch = {}) {
@@ -230,6 +277,46 @@ export function createLocalUserStore(filePath, env = process.env) {
     return { created: true, username: created.username, id: created.id }
   }
 
+  /** Promote listed existing usernames to admin only when there is no admin at all. */
+  function seedAdminsIfNone(usernames = []) {
+    const doc = load()
+    if (doc.users.some((u) => u.role === 'admin')) return []
+    const want = new Set(usernames.map(normalizeUsername).filter(Boolean))
+    const out = []
+    for (const row of doc.users) {
+      if (want.has(normalizeUsername(row.username))) {
+        row.role = 'admin'
+        row.updated_at = new Date().toISOString()
+        out.push(row.username)
+      }
+    }
+    if (out.length) save(doc)
+    return out
+  }
+
+  async function authenticateAsync(username, password) {
+    const row = findByUsername(username)
+    const ok = await verifyPasswordAsync(password, row ? row.password_hash : DUMMY_HASH)
+    if (!row || !ok) {
+      throw Object.assign(new Error('用户名或密码错误'), { status: 401 })
+    }
+    if (row.disabled) {
+      throw Object.assign(new Error('账号已停用'), { status: 403 })
+    }
+    return publicUser(row)
+  }
+
+  async function createUserAsync({ username, password, role = 'user', display_name, group_id } = {}) {
+    const uname = String(username || '').trim()
+    validateNewUser(uname, password)
+    const password_hash = await hashPasswordAsync(password)
+    // re-check after the await (another request may have taken the name meanwhile)
+    if (findByUsername(uname)) {
+      throw Object.assign(new Error('用户名已存在'), { status: 409 })
+    }
+    return insertUser({ uname, password_hash, role, display_name, group_id })
+  }
+
   function toSessionUser(pub) {
     return {
       id: pub.id,
@@ -250,6 +337,9 @@ export function createLocalUserStore(filePath, env = process.env) {
     deleteUser,
     authenticate,
     bootstrapFromEnv,
+    seedAdminsIfNone,
+    authenticateAsync,
+    createUserAsync,
     toSessionUser,
     findById,
     findByUsername,

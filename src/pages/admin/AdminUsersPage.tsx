@@ -49,6 +49,7 @@ export function AdminUsersPage({ path }: { path: string }) {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [allowHint, setAllowHint] = useState<any>(null)
+  const [regEnabled, setRegEnabled] = useState<boolean | null>(null)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm, setCreateForm] = useState<CreateForm>(emptyCreate)
@@ -69,12 +70,14 @@ export function AdminUsersPage({ path }: { path: string }) {
     setLoading(true)
     setErr(null)
     try {
-      const [data, me] = await Promise.all([
+      const [data, me, authSettings] = await Promise.all([
         api.get<{ users: LocalUser[] }>('/api/admin/users'),
         api.get<any>('/api/admin/me').catch(() => null),
+        api.get<{ registration_enabled: boolean }>('/api/admin/auth-settings').catch(() => null),
       ])
       setUsers(data.users || [])
       setAllowHint(me?.allowlist_hint || null)
+      setRegEnabled(authSettings ? !!authSettings.registration_enabled : null)
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -192,6 +195,22 @@ export function AdminUsersPage({ path }: { path: string }) {
   const modalErr = err && (createOpen || editUser || resetUser) ? err : null
   const pageErr = err && !createOpen && !editUser && !resetUser ? err : null
 
+  async function toggleRegistration(next: boolean) {
+    setSaving(true)
+    setErr(null)
+    try {
+      const d = await api.put<{ registration_enabled: boolean }>('/api/admin/auth-settings', {
+        registration_enabled: next,
+      })
+      setRegEnabled(!!d.registration_enabled)
+      setMsg(d.registration_enabled ? P('已开放自助注册。') : P('已关闭自助注册。'))
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <AdminLayout path={path} allowed={gate.allowed} checked={gate.checked}>
       <ConsoleHero
@@ -199,11 +218,27 @@ export function AdminUsersPage({ path }: { path: string }) {
         subtitle={P('创建本地用户名密码账号、设置角色与重置密码。Linux.do 用户不在此列表。')}
       />
 
+      <div className="panel" style={{ marginTop: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>{P('自助注册')}</strong>
+        <span className="pill">
+          {regEnabled == null ? '—' : regEnabled ? P('已开放') : P('已关闭')}
+        </span>
+        <button
+          type="button"
+          className="button ghost"
+          disabled={saving || regEnabled == null}
+          onClick={() => toggleRegistration(!regEnabled)}
+        >
+          {regEnabled ? P('关闭自助注册') : P('开放自助注册')}
+        </button>
+        <span className="field-note">{P('关闭后访客无法在登录页注册本站账号；已有账号与 Linux.do 登录不受影响。注册按 IP 限流。')}</span>
+      </div>
+
       <details className="panel" style={{ marginTop: 12 }}>
         <summary style={{ cursor: 'pointer', fontWeight: 600 }}>{P('多管理员白名单')}</summary>
         <p className="page-lead" style={{ marginBottom: 6, marginTop: 8 }}>
           {allowHint?.note ||
-            P('本站用户可将角色设为 admin；Linux.do 管理员请在服务端 .env 配置 ADMIN_LINUXDO_IDS / USERNAMES / EMAILS（逗号分隔）。')}
+            P('本站用户仅凭角色 admin 成为管理员；Linux.do 管理员仅按服务端 .env 的 ADMIN_LINUXDO_IDS（数字 ID）或 ADMIN_LINUXDO_EMAILS（OAuth 邮箱）判定。')}
         </p>
         {allowHint?.counts ? (
           <div className="tag-row">

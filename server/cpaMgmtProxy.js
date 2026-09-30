@@ -181,6 +181,44 @@ function defaultAudit(entry) {
   }
 }
 
+/** Fields that only exist in MrBlank's legacy reshaped compat view (never valid CPA config). */
+const COMPAT_RESHAPED_FIELDS = ['base_url', 'api_key_count', 'api_key_entries', 'display_name']
+
+/**
+ * Defense in depth against the OpenAI-compat data-loss class: a full-section PUT must be an
+ * array of CPA-shaped objects, never the reshaped/masked summary view.
+ */
+export function validateCompatSectionPut(body) {
+  const list = Array.isArray(body) ? body : body && Array.isArray(body['openai-compatibility']) ? body['openai-compatibility'] : null
+  if (!list) return 'openai-compatibility PUT body must be an array'
+  for (let i = 0; i < list.length; i++) {
+    const it = list[i]
+    if (!it || typeof it !== 'object' || Array.isArray(it)) return `entry[${i}] must be an object`
+    for (const f of COMPAT_RESHAPED_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(it, f)) return `entry[${i}] contains read-only view field "${f}"`
+    }
+    const keys = Array.isArray(it['api-key-entries']) ? it['api-key-entries'] : []
+    for (const [j, k] of keys.entries()) {
+      if (k && typeof k === 'object' && /\*{3,}/.test(String(k['api-key'] || ''))) {
+        return `entry[${i}].api-key-entries[${j}] looks masked — refusing to overwrite CPA config`
+      }
+    }
+  }
+  return null
+}
+
+/** Key sections: full PUT must be an array of objects whose api-key is not a masked value. */
+export function validateKeySectionPut(section, body) {
+  const list = Array.isArray(body) ? body : body && Array.isArray(body[section]) ? body[section] : null
+  if (!list) return `${section} PUT body must be an array`
+  for (let i = 0; i < list.length; i++) {
+    const it = list[i]
+    if (!it || typeof it !== 'object' || Array.isArray(it)) return `entry[${i}] must be an object`
+    if (/\*{3,}/.test(String(it['api-key'] || ''))) return `entry[${i}].api-key looks masked — refusing to overwrite CPA config`
+  }
+  return null
+}
+
 function userLabel(req) {
   const u = req.auth?.user || {}
   return String(u.id ?? u.username ?? 'unknown')
@@ -287,7 +325,15 @@ export function createCpaMgmtRouter({ cpaCfg, express, audit = defaultAudit, fet
         res.status(429).json({ error: 'api-call rate limit exceeded' })
         return
       }
-    } else if (isWrite && !writeLimiter(user)) {
+    } else if (route.kind === 'section' && method === 'PUT') {
+      const bad = route.section === 'openai-compatibility' ? validateCompatSectionPut(req.body) : validateKeySectionPut(route.section, req.body)
+      if (bad) {
+        audit({ at: new Date(started).toISOString(), user, method, path: req.path, target: auditTarget, status: 400, error: bad })
+        res.status(400).json({ error: bad })
+        return
+      }
+    }
+    if (route.kind !== 'api-call' && isWrite && !writeLimiter(user)) {
       res.status(429).json({ error: 'write rate limit exceeded' })
       return
     }

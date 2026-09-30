@@ -92,6 +92,9 @@ function normalizeDoc(raw) {
       lead: String(c.lead || base.constellation.lead),
       cards: cardsIn.map((card, i) => normalizeCard(card, i)),
     },
+    auth: {
+      registration_enabled: raw?.auth?.registration_enabled !== false,
+    },
     updated_at: raw?.updated_at || null,
   }
 }
@@ -102,15 +105,13 @@ export function createSiteContentStore(filePath) {
 
   function read() {
     if (!fs.existsSync(filePath)) {
-      const doc = defaultDoc()
-      write(doc)
-      return doc
+      return write(defaultDoc())
     }
     try {
       const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'))
       return normalizeDoc(raw)
     } catch {
-      return defaultDoc()
+      return normalizeDoc(defaultDoc())
     }
   }
 
@@ -118,7 +119,7 @@ export function createSiteContentStore(filePath) {
     const normalized = normalizeDoc(doc)
     normalized.updated_at = new Date().toISOString()
     const tmp = `${filePath}.${process.pid}.tmp`
-    fs.writeFileSync(tmp, JSON.stringify(normalized, null, 2), { mode: 0o644 })
+    fs.writeFileSync(tmp, JSON.stringify(normalized, null, 2), { mode: 0o600 })
     fs.renameSync(tmp, filePath)
     return normalized
   }
@@ -148,6 +149,15 @@ export function createSiteContentStore(filePath) {
         })),
         updated_at: doc.updated_at,
       }
+    },
+    getAuthSettings() {
+      return { ...read().auth }
+    },
+    saveAuthSettings(patch = {}) {
+      const doc = read()
+      const next = { ...doc, auth: { ...doc.auth } }
+      if (patch.registration_enabled != null) next.auth.registration_enabled = !!patch.registration_enabled
+      return write(next).auth
     },
     getAdminConstellation() {
       const doc = read()

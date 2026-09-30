@@ -250,3 +250,14 @@ describe('cpaMgmtProxy router (fake CPA upstream)', () => {
     srv.close()
   })
 })
+
+it('section PUT guards reject reshaped compat views and masked keys', async () => {
+  const { validateCompatSectionPut, validateKeySectionPut } = await import('../cpaMgmtProxy.js')
+  assert.equal(validateCompatSectionPut([{ name: 'a', 'base-url': 'https://x/v1', 'api-key-entries': [{ 'api-key': 'sk-real' }] }]), null)
+  assert.match(validateCompatSectionPut([{ name: 'a', base_url: 'https://x/v1', api_key_count: 1 }]), /read-only view field/)
+  assert.match(validateCompatSectionPut([{ name: 'a', 'api-key-entries': [{ 'api-key': 'sk******ab' }] }]), /masked/)
+  assert.match(validateCompatSectionPut({ foo: 1 }), /must be an array/)
+  assert.equal(validateKeySectionPut('gemini-api-key', [{ 'api-key': 'AIza-real' }]), null)
+  assert.equal(validateKeySectionPut('gemini-api-key', { 'gemini-api-key': [] }), null)
+  assert.match(validateKeySectionPut('gemini-api-key', [{ 'api-key': 'AI******-1' }]), /masked/)
+})
