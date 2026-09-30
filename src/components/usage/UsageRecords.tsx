@@ -973,7 +973,7 @@ export function UsageRecords({ mode, toolbarExtra }: UsageRecordsProps) {
                       <td className="toks">
                         <span className="dn">↓ {fmtTok(x.prompt_tokens)}</span>{' '}
                         <span className="up">↑ {fmtTok(x.completion_tokens)}</span>
-                        {cache ? <span className="cache"> cache {fmtTok(cache)}</span> : null}
+                        {cache ? <span className="cache">cache {fmtTok(cache)}</span> : null}
                       </td>
                       <td className="fee">{costText(x.amount ?? x.amountUsd, admin, false)}</td>
                       <td className="lat">

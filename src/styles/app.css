@@ -3489,7 +3489,9 @@ td.num {
 .tag.stream { background: color-mix(in srgb, #22c55e 18%, transparent); }
 .toks .dn { color: #3b82f6; }
 .toks .up { color: #22c55e; }
-.toks .cache { color: #22d3ee; font-size: 12px; }
+td.toks { white-space: nowrap; }
+/* cache on its own line under ↓/↑, left-aligned with line 1 */
+.toks .cache { display: block; margin-top: 2px; color: #22d3ee; font-size: 12px; line-height: 1.35; }
 .lat { font-size: 12px; color: var(--muted); line-height: 1.35; }
 
 /* Admin model prices — compact inputs so table fits ~admin content width */
